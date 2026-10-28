@@ -1,0 +1,26 @@
+//@version=6
+indicator("EGX Tool 53 TTM Squeeze — TTM Squeeze", shorttitle="EGX T-SQUEEZE", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة د التقلب · #53/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+[bMid, bUp, bLo] = ta.bb(close, 20, 2.0)
+[kMid, kUp, kLo] = ta.kc(close, 20, 1.5)
+bool sq = bUp < kUp and bLo > kLo
+float mom = ta.linreg(close - (ta.highest(high, 20) + ta.lowest(low, 20)) / 2.0, 20, 0)
+int vote = not sq and mom > 0 and mom > mom[1] ? 1 : not sq and mom < 0 and mom < mom[1] ? -1 : 0
+plot(mom, "EGXT_SQ_MOM", color=mom >= 0 ? color.lime : color.red, style=plot.style_columns)
+plot(sq ? 0 : na, "SqueezeON", color=color.red, style=plot.style_circles, linewidth=3)
+
+plot(vote, "EGXT_SQUEEZE_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_SQUEEZE_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_SQUEEZE_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "SQUEEZE", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-SQUEEZE صاعد", "EGX Tool SQUEEZE: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-SQUEEZE هابط", "EGX Tool SQUEEZE: vote هابط")

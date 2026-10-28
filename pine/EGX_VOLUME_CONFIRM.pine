@@ -1,0 +1,45 @@
+//@version=6
+indicator("EGX Volume Confirm — 3-check", shorttitle="EGX VCfm", overlay=true, max_tables_count=2, calc_bars_count=5000)
+
+// تأكيد حركة: RVOL + Net buy + CMF · docs/EGX_VOLUME.md
+
+string G = "Confirm"
+float minRvol = input.float(1.15, "RVOL", group=G)
+float minNet = input.float(53.0, "Net buy %", group=G)
+float minCmf = input.float(0.0, "CMF min", step=0.01, group=G)
+
+float vma = ta.sma(volume, 20)
+float rvol = volume / math.max(vma, 1.0)
+float rng = math.max(high - low, syminfo.mintick)
+float netPct = (close - low) / rng * 100.0
+float mfm = ((close - low) - (high - close)) / rng
+float cmf = ta.sma(mfm * volume, 20) / ta.sma(volume, 20)
+
+int score = 0
+score += rvol >= minRvol ? 1 : 0
+score += netPct >= minNet and close >= open ? 1 : 0
+score += cmf >= minCmf ? 1 : 0
+
+float dPrevLim = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+float dayPctLim = dPrevLim > 0 ? (close - dPrevLim) / dPrevLim * 100.0 : 0.0
+float haltPctLim = egxBoardLim == "SME تميّز" or egxBoardLim == "SME نايل" or egxBoardLim == "غير نشط" ? 5.0 : 10.0
+float luldPctLim = egxBoardLim == "غير نشط" ? 5.0 : (egxBoardLim == "SME تميّز" or egxBoardLim == "SME نايل" ? 10.0 : 20.0)
+bool nearLimitLim = blockLimitLim and dPrevLim > 0 and (dayPctLim >= math.min(9.0, haltPctLim - 1.0) or dayPctLim >= luldPctLim - 0.25)
+
+bool buyCfm = score >= 3 and not nearLimitLim
+bool sellCfm = rvol >= minRvol and netPct <= 100.0 - minNet and close <= open and cmf <= -minCmf
+
+plotshape(buyCfm, "Buy cfm", shape.triangleup, location.belowbar, color=color.lime, size=size.small, text="✓")
+plotshape(sellCfm, "Sell cfm", shape.triangledown, location.abovebar, color=color.red, size=size.small, text="✓")
+
+var table t = table.new(position.bottom_right, 2, 3, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 2)
+    table.cell(t, 0, 0, "Confirm", bgcolor=color.black, text_color=color.yellow, text_size=size.small)
+    table.cell(t, 1, 0, str.tostring(score) + "/3", text_size=size.normal)
+
+plot(score, "EGVCfm_Score", display=display.all)
+plot(buyCfm ? 1 : 0, "EGVCfm_Buy", display=display.all)
+plot(sellCfm ? 1 : 0, "EGVCfm_Sell", display=display.all)
+
+plot(nearLimitLim ? 1 : 0, "EGX_NearLimit", display=display.data_window)

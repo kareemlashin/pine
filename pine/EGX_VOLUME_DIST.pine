@@ -1,0 +1,40 @@
+//@version=6
+indicator("EGX Volume Dist/Acc days — score", shorttitle="EGX VDst", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// أيام توزيع/تجميع (حجم×اتجاه×مدى) · docs/EGX_VOLUME.md
+
+string G = "Score"
+int roll = input.int(25, "نافذة تراكم", group=G)
+float minRvol = input.float(1.1, "RVOL يوم", group=G)
+
+float vma = ta.sma(volume, 20)
+float rvol = volume / math.max(vma, 1.0)
+float rng = math.max(high - low, syminfo.mintick)
+float spreadN = rng / math.max(ta.atr(14), syminfo.mintick)
+
+float accPt = close > open and rvol >= minRvol ? rvol * spreadN * (close - open) / rng : 0.0
+float distPt = close < open and rvol >= minRvol ? rvol * spreadN * (open - close) / rng : 0.0
+
+float accRoll = ta.sma(accPt, roll) * roll
+float distRoll = ta.sma(distPt, roll) * roll
+float net = accRoll - distRoll
+
+bool accBias = net > 0 and accRoll > distRoll * 1.2
+bool distBias = net < 0 and distRoll > accRoll * 1.2
+
+plot(accRoll, "Acc score", color=color.lime, linewidth=2)
+plot(distRoll, "Dist score", color=color.red, linewidth=2)
+plot(net, "Net", color=color.yellow, linewidth=1)
+hline(0, "0", color=color.gray)
+
+var table t = table.new(position.top_right, 2, 4, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 3)
+    table.cell(t, 0, 0, "Dist/Acc", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, accBias ? "ACC" : distBias ? "DIST" : "Mix", text_size=size.tiny)
+    table.cell(t, 0, 1, "Net", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 1, str.tostring(net, "#.##"), text_size=size.tiny)
+
+plot(accBias ? 1 : 0, "EGVDst_AccBias", display=display.all)
+plot(distBias ? 1 : 0, "EGVDst_DistBias", display=display.all)
+plot(net, "EGVDst_Net", display=display.all)

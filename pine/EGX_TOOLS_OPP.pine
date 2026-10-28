@@ -1,0 +1,149 @@
+//@version=6
+indicator("EGX TOOLS — أفضل فرص", shorttitle="T Opp", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ماسح رمز واحد (Stock Screener) — lite 16 صوت · إطار D
+// Filter: EGXTTOpp_Pro=1 · رتّب EGXTTOpp_Rank↓ · لوحة السوق: EGX_TOOLS_BOARD200
+// كامل: EGX_TOOLS_MASTER · docs/EGX_TOOLS.md
+// ═══════════════════════════════════════════════════════════════════════════════
+
+string G = "═══ ملف ═══"
+string profile = input.string("EGX يومي", "الملف", options=["EGX يومي", "مضاربة", "استثمار"], group=G)
+bool confirmClose = input.bool(true, "إغلاق الشمعة", group=G)
+float minRankIn = input.float(55.0, "حد Rank Pro", minval=30, maxval=90, group=G)
+int minHitsIn = input.int(5, "Hits Pro", minval=3, maxval=6, group=G)
+float minScoreIn = input.float(20.0, "حد Score %", minval=10, maxval=50, group=G)
+bool showTbl = input.bool(true, "جدول", group=G)
+
+string G_M = "═══ سوق ═══"
+string bench = input.symbol("EGX:EGX30", "مؤشر", group=G_M)
+bool blockBear = input.bool(true, "منع ضغط EGX30", group=G_M)
+bool blockLimit = input.bool(true, "منع قرب halt", group=G_M)
+string egxBoard = input.string("نشط (EGX100)", "لوحة", options=["نشط (EGX100)", "EGX30 (بيع مكشوف)", "SME تميّز", "SME نايل", "غير نشط"], group=G_M)
+bool useMktHalt100 = input.bool(true, "منع إذا EGX100 ≤ −10%", group=G_M)
+bool skipSundayBuy = input.bool(false, "لا إشارة يوم الأحد", group=G_M)
+bool useEgxSession = input.bool(false, "جلسة القاهرة (مستمر فقط)", group=G_M)
+
+float effMinVol = profile == "مضاربة" ? 3000.0 : profile == "استثمار" ? 800.0 : 1500.0
+float sigMin = profile == "مضاربة" ? 18.0 : profile == "استثمار" ? 25.0 : minScoreIn
+float minRank = profile == "استثمار" ? 50.0 : minRankIn
+int minHits = minHitsIn
+
+bool sigOk = not confirmClose or barstate.isconfirmed
+
+f_egxSessId() =>
+    int id = 0
+    if not na(time(timeframe.period, "1000-1415:23456", "Africa/Cairo"))
+        id := 2
+    id
+bool sessionOk = not useEgxSession or not timeframe.isintraday or f_egxSessId() == 2
+float dayPct100 = useMktHalt100 ? request.security("EGX:EGX100EWI", "D", close[1] > 0 ? (close - close[1]) / close[1] * 100.0 : 0.0, barmerge.gaps_off, barmerge.lookahead_off) : 0.0
+bool mktHalt100 = useMktHalt100 and dayPct100 <= -10.0
+bool sundaySkip = skipSundayBuy and dayofweek == dayofweek.sunday
+
+f_mktTr() =>
+    int sc = 0
+    float e20 = ta.ema(close, 20)
+    float e50 = ta.ema(close, 50)
+    sc += close > e20 ? 1 : -1
+    sc += e20 > e50 ? 1 : -1
+    sc
+
+float mom30 = request.security(bench, timeframe.period, close[20] > 0 ? (close / close[20] - 1.0) * 100.0 : 0.0, barmerge.gaps_off, barmerge.lookahead_off)
+int tr30 = request.security(bench, timeframe.period, f_mktTr(), barmerge.gaps_off, barmerge.lookahead_off)
+bool bearMkt = blockBear and mom30 < -4.0 and tr30 <= -1
+
+float ema20 = ta.ema(close, 20)
+float ema50 = ta.ema(close, 50)
+float ema200 = ta.ema(close, 200)
+float wClose = request.security(syminfo.tickerid, "W", close, barmerge.gaps_off, barmerge.lookahead_off)
+float wEma50 = request.security(syminfo.tickerid, "W", ta.ema(close, 50), barmerge.gaps_off, barmerge.lookahead_off)
+bool htfBull = wClose > wEma50
+float rsi = ta.rsi(close, 14)
+[macdL, macdS, macdH] = ta.macd(close, 12, 26, 9)
+float volMa = ta.sma(volume, 20)
+bool liqOk = volMa >= effMinVol
+float rvol = volume / math.max(volMa, 1.0)
+float rng = math.max(high - low, syminfo.mintick)
+float cmf = ta.sma(((close - low) - (high - close)) / rng * volume, 20) / ta.sma(volume, 20)
+float obvSl = ta.linreg(ta.obv, 10, 0) - ta.linreg(ta.obv, 10, 1)
+[diP, diM, adx] = ta.dmi(14, 14)
+[stLine, stDir] = ta.supertrend(3.0, 10)
+float lookHi = ta.highest(high, 80)
+float lookLo = ta.lowest(low, 80)
+bool inDem = close <= lookHi - 0.618 * (lookHi - lookLo) and close >= lookLo
+bool bosUp = close > ta.highest(high, 20)[1]
+float hi252 = ta.highest(high, 252)
+bool chase = hi252 > 0 and (close - hi252) / hi252 * 100.0 > -3 and rsi > 72
+
+float dPrev = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+float dayPct = dPrev > 0 ? (close - dPrev) / dPrev * 100.0 : 0.0
+float haltPct = egxBoard == "SME تميّز" or egxBoard == "SME نايل" or egxBoard == "غير نشط" ? 5.0 : 10.0
+float luldPct = egxBoard == "غير نشط" ? 5.0 : (egxBoard == "SME تميّز" or egxBoard == "SME نايل" ? 10.0 : 20.0)
+bool nearLimit = blockLimit and (dayPct >= math.min(9.0, haltPct - 1.0) or dayPct >= luldPct - 0.25)
+
+int v01 = rsi > 52 and rsi < 68 ? 1 : rsi >= 68 ? 0 : -1
+int v02 = macdH > 0 and macdL > macdS ? 1 : macdH < 0 ? -1 : 0
+int v03 = ta.stoch(close, high, low, 14) > 50 ? 1 : -1
+int v04 = ta.roc(close, 10) > 0 ? 1 : -1
+int v05 = ta.mfi(hlc3, 14) > 50 ? 1 : -1
+int v06 = adx > 22 and diP > diM ? 1 : adx > 22 and diM > diP ? -1 : 0
+int v07 = close > ema20 and ema20 > ema50 and ema50 > ema200 ? 1 : close < ema20 and ema20 < ema50 ? -1 : 0
+int v08 = stDir < 0 ? 1 : -1
+int v10 = cmf > 0.05 ? 1 : cmf < -0.05 ? -1 : 0
+int v11 = obvSl > 0 ? 1 : obvSl < 0 ? -1 : 0
+int v12 = ta.accdist > ta.ema(ta.accdist, 20) ? 1 : -1
+int v15 = bosUp ? 1 : close < ta.lowest(low, 20)[1] ? -1 : 0
+int v16 = inDem ? 1 : close > lookHi * 0.98 ? -1 : 0
+int sumV = v01 + v02 + v03 + v04 + v05 + v06 + v07 + v08 + v10 + v11 + v12 + v15 + v16
+float score = sumV / 13.0 * 100.0
+int nG = (v01 == 1 ? 1 : 0) + (v02 == 1 ? 1 : 0) + (v03 == 1 ? 1 : 0) + (v04 == 1 ? 1 : 0) + (v05 == 1 ? 1 : 0) + (v06 == 1 ? 1 : 0) + (v07 == 1 ? 1 : 0) + (v08 == 1 ? 1 : 0) + (v10 == 1 ? 1 : 0) + (v11 == 1 ? 1 : 0) + (v12 == 1 ? 1 : 0) + (v15 == 1 ? 1 : 0) + (v16 == 1 ? 1 : 0)
+int nNet = nG - ((v01 == -1 ? 1 : 0) + (v02 == -1 ? 1 : 0) + (v03 == -1 ? 1 : 0) + (v04 == -1 ? 1 : 0) + (v05 == -1 ? 1 : 0) + (v06 == -1 ? 1 : 0) + (v07 == -1 ? 1 : 0) + (v08 == -1 ? 1 : 0) + (v10 == -1 ? 1 : 0) + (v11 == -1 ? 1 : 0) + (v12 == -1 ? 1 : 0) + (v15 == -1 ? 1 : 0) + (v16 == -1 ? 1 : 0))
+
+bool locOK = inDem or bosUp or v16 == 1
+bool moneyOK = v10 == 1 and v11 != -1 and v12 == 1
+bool upTrend = v07 == 1 or v08 == 1
+bool momOK = score >= sigMin * 0.5
+bool trigOK = close > open and (v03 == 1 or v04 == 1)
+bool volOK = rvol >= 0.9
+int hits = (upTrend ? 1 : 0) + (locOK ? 1 : 0) + (momOK ? 1 : 0) + (moneyOK ? 1 : 0) + (trigOK ? 1 : 0) + (volOK ? 1 : 0)
+
+float benchRoc = request.security(bench, timeframe.period, ta.roc(close, 20), barmerge.gaps_off, barmerge.lookahead_off)
+float rsSpread = ta.roc(close, 20) - benchRoc
+
+bool egxOK = liqOk and not chase and not nearLimit and not bearMkt and not mktHalt100 and not sundaySkip and sessionOk
+bool buyA = sigOk and egxOK and locOK and moneyOK and hits >= 5 and score >= sigMin
+bool buyB = sigOk and egxOK and locOK and not buyA and hits >= 4 and score >= sigMin * 0.5
+bool buyAny = buyA or buyB
+
+float rank = math.max(0.0, math.min(100.0, score * 0.55 + hits / 6.0 * 100.0 * 0.30 + nG / 13.0 * 100.0 * 0.15 + (rsSpread > 0 ? 5.0 : 0.0)))
+bool passOpp = sigOk and egxOK and score >= sigMin * 0.45 and hits >= 3
+bool proOpp = buyA and rank >= minRank and hits >= minHits and nG >= 10 and htfBull
+
+var table t = table.new(position.top_right, 2, 8, border_width=1)
+if showTbl and barstate.islast
+    table.clear(t, 0, 0, 1, 7)
+    table.cell(t, 0, 0, syminfo.ticker, text_color=color.white, text_size=size.normal)
+    table.cell(t, 1, 0, proOpp ? "PRO" : buyA ? "A" : buyB ? "B" : passOpp ? "PASS" : "—", bgcolor=proOpp ? color.lime : color.new(color.gray, 50), text_size=size.normal)
+    table.cell(t, 0, 1, "Rank / Score", text_color=color.gray, text_size=size.small)
+    table.cell(t, 1, 1, str.tostring(rank, "#") + " / " + str.tostring(score, "#") + "%", text_size=size.small)
+    table.cell(t, 0, 2, "Hits · Net", text_color=color.gray, text_size=size.small)
+    table.cell(t, 1, 2, str.tostring(hits) + "/6 · " + str.tostring(nNet), text_size=size.small)
+    table.cell(t, 0, 3, "RS20 · RVOL", text_color=color.gray, text_size=size.small)
+    table.cell(t, 1, 3, str.tostring(rsSpread, "#.#") + "% · " + str.tostring(rvol, "#.##"), text_size=size.small)
+    table.cell(t, 0, 4, "Lite", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 4, "13 صوت · BOARD200 للسوق", text_color=color.gray, text_size=size.tiny)
+
+plot(buyAny ? 1 : 0, "EGXTTOpp_Buy", display=display.all)
+plot(buyA ? 1 : 0, "EGXTTOpp_BuyA", display=display.all)
+plot(proOpp ? 1 : 0, "EGXTTOpp_Pro", display=display.all)
+plot(passOpp ? 1 : 0, "EGXTTOpp_Pass", display=display.all)
+plot(rank, "EGXTTOpp_Rank", display=display.all)
+plot(score, "EGXTTOpp_Score", display=display.all)
+plot(hits, "EGXTTOpp_Hits", display=display.all)
+plot(nNet, "EGXTTOpp_Net", display=display.all)
+plot(mktHalt100 ? 1 : 0, "EGXTTOpp_MktHalt100", display=display.data_window)
+plot(htfBull ? 1 : 0, "EGXTTOpp_HtfBull", display=display.data_window)
+plot(1, "EGXTTOpp", display=display.all)
+
+alertcondition(proOpp, "EGX T Opp — Pro", "{{ticker}} EGXTTOpp Pro")

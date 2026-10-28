@@ -1,0 +1,75 @@
+//@version=6
+indicator("EGX Volume Session — جلسة · VWAP vol", shorttitle="EGX VSess", overlay=true, max_tables_count=4, calc_bars_count=5000)
+
+// حجم جلسة EGX 10:00–14:30 · VWAP · ORB حجم · intraday/D · docs/EGX_VOLUME.md
+
+string G = "EGX جلسة"
+string tz = input.string("Africa/Cairo", "Timezone", group=G)
+string sess = input.string("1000-1430:23456", "ساعات", group=G)
+int orbBars = input.int(6, "ORB أول N شموع", minval=2, maxval=20, group=G)
+bool showVwap = input.bool(true, "VWAP جلسة", group=G)
+bool showOrb = input.bool(true, "صندوق ORB", group=G)
+bool showVolPane = input.bool(true, "حجم الجلسة (pane)", group=G)
+
+bool inSess = not na(time(timeframe.period, sess, tz))
+bool newSess = ta.change(time("D", tz)) != 0
+
+var float sessVol = 0.0
+var float sessPv = 0.0
+var float sessV = 0.0
+var float orbH = na
+var float orbL = na
+var int barInSess = 0
+var float orbVol = 0.0
+
+if newSess
+    sessVol := 0.0
+    sessPv := 0.0
+    sessV := 0.0
+    orbH := high
+    orbL := low
+    barInSess := 0
+    orbVol := 0.0
+else if inSess
+    barInSess += 1
+    sessVol += volume
+    float tp = hlc3
+    sessPv += tp * volume
+    sessV += volume
+    if barInSess <= orbBars
+        orbH := math.max(nz(orbH, high), high)
+        orbL := math.min(nz(orbL, low), low)
+        orbVol += volume
+
+float vwapS = sessV > 0 ? sessPv / sessV : na
+float avgSessVolBar = barInSess > 0 ? sessVol / barInSess : na
+float rvolSess = avgSessVolBar > 0 ? volume / avgSessVolBar : na
+bool orbVolSpike = barInSess <= orbBars * 2 and rvolSess >= 1.5
+
+var box orbBox = na
+if showOrb and barstate.islast and not na(orbH) and not na(orbL)
+    box.delete(orbBox)
+    orbBox := box.new(bar_index - barInSess, orbH, bar_index, orbL, bgcolor=color.new(color.purple, 90), border_color=color.purple, text="ORB V" + str.tostring(orbVol, "#"), text_size=size.tiny)
+
+plot(showVwap and inSess ? vwapS : na, "Session VWAP", color=color.fuchsia, linewidth=2)
+plot(showOrb ? orbH : na, "ORB H", color=color.new(color.purple, 50), style=plot.style_linebr)
+plot(showOrb ? orbL : na, "ORB L", color=color.new(color.purple, 50), style=plot.style_linebr)
+
+color vC = inSess ? (close >= open ? color.teal : color.red) : color.gray
+plot(showVolPane and inSess ? volume : na, "Sess V", style=plot.style_columns, color=color.new(vC, 40), display=display.pane)
+plot(showVolPane and inSess ? avgSessVolBar : na, "Sess V avg", color=color.yellow, display=display.pane)
+
+bgcolor(not inSess and timeframe.isintraday ? color.new(color.gray, 96) : na)
+
+var table t = table.new(position.bottom_right, 2, 5, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 4)
+    table.cell(t, 0, 0, "Session", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, inSess ? "OPEN" : "OUT", text_color=inSess ? color.lime : color.gray, text_size=size.tiny)
+    table.cell(t, 0, 1, "Total V", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 1, str.tostring(sessVol, "#"), text_size=size.tiny)
+    table.cell(t, 0, 2, "RVOL sess", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 2, str.tostring(rvolSess, "#.##"), text_size=size.tiny)
+
+plot(inSess ? 1 : 0, "EGVS_InSession", display=display.data_window)
+plot(orbVolSpike ? 1 : 0, "EGVS_OrbVolSpike", display=display.data_window)

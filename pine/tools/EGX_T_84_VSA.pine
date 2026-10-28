@@ -1,0 +1,27 @@
+//@version=6
+indicator("EGX Tool 84 VSA — Volume Spread Analysis", shorttitle="EGX T-VSA", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة ز أنظمة · #84/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+float volMa = ta.sma(volume, 20)
+float spread = high - low
+float spMa = ta.sma(spread, 20)
+bool effortUp = volume > volMa * 1.4 and spread < spMa * 0.7 and close > open
+bool effortDn = volume > volMa * 1.4 and spread < spMa * 0.7 and close < open
+bool easyUp = volume < volMa * 0.8 and spread > spMa and close > open
+int vote = easyUp or (close > open and volume > volMa and spread > spMa) ? 1 : effortUp ? -1 : effortDn ? 1 : close < open and volume > volMa ? -1 : 0
+plot(volume, "Vol", color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, style=plot.style_columns)
+
+plot(vote, "EGXT_VSA_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_VSA_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_VSA_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "VSA", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-VSA صاعد", "EGX Tool VSA: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-VSA هابط", "EGX Tool VSA: vote هابط")

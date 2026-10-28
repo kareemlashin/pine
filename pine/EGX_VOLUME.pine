@@ -1,0 +1,265 @@
+//@version=6
+indicator("EGX Volume — RVOL · climax · ranks", shorttitle="EGX VOL", overlay=false, max_labels_count=120, max_tables_count=4, calc_bars_count=5000)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// EGX Volume — لوحة فوليوم مستقلة (تحت السعر)
+// RVOL · Z-Score · رتبة % · حجم×سعر · up/down proxy · أكبر شموع · climax
+// EGX: EGX:XXXX · يومي موصى · مناطق buy/sell: pine/EGX_VOLUME_ZONES.pine · ميكر: pine/EGX_VOLUME_MM.pine
+// ═══════════════════════════════════════════════════════════════════════════════
+
+string G_PROF = "═══ EGX ═══"
+string profile = input.string("EGX يومي", "الملف", options=["EGX يومي", "مضاربة", "مخصص"], group=G_PROF)
+
+string G_CALC = "═══ حساب ═══"
+int maFast = input.int(20, "MA سريع", minval=5, group=G_CALC)
+int maSlow = input.int(60, "MA بطيء", minval=10, group=G_CALC)
+int rankLen = input.int(500, "نافذة رتبة % / مسح", minval=50, maxval=3000, group=G_CALC)
+float rvolClimax = input.float(2.0, "RVOL climax", minval=1.2, step=0.1, group=G_CALC)
+float zClimax = input.float(2.5, "Z-Score climax", minval=1.5, step=0.1, group=G_CALC)
+float pctClimax = input.float(92.0, "رتبة % climax", minval=80, maxval=99, group=G_CALC)
+float minAvgVolIn = input.float(1000.0, "حد أدنى متوسط حجم", minval=0, group=G_CALC)
+string mktSym = input.symbol("EGX:EGX30", "مؤشر RS vol", group=G_CALC)
+bool useRsVol = input.bool(true, "RVOL vs المؤشر", group=G_CALC)
+string egxBoardLim = input.string("نشط (EGX100)", "لوحة halt", options=["نشط (EGX100)", "EGX30 (بيع مكشوف)", "SME تميّز", "SME نايل", "غير نشط"], group=G_PROF)
+bool blockLimitLim = input.bool(true, "منع قرب halt/LULD", group=G_PROF)
+
+string G_UI = "═══ عرض ═══"
+string colorMode = input.string("شمعة + climax", "تلوين الأعمدة", options=["شمعة + climax", "شمعة فقط", "up/down", "climax فقط", "net delta"], group=G_UI)
+bool showMa = input.bool(true, "خطوط MA", group=G_UI)
+bool showRvolLine = input.bool(true, "خط RVOL (محور يمين)", group=G_UI)
+bool showRvolBands = input.bool(true, "خطوط RVOL 1.0 / 2.0", group=G_UI)
+bool showUpDown = input.bool(true, "أعمدة up/down (proxy)", group=G_UI)
+bool showDryUp = input.bool(true, "علامة جفاف حجم", group=G_UI)
+bool showClimaxMark = input.bool(true, "علامة climax", group=G_UI)
+bool showTopTbl = input.bool(true, "جدول أعلى حجم", group=G_UI)
+bool showHud = input.bool(true, "HUD الشمعة الحالية", group=G_UI)
+int topN = input.int(6, "أكبر N في الجدول", minval=3, maxval=10, group=G_UI)
+bool showDollarRow = input.bool(true, "صف حجم×سعر في HUD", group=G_UI)
+bool showCumDelta = input.bool(true, "خط تراكم buy−sell", group=G_UI)
+bool showTopBuySell = input.bool(true, "جدول أكبر شراء/بيع", group=G_UI)
+int topSideN = input.int(5, "أكبر N buy/sell bars", minval=2, maxval=8, group=G_UI)
+float minSideShare = input.float(0.55, "حد نسبة جانب/bar", minval=0.51, step=0.01, group=G_UI)
+
+bool profCustom = profile == "مخصص"
+int effRank = profCustom ? rankLen : profile == "مضاربة" ? 250 : 500
+float effRvol = profCustom ? rvolClimax : profile == "مضاربة" ? 1.7 : 2.0
+float effMinVol = profCustom ? minAvgVolIn : profile == "مضاربة" ? 500.0 : 1000.0
+
+float volMaF = ta.sma(volume, maFast)
+float volMaS = ta.sma(volume, maSlow)
+float volStd = ta.stdev(volume, maFast)
+float rvol = volume / math.max(volMaF, 1.0)
+float rvolS = volume / math.max(volMaS, 1.0)
+float zVol = volStd > 0 ? (volume - volMaF) / volStd : 0.0
+float volPct = ta.percentrank(volume, effRank)
+bool liqOk = volMaF >= effMinVol
+
+bool isClimax = rvol >= effRvol or zVol >= zClimax or volPct >= pctClimax
+bool bullBar = close >= open
+
+float rangeBar = math.max(high - low, syminfo.mintick)
+float buyVol = volume * (close - low) / rangeBar
+float sellVol = volume - buyVol
+
+bool dryUp = volMaF > 0 and volume < volMaF * 0.45 and ta.lowest(volume, 5)[1] > volMaF * 0.5
+
+float dollarVol = volume * close
+float dvPct = ta.percentrank(dollarVol, effRank)
+bool dollarClimax = dvPct >= pctClimax
+
+float buyShare = buyVol / math.max(volume, 1.0)
+float netBar = buyVol - sellVol
+var float cumDelta = 0.0
+cumDelta += netBar
+float cumDeltaMa = ta.sma(cumDelta, maFast)
+float mktVolMa = request.security(mktSym, timeframe.period, ta.sma(volume, maFast), barmerge.gaps_off, barmerge.lookahead_off)
+float mktRvol = useRsVol and mktVolMa > 0 ? volume / mktVolMa : na
+float rsVol = useRsVol and not na(mktRvol) and mktRvol > 0 ? rvol / mktRvol : na
+bool rsVolSpike = not na(rsVol) and rsVol >= 1.15
+
+float dPrevVol = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+float dayPctVol = dPrevVol > 0 ? (close - dPrevVol) / dPrevVol * 100.0 : 0.0
+float haltPctVol = egxBoardLim == "SME تميّز" or egxBoardLim == "SME نايل" or egxBoardLim == "غير نشط" ? 5.0 : 10.0
+float luldPctVol = egxBoardLim == "غير نشط" ? 5.0 : (egxBoardLim == "SME تميّز" or egxBoardLim == "SME نايل" ? 10.0 : 20.0)
+bool nearLimitVol = blockLimitLim and dPrevVol > 0 and (dayPctVol >= math.min(9.0, haltPctVol - 1.0) or dayPctVol >= luldPctVol - 0.25)
+bool volBuyPass = liqOk and isClimax and bullBar and buyShare >= minSideShare and not nearLimitVol
+
+// ─── Column colors ───────────────────────────────────────────────────────────
+color colBull = color.new(color.teal, 35)
+color colBear = color.new(color.red, 35)
+color colClimaxBull = color.new(color.lime, 0)
+color colClimaxBear = color.new(color.fuchsia, 0)
+color colDry = color.new(color.gray, 60)
+
+color barCol = color.gray
+if colorMode == "شمعة + climax"
+    barCol := isClimax ? (bullBar ? colClimaxBull : colClimaxBear) : bullBar ? colBull : colBear
+else if colorMode == "شمعة فقط"
+    barCol := bullBar ? colBull : colBear
+else if colorMode == "climax فقط"
+    barCol := isClimax ? (bullBar ? colClimaxBull : colClimaxBear) : color.new(color.gray, 72)
+else if colorMode == "net delta"
+    barCol := netBar >= 0 ? color.new(color.teal, 30 + int(40 * (1.0 - buyShare))) : color.new(color.red, 30 + int(40 * buyShare))
+else
+    barCol := na
+
+// ─── Plots (main pane = volume) ───────────────────────────────────────────────
+bool upDownMode = colorMode == "up/down" and showUpDown
+plot(not upDownMode ? volume : na, "Volume", style=plot.style_columns, color=barCol)
+plot(upDownMode ? buyVol : na, "Buy vol (proxy)", style=plot.style_columns, color=color.new(color.teal, 30))
+plot(upDownMode ? -sellVol : na, "Sell vol (proxy)", style=plot.style_columns, color=color.new(color.red, 30))
+
+plot(showMa ? volMaF : na, "Vol MA fast", color=color.new(color.yellow, 0), linewidth=2)
+plot(showMa ? volMaS : na, "Vol MA slow", color=color.new(color.orange, 35), linewidth=1)
+
+plot(showRvolLine ? rvol : na, "RVOL", color=isClimax ? color.white : color.new(color.aqua, 40), linewidth=2, scale=scale.right)
+plot(showRvolBands ? effRvol : na, "RVOL climax", color=color.new(color.red, 50), linewidth=1, style=plot.style_circles, scale=scale.right)
+plot(showRvolBands ? 1.0 : na, "RVOL 1.0", color=color.new(color.gray, 60), linewidth=1, style=plot.style_line, scale=scale.right)
+plot(useRsVol ? rsVol : na, "RS vol vs mkt", color=rsVolSpike ? color.new(color.orange, 0) : color.new(color.purple, 50), linewidth=2, scale=scale.right)
+plot(useRsVol and showRvolBands ? 1.15 : na, "RS vol 1.15", color=color.new(color.orange, 70), linewidth=1, scale=scale.right)
+plot(showCumDelta ? cumDelta : na, "Cum delta", color=cumDelta >= cumDeltaMa ? color.new(color.lime, 35) : color.new(color.red, 35), linewidth=2)
+plot(showCumDelta ? cumDeltaMa : na, "Cum delta MA", color=color.new(color.white, 50), linewidth=1)
+
+plotshape(showClimaxMark and isClimax, title="Climax", style=shape.diamond, location=location.top, color=bullBar ? color.lime : color.red, size=size.tiny, text="!")
+plotshape(showDryUp and dryUp, title="Dry", style=shape.xcross, location=location.bottom, color=colDry, size=size.tiny, text="جفاف")
+
+// ─── Top volume table ────────────────────────────────────────────────────────
+f_pickTopVol(int n) =>
+    array<int> picked = array.new_int()
+    int scan = math.min(effRank, bar_index - 1)
+    for rank = 0 to n - 1
+        float best = -1.0
+        int bestOff = -1
+        for off = 1 to scan
+            bool used = false
+            for u = 0 to array.size(picked) - 1
+                if array.get(picked, u) == off
+                    used := true
+            if not used and volume[off] > best
+                best := volume[off]
+                bestOff := off
+        if bestOff > 0
+            array.push(picked, bestOff)
+    picked
+
+f_pickTopSide(bool wantBuy, int n) =>
+    array<int> picked = array.new_int()
+    int scan = math.min(effRank, bar_index - 1)
+    for rank = 0 to n - 1
+        float best = -1.0
+        int bestOff = -1
+        for off = 1 to scan
+            bool used = false
+            for u = 0 to array.size(picked) - 1
+                if array.get(picked, u) == off
+                    used := true
+            if used
+                continue
+            float rng = math.max(high[off] - low[off], syminfo.mintick)
+            float bV = volume[off] * (close[off] - low[off]) / rng
+            float sV = volume[off] - bV
+            float sh = bV / math.max(volume[off], 1.0)
+            bool ok = wantBuy ? sh >= minSideShare : sh <= 1.0 - minSideShare
+            if not ok
+                continue
+            float metric = wantBuy ? bV : sV
+            if metric > best
+                best := metric
+                bestOff := off
+        if bestOff > 0
+            array.push(picked, bestOff)
+    picked
+
+var table topTbl = table.new(position.top_right, 6, 10, border_width=1)
+var table sideTbl = table.new(position.bottom_center, 7, 12, border_width=1)
+var table hudTbl = table.new(position.bottom_left, 2, 10, border_width=1)
+
+if showTopTbl and barstate.islast
+    table.clear(topTbl, 0, 0, 5, 9)
+    color hdr = color.new(color.black, 0)
+    table.cell(topTbl, 0, 0, "Top Vol", bgcolor=hdr, text_color=color.yellow, text_size=size.small)
+    table.cell(topTbl, 1, 0, "bars", bgcolor=hdr, text_size=size.tiny)
+    table.cell(topTbl, 2, 0, "V", bgcolor=hdr, text_size=size.tiny)
+    table.cell(topTbl, 3, 0, "RVOL", bgcolor=hdr, text_size=size.tiny)
+    table.cell(topTbl, 4, 0, "%ile", bgcolor=hdr, text_size=size.tiny)
+    table.cell(topTbl, 5, 0, "Px", bgcolor=hdr, text_size=size.tiny)
+    array<int> tops = f_pickTopVol(topN)
+    for i = 0 to array.size(tops) - 1
+        int off = array.get(tops, i)
+        int row = i + 1
+        float rAt = volMaF[off] > 0 ? volume[off] / volMaF[off] : na
+        float pAt = ta.percentrank(volume, effRank)[off]
+        table.cell(topTbl, 0, row, "#" + str.tostring(i + 1), text_size=size.tiny)
+        table.cell(topTbl, 1, row, str.tostring(off), text_color=color.gray, text_size=size.tiny)
+        table.cell(topTbl, 2, row, str.tostring(volume[off], "#"), text_color=color.fuchsia, text_size=size.tiny)
+        table.cell(topTbl, 3, row, str.tostring(rAt, "#.##"), text_color=color.aqua, text_size=size.tiny)
+        table.cell(topTbl, 4, row, str.tostring(pAt, "#"), text_size=size.tiny)
+        table.cell(topTbl, 5, row, str.tostring(close[off], format.mintick), text_size=size.tiny)
+
+if showHud and barstate.islast
+    table.clear(hudTbl, 0, 0, 1, 9)
+    table.cell(hudTbl, 0, 0, "Now", bgcolor=color.new(color.black, 0), text_color=color.white, text_size=size.small)
+    table.cell(hudTbl, 1, 0, liqOk ? "OK" : "thin", bgcolor=color.new(liqOk ? color.teal : color.orange, 70), text_size=size.tiny)
+    table.cell(hudTbl, 0, 1, "V", text_color=color.gray, text_size=size.tiny)
+    table.cell(hudTbl, 1, 1, str.tostring(volume, "#"), text_size=size.tiny)
+    table.cell(hudTbl, 0, 2, "RVOL", text_color=color.gray, text_size=size.tiny)
+    table.cell(hudTbl, 1, 2, str.tostring(rvol, "#.##"), text_color=isClimax ? color.lime : color.white, text_size=size.tiny)
+    table.cell(hudTbl, 0, 3, "Z", text_color=color.gray, text_size=size.tiny)
+    table.cell(hudTbl, 1, 3, str.tostring(zVol, "#.##"), text_size=size.tiny)
+    table.cell(hudTbl, 0, 4, "Rank %", text_color=color.gray, text_size=size.tiny)
+    table.cell(hudTbl, 1, 4, str.tostring(volPct, "#"), text_size=size.tiny)
+    table.cell(hudTbl, 0, 5, "Buy/Sell%", text_color=color.gray, text_size=size.tiny)
+    table.cell(hudTbl, 1, 5, str.tostring(buyVol / math.max(volume, 1) * 100, "#") + "/" + str.tostring(sellVol / math.max(volume, 1) * 100, "#"), text_size=size.tiny)
+    if showDollarRow
+        table.cell(hudTbl, 0, 6, "V×C", text_color=color.gray, text_size=size.tiny)
+        table.cell(hudTbl, 1, 6, str.tostring(dollarVol, "#") + (dollarClimax ? " !" : ""), text_color=dollarClimax ? color.orange : color.white, text_size=size.tiny)
+    if showCumDelta
+        table.cell(hudTbl, 0, 7, "Cum Δ", text_color=color.gray, text_size=size.tiny)
+        table.cell(hudTbl, 1, 7, str.tostring(cumDelta, "#"), text_size=size.tiny)
+    if useRsVol
+        table.cell(hudTbl, 0, 8, "RS vol", text_color=color.gray, text_size=size.tiny)
+        table.cell(hudTbl, 1, 8, str.tostring(rsVol, "#.##"), text_color=rsVolSpike ? color.orange : color.white, text_size=size.tiny)
+
+if showTopBuySell and barstate.islast
+    table.clear(sideTbl, 0, 0, 6, 11)
+    color hdr2 = color.new(color.black, 0)
+    table.cell(sideTbl, 0, 0, "Top BUY vol", bgcolor=hdr2, text_color=color.lime, text_size=size.tiny)
+    table.cell(sideTbl, 1, 0, "bars", bgcolor=hdr2, text_size=size.tiny)
+    table.cell(sideTbl, 2, 0, "BuyV", bgcolor=hdr2, text_size=size.tiny)
+    table.cell(sideTbl, 3, 0, "RVOL", bgcolor=hdr2, text_size=size.tiny)
+    table.cell(sideTbl, 4, 0, "Top SELL", bgcolor=hdr2, text_color=color.red, text_size=size.tiny)
+    table.cell(sideTbl, 5, 0, "bars", bgcolor=hdr2, text_size=size.tiny)
+    table.cell(sideTbl, 6, 0, "SellV", bgcolor=hdr2, text_size=size.tiny)
+    array<int> topBuy = f_pickTopSide(true, topSideN)
+    array<int> topSell = f_pickTopSide(false, topSideN)
+    int rows = math.max(array.size(topBuy), array.size(topSell))
+    for i = 0 to rows - 1
+        int row = i + 1
+        if i < array.size(topBuy)
+            int offB = array.get(topBuy, i)
+            float rngB = math.max(high[offB] - low[offB], syminfo.mintick)
+            float bVB = volume[offB] * (close[offB] - low[offB]) / rngB
+            float rB = volMaF[offB] > 0 ? volume[offB] / volMaF[offB] : na
+            table.cell(sideTbl, 0, row, "#" + str.tostring(i + 1), text_size=size.tiny)
+            table.cell(sideTbl, 1, row, str.tostring(offB), text_color=color.gray, text_size=size.tiny)
+            table.cell(sideTbl, 2, row, str.tostring(bVB, "#"), text_color=color.lime, text_size=size.tiny)
+            table.cell(sideTbl, 3, row, str.tostring(rB, "#.##"), text_size=size.tiny)
+        if i < array.size(topSell)
+            int offS = array.get(topSell, i)
+            float rngS = math.max(high[offS] - low[offS], syminfo.mintick)
+            float bVS = volume[offS] * (close[offS] - low[offS]) / rngS
+            float sVS = volume[offS] - bVS
+            table.cell(sideTbl, 4, row, "#" + str.tostring(i + 1), text_size=size.tiny)
+            table.cell(sideTbl, 5, row, str.tostring(offS), text_color=color.gray, text_size=size.tiny)
+            table.cell(sideTbl, 6, row, str.tostring(sVS, "#"), text_color=color.red, text_size=size.tiny)
+
+alertcondition(isClimax, title="EGX VOL climax", message="EGX VOL: climax on {{ticker}}")
+alertcondition(dryUp, title="EGX VOL dry-up", message="EGX VOL: volume dry-up {{ticker}}")
+alertcondition(dollarClimax, title="EGX VOL dollar climax", message="EGX VOL: dollar volume extreme {{ticker}}")
+alertcondition(rsVolSpike, title="EGX VOL RS vol spike", message="EGX VOL: volume vs EGX30 spike {{ticker}}")
+
+plot(rsVolSpike ? 1 : 0, "EGVol_RS_Spike", display=display.data_window)
+plot(netBar, "EGVol_NetBar", display=display.data_window)
+plot(buyShare * 100.0, "EGVol_BuyPct", display=display.data_window)
+plot(nearLimitVol ? 1 : 0, "EGX_NearLimit", display=display.data_window)
+plot(volBuyPass ? 1 : 0, "EGVol_BuyPass", display=display.all)

@@ -1,0 +1,94 @@
+//@version=6
+strategy("EGX محلل رئيسي — اختبار استراتيجية", shorttitle="EGX رئيسي ST", overlay=true, pyramiding=0, calc_bars_count=5000, commission_type=strategy.commission.percent, commission_value=0.125, slippage=2, default_qty_type=strategy.percent_of_equity, default_qty_value=10, initial_capital=100000, currency=currency.EGP)
+
+// استراتيجية مبسطة مرتبطة بمنطق المؤشر — للاختبار فقط، ليست نصيحة استثمارية
+
+int   i_pivotLen   = input.int(5, "محور البنية", minval=2)
+int   i_volAvgLen  = input.int(20, "متوسط الحجم")
+float i_minAvgVol  = input.float(1000.0, "حد أدنى متوسط حجم")
+float i_rvolMin    = input.float(1.0, "حد الحجم النسبي للدخول")
+float i_scoreEntry = input.float(62.0, "حد التقييم المركب (/100)")
+float i_minRR      = input.float(1.5, "حد أدنى عائد/مخاطرة")
+float i_atrLen     = input.int(14, "ATR")
+bool  i_useConfirm = input.bool(true, "الدخول عند إغلاق الشمعة")
+string i_tfD       = input.timeframe("D", "إطار الاتجاه اليومي")
+float  i_commPct   = input.float(0.125, "عمولة % (تقريب EGX)", step=0.01)
+int   i_slipTicks  = input.int(2, "انزلاق (ticks)")
+bool  i_blockLimit = input.bool(true, "منع شراء قرب halt/LULD")
+string i_egxBoard = input.string("نشط (EGX100)", "لوحة", options=["نشط (EGX100)", "EGX30 (بيع مكشوف)", "SME تميّز", "SME نايل", "غير نشط"])
+bool  i_mktHalt100 = input.bool(true, "منع إذا EGX100 ≤ −10%")
+
+strategy.risk.max_drawdown(50, strategy.percent_of_equity)
+
+f_trendPack() =>
+    int sc = 0
+    float c = close
+    float e20 = ta.ema(close, 20)
+    float e50 = ta.ema(close, 50)
+    float e100 = ta.ema(close, 100)
+    sc += c > e20 ? 1 : c < e20 ? -1 : 0
+    sc += e20 > e50 ? 1 : e20 < e50 ? -1 : 0
+    sc += e50 > e100 ? 1 : e50 < e100 ? -1 : 0
+    sc
+
+int trD = request.security(syminfo.tickerid, i_tfD, f_trendPack(), barmerge.gaps_off, barmerge.lookahead_off)
+
+float pHigh = ta.pivothigh(high, i_pivotLen, i_pivotLen)
+float pLow  = ta.pivotlow(low, i_pivotLen, i_pivotLen)
+var float swingHigh = na
+var float swingLow  = na
+if not na(pHigh)
+    swingHigh := pHigh
+if not na(pLow)
+    swingLow := pLow
+
+float atr = ta.atr(i_atrLen)
+float volAvg = ta.sma(volume, i_volAvgLen)
+float rvol = volAvg > 0 ? volume / volAvg : na
+float cmf = ta.cmf(20)
+float obvSlope = ta.linreg(ta.obv, 10, 0) - ta.linreg(ta.obv, 10, 1)
+
+int accScore = 0
+int distScore = 0
+accScore += rvol > 1.0 and math.abs(close - open) < atr * 0.25 ? 1 : 0
+accScore += cmf > 0.05 ? 1 : 0
+accScore += obvSlope > 0 ? 1 : 0
+distScore += cmf < -0.05 ? 1 : 0
+distScore += obvSlope < 0 ? 1 : 0
+
+string volClass = accScore > distScore + 1 ? "acc" : distScore > accScore + 1 ? "dist" : "norm"
+
+float zoneW = atr * 0.35
+float demandHi = na(swingLow) ? na : swingLow + zoneW
+float demandLo = na(swingLow) ? na : swingLow - zoneW
+float fibBase = na(swingLow) or na(swingHigh) ? na : swingHigh - swingLow
+float tgt1 = na(fibBase) ? close + atr * 2 : swingHigh + fibBase * 0.618
+float stopL = na(demandLo) ? close - atr * 2 : demandLo - atr * 0.5
+float entryP = demandHi
+float risk = na(entryP) ? na : entryP - stopL
+float rr = risk > 0 ? (tgt1 - entryP) / risk : na
+
+float sTrend = math.max(0.0, math.min(100.0, 50.0 + trD / 3.0 * 100.0))
+float sVol = volClass == "acc" ? 70.0 : volClass == "dist" ? 30.0 : 50.0
+float sEntry = not na(rr) and rr >= i_minRR ? 75.0 : 40.0
+float composite = (sTrend * 0.45 + sVol * 0.35 + sEntry * 0.20)
+
+float dPrevClose = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+float dayChgPct = dPrevClose > 0 ? (close - dPrevClose) / dPrevClose * 100.0 : 0.0
+float haltPct = i_egxBoard == "SME تميّز" or i_egxBoard == "SME نايل" or i_egxBoard == "غير نشط" ? 5.0 : 10.0
+float luldPct = i_egxBoard == "غير نشط" ? 5.0 : (i_egxBoard == "SME تميّز" or i_egxBoard == "SME نايل" ? 10.0 : 20.0)
+bool nearLimitUp = i_blockLimit and dPrevClose > 0 and (dayChgPct >= math.min(9.0, haltPct - 1.0) or dayChgPct >= luldPct - 0.25)
+float dayPct100 = i_mktHalt100 ? request.security("EGX:EGX100EWI", "D", close[1] > 0 ? (close - close[1]) / close[1] * 100.0 : 0.0, barmerge.gaps_off, barmerge.lookahead_off) : 0.0
+bool mktHalt100 = i_mktHalt100 and dayPct100 <= -10.0
+
+bool barOk = i_useConfirm ? barstate.isconfirmed : true
+bool inZone = not na(demandLo) and low <= demandHi and high >= demandLo
+bool liqOk = volAvg >= i_minAvgVol
+bool longSetup = barOk and liqOk and trD > 0 and inZone and rvol >= i_rvolMin and accScore >= distScore and composite >= i_scoreEntry and not na(rr) and rr >= i_minRR and not nearLimitUp and not mktHalt100
+
+if longSetup and strategy.position_size == 0
+    strategy.entry("L", strategy.long, comment="EGX L")
+    strategy.exit("LX", "L", stop=stopL, limit=tgt1)
+
+// مرجع: buy & hold benchmark line (equity comparison via separate ticker chart recommended)
+plot(composite, "Composite", color=color.new(color.blue, 70), display=display.none)

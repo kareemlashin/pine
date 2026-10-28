@@ -1,0 +1,37 @@
+//@version=6
+indicator("EGX Volume Churn — rotation bars", shorttitle="EGX VChn", overlay=true, max_tables_count=2, calc_bars_count=5000)
+
+// Churn: حجم عالٍ + إغلاق قرب الوسط · docs/EGX_VOLUME.md
+
+string G = "Churn"
+int maLen = input.int(20, "MA vol", group=G)
+float rvolMin = input.float(1.35, "RVOL", group=G)
+float bodyMax = input.float(0.35, "Body/range max", maxval=0.5, step=0.05, group=G)
+float midBand = input.float(0.22, "Close vs mid", maxval=0.35, step=0.02, group=G)
+
+float vma = ta.sma(volume, maLen)
+float rvol = volume / math.max(vma, 1.0)
+float rng = math.max(high - low, syminfo.mintick)
+float body = math.abs(close - open)
+float mid = (high + low) / 2.0
+float cp = (close - low) / rng
+
+bool churn = rvol >= rvolMin and body / rng <= bodyMax and math.abs(close - mid) / rng <= midBand
+bool churnBull = churn and cp >= 0.48 and cp <= 0.58
+bool churnBear = churn and cp >= 0.42 and cp <= 0.52 and close < open
+
+plotshape(churn, "Churn", shape.xcross, location.abovebar, color=color.silver, size=size.tiny, text="↔")
+
+bgcolor(churn ? color.new(color.gray, 92) : na)
+
+var table t = table.new(position.top_left, 2, 3, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 2)
+    table.cell(t, 0, 0, "Churn", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, churn ? "YES" : "—", text_size=size.tiny)
+    table.cell(t, 0, 1, "RVOL", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 1, str.tostring(rvol, "#.##"), text_size=size.tiny)
+
+plot(churn ? 1 : 0, "EGVChn_Any", display=display.all)
+plot(churnBull ? 1 : 0, "EGVChn_Bull", display=display.all)
+plot(churnBear ? 1 : 0, "EGVChn_Bear", display=display.all)

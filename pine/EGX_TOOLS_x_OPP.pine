@@ -1,0 +1,108 @@
+//@version=6
+indicator("EGX TOOLS × أفضل فرص — توافق", shorttitle="T×فرص", overlay=false, calc_bars_count=5000)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Pro فرص + Pro Tools على نفس الرمز · EGXTxOpp_Mega=1
+// ═══════════════════════════════════════════════════════════════════════════════
+
+string bench = input.symbol("EGX:EGX30", "EGX30")
+float minVol = input.float(800.0, "حد حجم")
+float sigMin = input.float(20.0, "Tools Score %")
+float minOpp = input.float(55.0, "حد فرصة")
+float minToolRank = input.float(55.0, "Tools Rank")
+int minSetup = input.int(7, "إعداد فرص /12")
+bool onClose = input.bool(true, "إغلاق")
+string egxBoard = input.string("نشط (EGX100)", "لوحة", options=["نشط (EGX100)", "EGX30 (بيع مكشوف)", "SME تميّز", "SME نايل", "غير نشط"])
+
+bool sigOk = not onClose or barstate.isconfirmed
+
+// ─── أفضل فرص lite ───
+float ema9 = ta.ema(close, 9)
+float ema21 = ta.ema(close, 21)
+float ema50 = ta.ema(close, 50)
+bool bullStack = ema9 > ema21 and ema21 > ema50
+bool htfBull = close > ema50
+[macdL, macdS, macdH] = ta.macd(close, 12, 26, 9)
+bool macdBull = macdH > 0 and macdL > macdS
+float volMa = ta.sma(volume, 20)
+bool liq = volMa >= minVol
+float rvol = volume / math.max(volMa, 1.0)
+float cmf = ta.sma(((close - low) - (high - close)) / math.max(high - low, syminfo.mintick) * volume, 14) / ta.sma(volume, 14)
+float obvSl = ta.linreg(ta.obv, 10, 0) - ta.linreg(ta.obv, 10, 1)
+bool acc = cmf > 0 and obvSl > 0
+float accSc = math.min(100.0, (acc ? 40.0 : 0.0) + (cmf > 0 ? 15.0 : 0.0))
+float distSc = math.min(100.0, (cmf < 0 and obvSl < 0 ? 35.0 : 0.0))
+float atr = ta.atr(14)
+float pl = ta.pivotlow(low, 8, 8)
+var float sl = na
+if not na(pl)
+    sl := pl
+bool supBr = not na(sl) and close < sl and close[1] >= sl
+float zw = atr * 0.35
+bool atZ = low <= nz(sl, low) + zw and close >= nz(sl, low) - zw * 1.2
+bool ret = not na(sl) and low <= sl * 1.006 and close > sl
+float ph = ta.pivothigh(high, 8, 8)
+var float sh = na
+if not na(ph)
+    sh := ph
+float t1 = na(sh) ? close + atr * 1.5 : sh
+float entryPx = (nz(sl, low) + zw + nz(sl, low) - zw * 1.2) / 2.0
+float stopPx = nz(sl, low) - zw * 1.2 - atr * 0.5
+float rr = math.max(entryPx - stopPx, syminfo.mintick) > 0 ? (t1 - entryPx) / math.max(entryPx - stopPx, syminfo.mintick) : 0.0
+float rsi = ta.rsi(close, 14)
+float hi = ta.highest(high, 252)
+bool chase = hi > 0 and (close - hi) / hi * 100.0 > -3 and rsi > 72
+float dPrev = close[1]
+float dayPct = dPrev > 0 ? (close - dPrev) / dPrev * 100.0 : 0.0
+float haltPct = egxBoard == "SME تميّز" or egxBoard == "SME نايل" or egxBoard == "غير نشط" ? 5.0 : 10.0
+bool nearLimit = dayPct >= math.min(9.0, haltPct - 1.0)
+float oppScore = math.min(100.0, (bullStack ? 20.0 : 0.0) + (htfBull ? 15.0 : 0.0) + (macdBull ? 10.0 : 0.0) + (acc ? 15.0 : 0.0) + (rvol >= 1.0 ? 10.0 : 0.0))
+int setup = (bullStack ? 1 : 0) + (htfBull ? 1 : 0) + (macdBull ? 1 : 0) + (acc ? 1 : 0) + (atZ ? 1 : 0) + (rr >= 1.5 ? 1 : 0) + (rvol >= 1.0 ? 1 : 0) + (ret ? 1 : 0) + (accSc >= 50 ? 1 : 0) + (not chase ? 1 : 0) + (not nearLimit ? 1 : 0)
+bool oppBuy = liq and accSc >= 50 and distSc < 55 and (atZ or ret) and not supBr and not chase and not nearLimit and setup >= minSetup and rr >= 1.5
+float benchRoc = request.security(bench, timeframe.period, ta.roc(close, 20), barmerge.gaps_off, barmerge.lookahead_off)
+float oppRank = math.max(0.0, math.min(100.0, oppScore * 0.42 + setup / 12.0 * 100.0 * 0.33 + (ta.roc(close, 20) - benchRoc > 0 ? 8.0 : 0.0)))
+bool oppPro = sigOk and oppBuy and oppRank >= minOpp
+
+// ─── Tools lite ───
+float ema20 = ta.ema(close, 20)
+float ema200 = ta.ema(close, 200)
+[diP, diM, adx] = ta.dmi(14, 14)
+[stLine, stDir] = ta.supertrend(3.0, 10)
+bool inDem = close <= ta.highest(high, 80) - 0.618 * (ta.highest(high, 80) - ta.lowest(low, 80)) and close >= ta.lowest(low, 80)
+bool bosUp = close > ta.highest(high, 20)[1]
+int v01 = rsi > 52 and rsi < 68 ? 1 : -1
+int v02 = macdH > 0 and macdL > macdS ? 1 : -1
+int v07 = close > ema20 and ema20 > ema50 and ema50 > ema200 ? 1 : -1
+int v10 = cmf > 0.05 ? 1 : -1
+int v11 = obvSl > 0 ? 1 : -1
+int scT = v01 + v02 + v07 + v10 + v11 + (bosUp or inDem ? 1 : 0) + (stDir < 0 ? 1 : -1)
+float toolScore = scT / 7.0 * 100.0
+bool locOK = inDem or bosUp
+bool moneyOK = cmf > 0 and obvSl > 0
+int hits = (close > ema50 ? 1 : 0) + (locOK ? 1 : 0) + (toolScore >= sigMin * 0.5 ? 1 : 0) + (moneyOK ? 1 : 0) + (close > open ? 1 : 0) + (rvol >= 0.9 ? 1 : 0)
+float toolRank = math.min(100.0, toolScore * 0.55 + hits / 6.0 * 45.0)
+bool toolBuyA = sigOk and liq and not chase and not nearLimit and locOK and moneyOK and hits >= 5 and toolScore >= sigMin
+bool toolPro = toolBuyA and toolRank >= minToolRank
+
+bool mega = oppPro and toolPro
+bool agree = oppBuy and toolBuyA
+
+var table t = table.new(position.top_right, 2, 5, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 4)
+    table.cell(t, 0, 0, syminfo.ticker, text_color=color.white, text_size=size.normal)
+    table.cell(t, 1, 0, mega ? "MEGA" : agree ? "Agree" : "—", bgcolor=mega ? color.lime : color.gray, text_size=size.normal)
+    table.cell(t, 0, 1, "فرص / Tools", text_size=size.small)
+    table.cell(t, 1, 1, str.tostring(oppRank, "#") + " / " + str.tostring(toolRank, "#"), text_size=size.small)
+    table.cell(t, 0, 2, "Setup / Hits", text_size=size.small)
+    table.cell(t, 1, 2, str.tostring(setup) + "/12 · " + str.tostring(hits) + "/6", text_size=size.small)
+
+plot(oppPro ? 1 : 0, "EGXTxOpp_OppPro", display=display.all)
+plot(toolPro ? 1 : 0, "EGXTxOpp_ToolsPro", display=display.all)
+plot(mega ? 1 : 0, "EGXTxOpp_Mega", display=display.all)
+plot(agree ? 1 : 0, "EGXTxOpp_Agree", display=display.all)
+plot(oppRank, "EGXTxOpp_OppRank", display=display.all)
+plot(toolRank, "EGXTxOpp_ToolRank", display=display.all)
+plot(1, "EGXTxOpp", display=display.all)
+
+alertcondition(mega, "T×فرص — Mega", "{{ticker}} EGXTxOpp Mega")

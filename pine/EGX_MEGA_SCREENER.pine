@@ -1,0 +1,115 @@
+//@version=6
+indicator("EGX Mega Screener — فرص + Tools + Vol", shorttitle="EGX Mega", overlay=false, calc_bars_count=5000)
+
+// Filter: EGXMega_Pro=1 · EGXMega_Pass=1 · Triple: EGXMega_Triple=1
+// Stricter stack: EGX_SUPER_PASS.pine · Hub: EGXAlHub_Mega · library: EGX_T_Core.pine
+
+string bench = input.symbol("EGX:EGX30", "EGX30")
+float minVol = input.float(800.0, "حد حجم")
+float minOpp = input.float(55.0, "فرص Rank")
+float minTool = input.float(55.0, "Tools Rank")
+float minVolRank = input.float(58.0, "Vol Rank")
+float sigMin = input.float(20.0, "Tools Score %")
+int minSetup = input.int(7, "فرص setup")
+bool onClose = input.bool(true, "إغلاق")
+string egxBoard = input.string("نشط (EGX100)", "لوحة", options=["نشط (EGX100)", "EGX30 (بيع مكشوف)", "SME تميّز", "SME نايل", "غير نشط"])
+bool blockLimit = input.bool(true, "منع قرب halt/LULD")
+bool useMktHalt100 = input.bool(true, "منع إذا EGX100 ≤ −10%")
+
+bool sigOk = not onClose or barstate.isconfirmed
+
+f_mktTrM() =>
+    int sc = 0
+    float e20 = ta.ema(close, 20)
+    float e50 = ta.ema(close, 50)
+    sc += close > e20 ? 1 : -1
+    sc += e20 > e50 ? 1 : -1
+    sc
+float mom30M = request.security(bench, timeframe.period, close[20] > 0 ? (close / close[20] - 1.0) * 100.0 : 0.0, barmerge.gaps_off, barmerge.lookahead_off)
+int tr30M = request.security(bench, timeframe.period, f_mktTrM(), barmerge.gaps_off, barmerge.lookahead_off)
+bool heavySellM = mom30M < -4.0 and tr30M <= -1
+float dayPct100M = useMktHalt100 ? request.security("EGX:EGX100EWI", "D", close[1] > 0 ? (close - close[1]) / close[1] * 100.0 : 0.0, barmerge.gaps_off, barmerge.lookahead_off) : 0.0
+bool mktHalt100M = useMktHalt100 and dayPct100M <= -10.0
+bool regimeOk = not heavySellM and not mktHalt100M
+
+float dPrevM = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+float dayPctM = dPrevM > 0 ? (close - dPrevM) / dPrevM * 100.0 : 0.0
+float haltM = egxBoard == "SME تميّز" or egxBoard == "SME نايل" or egxBoard == "غير نشط" ? 5.0 : 10.0
+float luldM = egxBoard == "غير نشط" ? 5.0 : (egxBoard == "SME تميّز" or egxBoard == "SME نايل" ? 10.0 : 20.0)
+bool nearLimitM = blockLimit and dPrevM > 0 and (dayPctM >= math.min(9.0, haltM - 1.0) or dayPctM >= luldM - 0.25)
+
+// ─── فرص lite ───
+float ema9 = ta.ema(close, 9)
+float ema21 = ta.ema(close, 21)
+float ema50 = ta.ema(close, 50)
+bool bullStack = ema9 > ema21 and ema21 > ema50
+[macdL, macdS, macdH] = ta.macd(close, 12, 26, 9)
+bool macdBull = macdH > 0 and macdL > macdS
+float volMa = ta.sma(volume, 20)
+bool liq = volMa >= minVol
+float rvol = volume / math.max(volMa, 1.0)
+float cmf = ta.sma(((close - low) - (high - close)) / math.max(high - low, syminfo.mintick) * volume, 14) / ta.sma(volume, 14)
+float obvSl = ta.linreg(ta.obv, 10, 0) - ta.linreg(ta.obv, 10, 1)
+bool acc = cmf > 0 and obvSl > 0
+float accSc = math.min(100.0, (acc ? 40.0 : 0.0) + (cmf > 0 ? 15.0 : 0.0))
+float pl = ta.pivotlow(low, 8, 8)
+var float sl = na
+if not na(pl)
+    sl := pl
+float atr = ta.atr(14)
+bool atZ = low <= nz(sl, low) + atr * 0.35 and close >= nz(sl, low) - atr * 0.42
+bool ret = not na(sl) and low <= sl * 1.006 and close > sl
+float rr = 1.5
+int setup = (bullStack ? 1 : 0) + (macdBull ? 1 : 0) + (acc ? 1 : 0) + (atZ or ret ? 1 : 0) + (rvol >= 1.0 ? 1 : 0)
+bool oppBuy = liq and accSc >= 50 and (atZ or ret) and setup >= minSetup
+float benchRoc = request.security(bench, timeframe.period, ta.roc(close, 20), barmerge.gaps_off, barmerge.lookahead_off)
+float oppRank = math.min(100.0, (bullStack ? 20.0 : 0.0) + setup / 12.0 * 50.0 + (ta.roc(close, 20) - benchRoc > 0 ? 8.0 : 0.0))
+bool oppPro = sigOk and oppBuy and oppRank >= minOpp
+
+// ─── Tools lite ───
+float rsi = ta.rsi(close, 14)
+bool inDem = close <= ta.highest(high, 80) - 0.618 * (ta.highest(high, 80) - ta.lowest(low, 80)) and close >= ta.lowest(low, 80)
+bool bosUp = close > ta.highest(high, 20)[1]
+int sc = 0
+sc += rsi > 50 and rsi < 70 ? 1 : -1
+sc += macdH > 0 ? 1 : -1
+sc += close > ema50 ? 1 : -1
+sc += cmf > 0 ? 1 : -1
+sc += obvSl > 0 ? 1 : -1
+sc += bosUp or inDem ? 1 : 0
+float toolScore = sc / 6.0 * 100.0
+int hits = (close > ema50 ? 1 : 0) + ((inDem or bosUp) ? 1 : 0) + (toolScore >= sigMin * 0.5 ? 1 : 0) + (cmf > 0 and obvSl > 0 ? 1 : 0) + (close > open ? 1 : 0) + (rvol >= 0.9 ? 1 : 0)
+float toolRank = math.min(100.0, toolScore * 0.55 + hits / 6.0 * 45.0)
+bool toolPro = sigOk and liq and hits >= 5 and toolScore >= sigMin and toolRank >= minTool
+
+// ─── Vol rank ───
+float pct = ta.percentrank(volume, 500)
+float volRank = math.min(100.0, pct * 0.4 + math.min(rvol, 3.0) / 3.0 * 100.0 * 0.35 + (cmf > 0 ? 15.0 : 0.0))
+bool volOk = volRank >= minVolRank
+
+bool megaPass = sigOk and liq and regimeOk and not nearLimitM and (oppRank >= minOpp * 0.85 or toolRank >= minTool * 0.85) and volOk
+bool megaPro = oppPro and toolPro and volOk and regimeOk and not nearLimitM
+bool triple = megaPro
+int megaVotes = (oppPro ? 1 : 0) + (toolPro ? 1 : 0) + (volOk ? 1 : 0)
+
+var table t = table.new(position.middle_center, 2, 5, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 4)
+    table.cell(t, 0, 0, syminfo.ticker, text_color=color.white, text_size=size.normal)
+    table.cell(t, 1, 0, triple ? "MEGA ✓" : megaPro ? "Pro" : megaPass ? "Pass" : "—", text_color=triple ? color.lime : color.gray, text_size=size.normal)
+    table.cell(t, 0, 1, "فرص/T/Vol", text_size=size.small)
+    table.cell(t, 1, 1, str.tostring(oppRank, "#") + " / " + str.tostring(toolRank, "#") + " / " + str.tostring(volRank, "#"), text_size=size.small)
+
+plot(oppPro ? 1 : 0, "EGXMega_OppPro", display=display.all)
+plot(toolPro ? 1 : 0, "EGXMega_ToolsPro", display=display.all)
+plot(volOk ? 1 : 0, "EGXMega_VolOk", display=display.all)
+plot(megaPro ? 1 : 0, "EGXMega_Pro", display=display.all)
+plot(megaPass ? 1 : 0, "EGXMega_Pass", display=display.all)
+plot(triple ? 1 : 0, "EGXMega_Triple", display=display.all)
+plot(regimeOk ? 1 : 0, "EGX_RegimeOk", display=display.all)
+plot(nearLimitM ? 1 : 0, "EGXMega_Limit", display=display.all)
+plot(megaVotes, "EGXMega_Votes", display=display.data_window)
+plot((oppRank + toolRank + volRank) / 3.0, "EGXMega_Score", display=display.all)
+plot(1, "EGXMega", display=display.all)
+
+alertcondition(triple, "EGX Mega — Triple", "{{ticker}} EGXMega Triple")

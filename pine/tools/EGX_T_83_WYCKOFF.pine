@@ -1,0 +1,30 @@
+//@version=6
+indicator("EGX Tool 83 وايكوف — Wyckoff SC/BC proxy", shorttitle="EGX T-WYCKOFF", overlay=true, max_labels_count=80, max_lines_count=80, max_boxes_count=40, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة ز أنظمة · #83/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+float volMa = ta.sma(volume, 20)
+float rvol = volume / math.max(volMa, 1.0)
+float rng = high - low
+float rngMa = ta.sma(rng, 20)
+bool sc = rvol >= 1.8 and close > open and rng > rngMa and close > (high + low) / 2.0 and close < close[5]
+bool bc = rvol >= 1.8 and close < open and rng > rngMa and close > close[5]
+float mfm = ((close - low) - (high - close)) / math.max(rng, syminfo.mintick)
+float cmf = ta.sma(mfm * volume, 20) / ta.sma(volume, 20)
+int vote = sc or cmf > 0.05 ? 1 : bc or cmf < -0.05 ? -1 : 0
+plotshape(sc, "SC", shape.diamond, location.belowbar, color.lime, size=size.tiny)
+plotshape(bc, "BC", shape.diamond, location.abovebar, color.red, size=size.tiny)
+
+plot(vote, "EGXT_WYCKOFF_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_WYCKOFF_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_WYCKOFF_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "WYCKOFF", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-WYCKOFF صاعد", "EGX Tool WYCKOFF: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-WYCKOFF هابط", "EGX Tool WYCKOFF: vote هابط")

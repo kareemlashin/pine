@@ -1,0 +1,25 @@
+//@version=6
+indicator("EGX Tool 28 ماكجينلي — McGinley Dynamic", shorttitle="EGX T-MCGINLEY", overlay=true, max_labels_count=80, max_lines_count=80, max_boxes_count=40, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة ب الاتجاه · #28/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+int len = input.int(14, "N")
+var float mg = na
+float prev = nz(mg[1], close)
+mg := prev + (close - prev) / (len * math.pow(close / math.max(prev, syminfo.mintick), 4.0))
+int vote = close > mg and mg > mg[1] ? 1 : close < mg and mg < mg[1] ? -1 : 0
+plot(mg, "EGXT_MG", color=color.aqua, linewidth=2)
+
+plot(vote, "EGXT_MCGINLEY_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_MCGINLEY_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_MCGINLEY_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "MCGINLEY", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-MCGINLEY صاعد", "EGX Tool MCGINLEY: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-MCGINLEY هابط", "EGX Tool MCGINLEY: vote هابط")

@@ -1,0 +1,40 @@
+//@version=6
+indicator("EGX Volume Gap — open gap + V", shorttitle="EGX VGap", overlay=true, max_labels_count=80, max_tables_count=2, calc_bars_count=5000)
+
+// فجوة + حجم · docs/EGX_VOLUME.md
+
+string G = "Gap"
+float minGap = input.float(1.0, "Gap % min", minval=0.3, step=0.25, group=G)
+float minRvol = input.float(1.15, "RVOL", group=G)
+bool markFill = input.bool(true, "Gap fill low V", group=G)
+
+float prevC = close[1]
+float gapUpPct = prevC > 0 ? (open - prevC) / prevC * 100.0 : 0.0
+float gapDnPct = prevC > 0 ? (prevC - open) / prevC * 100.0 : 0.0
+float vma = ta.sma(volume, 20)
+float rvol = volume / math.max(vma, 1.0)
+
+bool gUp = gapUpPct >= minGap
+bool gDn = gapDnPct >= minGap
+bool gUpVol = gUp and rvol >= minRvol
+bool gDnVol = gDn and rvol >= minRvol
+
+float gapBase = close[2]
+bool fillUp = markFill and gUp[1] and low <= gapBase and rvol < 0.85
+bool fillDn = markFill and gDn[1] and high >= gapBase and rvol < 0.85
+
+plotshape(gUpVol, "Gap↑V", shape.triangleup, location.belowbar, color=color.lime, size=size.small, text="G↑")
+plotshape(gDnVol, "Gap↓V", shape.triangledown, location.abovebar, color=color.red, size=size.small, text="G↓")
+plotshape(fillUp or fillDn, "Fill", shape.circle, location=location.abovebar, color=color.gray, size=size.tiny, text="fill")
+
+var table t = table.new(position.bottom_right, 2, 4, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 3)
+    table.cell(t, 0, 0, "Gap", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, gUpVol ? "↑+V" : gDnVol ? "↓+V" : gUp ? "↑" : gDn ? "↓" : "—", text_size=size.tiny)
+    table.cell(t, 0, 1, "Gap%", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 1, str.tostring(gUp ? gapUpPct : gapDnPct, "#.##"), text_size=size.tiny)
+
+plot(gUpVol ? 1 : 0, "EGVGap_UpVol", display=display.all)
+plot(gDnVol ? 1 : 0, "EGVGap_DnVol", display=display.all)
+plot(fillUp or fillDn ? 1 : 0, "EGVGap_Fill", display=display.all)

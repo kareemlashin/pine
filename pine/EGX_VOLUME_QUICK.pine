@@ -1,0 +1,80 @@
+//@version=6
+indicator("EGX Volume QUICK — B1 · S1 · قرار", shorttitle="EGX VQ", overlay=true, max_labels_count=20, max_lines_count=20, max_tables_count=2, calc_bars_count=5000)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// فوليوم مبسّط — 3 أرقام + بانر + B1/S1 · EGX:XXXX · D
+// كامل: EGX_VOLUME_MASTER.pine · docs/EGX_VOLUME.md
+// ═══════════════════════════════════════════════════════════════════════════════
+
+int zoneLook = input.int(400, "نافذة", minval=80, maxval=1200)
+float minNet = input.float(52.0, "Net buy % للشراء", minval=45, maxval=60)
+bool showLines = input.bool(true, "خط B1 / S1 / وسط")
+
+f_bv(int off) =>
+    float r = math.max(high[off] - low[off], syminfo.mintick)
+    volume[off] * (close[off] - low[off]) / r
+
+int bins = 24
+int n = math.min(zoneLook, bar_index)
+float hi = ta.highest(high, n)
+float lo = ta.lowest(low, n)
+float step = (hi - lo) / math.max(bins, 1)
+step := step <= syminfo.mintick ? syminfo.mintick : step
+array<float> buyB = array.new_float(bins, 0.0)
+array<float> sellB = array.new_float(bins, 0.0)
+float tB = 0.0
+float tS = 0.0
+for i = 0 to n - 1
+    float bV = f_bv(i)
+    tS += volume[i] - bV
+    tB += bV
+    int bi = int(math.floor((close[i] - lo) / step))
+    bi := math.max(0, math.min(bins - 1, bi))
+    int si = int(math.floor((open[i] - lo) / step))
+    si := math.max(0, math.min(bins - 1, si))
+    array.set(buyB, bi, array.get(buyB, bi) + bV)
+    float sV = volume[i] - bV
+    array.set(sellB, si, array.get(sellB, si) + sV)
+float maxB = 0.0
+int b1i = 0
+float maxS = 0.0
+int s1i = 0
+for b = 0 to bins - 1
+    if array.get(buyB, b) > maxB
+        maxB := array.get(buyB, b)
+        b1i := b
+    if array.get(sellB, b) > maxS
+        maxS := array.get(sellB, b)
+        s1i := b
+float pad = ta.atr(14) * 0.25
+float bMid = lo + (b1i + 0.5) * step
+float sMid = lo + (s1i + 0.5) * step
+float magnet = (bMid + sMid) / 2.0
+float netPct = tB + tS > 0 ? tB / (tB + tS) * 100.0 : 50.0
+
+float volMa = ta.sma(volume, 20)
+float rvol = volume / math.max(volMa, 1.0)
+bool inB1 = low <= lo + (b1i + 1) * step + pad and high >= lo + b1i * step - pad
+bool inS1 = low <= lo + (s1i + 1) * step + pad and high >= lo + s1i * step - pad
+bool bounce = inB1 and close > open and rvol >= 1.0 and close > bMid
+bool reject = inS1 and close < open and rvol >= 1.0 and close < sMid
+
+string dec = bounce and netPct >= minNet ? "🟢 شراء B1" : reject and netPct <= 100.0 - minNet ? "🔴 بيع S1" : inB1 ? "🟡 داخل B1" : inS1 ? "🟡 داخل S1" : netPct >= minNet ? "↗ ميل شراء" : netPct <= 48 ? "↘ ميل بيع" : "⚪ انتظر"
+
+plot(showLines ? bMid : na, "B1", color=color.lime, linewidth=2)
+plot(showLines ? sMid : na, "S1", color=color.red, linewidth=2)
+plot(showLines ? magnet : na, "Magnet", color=color.gray, linewidth=1, style=plot.style_circles)
+
+bgcolor(inB1 ? color.new(color.lime, 93) : inS1 ? color.new(color.red, 93) : na)
+plotshape(bounce, "B1↑", shape.triangleup, location.belowbar, color.lime, size=size.small)
+plotshape(reject, "S1↓", shape.triangledown, location.abovebar, color.red, size=size.small)
+
+var table b = table.new(position.bottom_left, 1, 2, border_width=2)
+if barstate.islast
+    table.clear(b, 0, 0, 0, 1)
+    table.cell(b, 0, 0, dec, bgcolor=color.new(color.black, 20), text_color=color.white, text_size=size.large)
+    table.cell(b, 0, 1, "Net " + str.tostring(netPct, "#") + "% · RVOL " + str.tostring(rvol, "#.##") + " · B1 " + str.tostring(bMid, format.mintick), text_color=color.yellow, text_size=size.small)
+
+plot(bounce ? 1 : 0, "EGVQ_Buy", display=display.data_window)
+plot(reject ? 1 : 0, "EGVQ_Sell", display=display.data_window)
+plot(netPct, "EGVQ_NetBuy", display=display.data_window)

@@ -1,0 +1,23 @@
+//@version=6
+indicator("EGX Volume Surge — 3-bar", shorttitle="EGX VSur", overlay=true, max_tables_count=2, calc_bars_count=5000)
+
+// 3 شموع: حجم متصاعد + اتجاه · docs/EGX_VOLUME.md
+
+string G = "Surge"
+float minStep = input.float(1.08, "Vol step min", step=0.02, group=G)
+
+bool vUp = volume > volume[1] * minStep and volume[1] > volume[2] * minStep
+bool bull = vUp and close > close[1] and close[1] > close[2] and close > open
+bool bear = vUp and close < close[1] and close[1] < close[2] and close < open
+
+plotshape(bull, "Surge↑", shape.triangleup, location.belowbar, color=color.lime, size=size.small, text="3V")
+plotshape(bear, "Surge↓", shape.triangledown, location.abovebar, color=color.red, size=size.small, text="3V")
+
+var table t = table.new(position.bottom_right, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "Surge", bgcolor=color.black, text_color=color.orange, text_size=size.small)
+    table.cell(t, 1, 0, bull ? "UP" : bear ? "DN" : "—", text_size=size.tiny)
+
+plot(bull ? 1 : 0, "EGVSur_Bull", display=display.all)
+plot(bear ? 1 : 0, "EGVSur_Bear", display=display.all)

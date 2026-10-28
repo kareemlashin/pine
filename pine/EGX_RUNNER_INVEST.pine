@@ -1,0 +1,523 @@
+//@version=6
+indicator("EGX عدّاء — استثمار (تراكم · دورة · موجة)", shorttitle="EGX عدّاء", overlay=true, max_labels_count=200, max_lines_count=200, max_boxes_count=40, calc_bars_count=5000)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// EGX RUNNER INVEST — استثمار في أسهم «عدّاء» EGX (OHLCV فقط)
+// مراحل الميكر: قاعدة (3) → تجميع (4) → اختراق (5) → صعود/إعادة تجميع (6–7) → تصريف (9)
+// باك‌تست: pine/EGX_RUNNER_INVEST_STRATEGY.pine
+// ماسح: EGXR_ScreenerPro = 1 · Ultra: EGXR_ScreenerUltra = 1
+// شراء: EGXR_Buy = 1 · إضافة: EGXR_AddBuy = 1 · خروج: EGXR_ExitWarn = 1
+// EGXR_FinalCode: 5=شراء · 4=إضافة · 3=امسك · 2=راقب · 1=جني جزئي · 0=خروج
+// ═══════════════════════════════════════════════════════════════════════════════
+
+string G_PROF = "═══ ملف EGX ═══"
+string profile = input.string("استثمار عدّاء", "الملف", options=["استثمار عدّاء", "EGX قياسي", "مخصص"], group=G_PROF)
+
+string G_INV = "═══ استثمار / عدّاء ═══"
+float minAccIn = input.float(58.0, "حد تجميع /100", minval=40, maxval=90, group=G_INV)
+float maxDistIn = input.float(50.0, "أقصى تصريف للدخول", minval=30, maxval=80, group=G_INV)
+float exitDistIn = input.float(65.0, "تصريف — تحذير خروج ≥", minval=50, maxval=90, group=G_INV)
+int minCycleBuy = input.int(4, "دورة: أدنى للشراء", minval=3, maxval=8, group=G_INV)
+int maxCycleBuy = input.int(7, "دورة: أقصى للشراء", minval=4, maxval=10, group=G_INV)
+int accBaseBars = input.int(15, "قاعدة/تراكم (شموع)", minval=8, maxval=40, group=G_INV)
+float baseRangeAtr = input.float(2.2, "عرض قاعدة × ATR", minval=1.0, step=0.1, group=G_INV)
+bool allowCycle3Watch = input.bool(true, "مراقبة دورة 3 (قبل الاختراق)", group=G_INV)
+bool allowScEntry = input.bool(true, "دخول: ذروة بيع SC (وايكوف)", group=G_INV)
+bool allowAddCycle7 = input.bool(true, "إشارة إضافة دورة 7", group=G_INV)
+float minOppIn = input.float(62.0, "فرصة قوية ≥", minval=40, maxval=90, group=G_INV)
+float minDnaIn = input.float(55.0, "DNA عدّاء ≥ (ماسح Ultra)", minval=40, maxval=90, group=G_INV)
+
+string G_GATE = "═══ بوابات (10) ═══"
+int minGatesIn = input.int(8, "حد بوابات للشراء", minval=5, maxval=10, group=G_GATE)
+
+string G_CORE = "═══ أساسيات ═══"
+int pivotLen = input.int(8, "محور swing", minval=3, maxval=15, group=G_CORE)
+int volMaLen = input.int(20, "متوسط حجم", group=G_CORE)
+float minAvgVolIn = input.float(800.0, "حد أدنى متوسط حجم", minval=0, group=G_CORE)
+float minRRIn = input.float(1.5, "حد R/R", minval=1.0, step=0.1, group=G_CORE)
+float minRankIn = input.float(60.0, "حد رتبة للشراء", minval=40, maxval=90, group=G_CORE)
+int minSetupIn = input.int(7, "حد إعداد /11", minval=0, maxval=11, group=G_CORE)
+bool confirmClose = input.bool(true, "إشارة عند إغلاق الشمعة", group=G_CORE)
+float zoneAtr = input.float(0.35, "عرض منطقة × ATR", minval=0.15, step=0.05, group=G_CORE)
+
+string G_EGX = "═══ بورصة EGX ═══"
+string mktSym = input.symbol("EGX:EGX30", "مؤشر EGX30", group=G_EGX)
+bool blockBearMkt = input.bool(true, "منع شراء ضغط بيعي", group=G_EGX)
+bool blockLimitUp = input.bool(true, "منع شراء قرب halt اليومي", group=G_EGX)
+float limitPct = input.float(9.0, "تحذير halt %", minval=3, maxval=10, step=0.5, group=G_EGX)
+string egxBoard = input.string("نشط (EGX100)", "لوحة", options=["نشط (EGX100)", "EGX30 (بيع مكشوف)", "SME تميّز", "SME نايل", "غير نشط"], group=G_EGX)
+bool skipSundayBuy = input.bool(false, "لا دخول يوم الأحد", group=G_EGX)
+int breakConfirmBars = input.int(2, "إغلاقات لتأكيد الاختراق", minval=1, maxval=5, group=G_EGX)
+bool useMktHalt100 = input.bool(true, "منع شراء إذا EGX100 ≤ −10%", group=G_EGX)
+float tBillAfterTax = input.float(20.0, "عقبة أذون بعد الضريبة %", minval=0, maxval=40, group=G_EGX)
+int holdDaysHurdle = input.int(30, "أفق الاحتفاظ (يوم)", minval=5, maxval=365, group=G_EGX)
+bool usdEarner = input.bool(false, "إيراد بالدولار", group=G_EGX)
+bool gateHurdle = input.bool(false, "منع إن T1 < أذون", group=G_EGX)
+int earningsBars = input.int(0, "أرباح خلال N شموع (0=إيقاف)", minval=0, maxval=60, group=G_EGX)
+bool blockEarnings = input.bool(true, "منع قرب الأرباح", group=G_EGX)
+float brokerTp = input.float(0.0, "هدف وسيط (0=إيقاف)", minval=0, group=G_EGX)
+bool blockAboveTp = input.bool(true, "منع فوق هدف الوسيط", group=G_EGX)
+
+string G_UI = "═══ عرض ═══"
+bool showTable = input.bool(true, "جدول ملخص", group=G_UI)
+bool showBanner = input.bool(true, "بانر قرار (أسفل يسار)", group=G_UI)
+bool showMarks = input.bool(true, "علامات BUY / EXIT", group=G_UI)
+bool showLevels = input.bool(true, "دخول · وقف · أهداف", group=G_UI)
+bool showCycleBg = input.bool(true, "تلوين دورة 4–7 / 9", group=G_UI)
+bool showAccBox = input.bool(true, "صندوق تراكم", group=G_UI)
+bool showFvg = input.bool(true, "FVG صاعد", group=G_UI)
+bool showGateTbl = input.bool(false, "صف بوابات في الجدول", group=G_UI)
+bool useKellyDisp = input.bool(true, "عرض كيلي تقديري", group=G_UI)
+
+bool profCustom = profile == "مخصص"
+float effMinVol = profCustom ? minAvgVolIn : profile == "استثمار عدّاء" ? 800.0 : 1500.0
+float effMinAcc = profCustom ? minAccIn : 58.0
+float effMaxDist = profCustom ? maxDistIn : 50.0
+float effExitDist = profCustom ? exitDistIn : 65.0
+float effMinRR = profCustom ? minRRIn : 1.5
+float effMinRank = profCustom ? minRankIn : 60.0
+int effMinSetup = profCustom ? minSetupIn : 7
+int effMinCycle = profCustom ? minCycleBuy : 4
+int effMaxCycle = profCustom ? maxCycleBuy : 7
+float effMinOpp = profCustom ? minOppIn : 62.0
+float effMinDna = profCustom ? minDnaIn : 55.0
+int effMinGates = profCustom ? minGatesIn : 8
+
+bool sigOk = not confirmClose or barstate.isconfirmed
+
+// ─── Trend ───
+float ema9 = ta.ema(close, 9)
+float ema21 = ta.ema(close, 21)
+float ema50 = ta.ema(close, 50)
+float ema200 = ta.ema(close, 200)
+bool bullStack = ema9 > ema21 and ema21 > ema50
+bool above200 = close > ema200
+
+float wClose = request.security(syminfo.tickerid, "W", close, barmerge.gaps_off, barmerge.lookahead_off)
+float wEma50 = request.security(syminfo.tickerid, "W", ta.ema(close, 50), barmerge.gaps_off, barmerge.lookahead_off)
+float wEma200 = request.security(syminfo.tickerid, "W", ta.ema(close, 200), barmerge.gaps_off, barmerge.lookahead_off)
+bool htfBull = wClose > wEma50 and wEma50 > wEma200
+
+f_tfBull(string tf) =>
+    request.security(syminfo.tickerid, tf, close > ta.ema(close, 21), barmerge.gaps_off, barmerge.lookahead_off)
+
+int mtfScore = 0
+mtfScore += f_tfBull("15") ? 1 : -1
+mtfScore += f_tfBull("60") ? 1 : -1
+mtfScore += f_tfBull("D") ? 1 : -1
+mtfScore += f_tfBull("W") ? 1 : -1
+bool mtfOk = mtfScore >= 0
+
+[macdL, macdS, macdH] = ta.macd(close, 12, 26, 9)
+bool macdBull = macdH > 0 and macdL > macdS
+float rsi = ta.rsi(close, 14)
+float atr = ta.atr(14)
+[diPlus, diMinus, adxVal] = ta.dmi(14, 14)
+
+// ─── Volume / acc-dist ───
+float volMa = ta.sma(volume, volMaLen)
+bool liqOk = volMa >= effMinVol
+float rvol = volume / math.max(volMa, 1.0)
+float rvol252 = volume / math.max(ta.sma(volume, 252), 1.0)
+bool rvolStrong = rvol >= 1.5
+
+float mfm = ((close - low) - (high - close)) / math.max(high - low, syminfo.mintick)
+float cmf = ta.sma(mfm * volume, 20) / ta.sma(volume, 20)
+float obv = ta.obv
+float obvSlope = ta.linreg(obv, 10, 0) - ta.linreg(obv, 10, 1)
+float ad = ta.cum(mfm * volume)
+float adSlope = ad - ad[20]
+bool accumulating = cmf > 0 and obvSlope > 0
+bool distributing = cmf < 0 and obvSlope < 0
+
+float accPts = 0.0
+accPts += accumulating ? 18.0 : 0.0
+accPts += cmf > 0.05 ? 12.0 : cmf > 0 ? 6.0 : 0.0
+accPts += obvSlope > 0 ? 12.0 : 0.0
+accPts += adSlope > 0 ? 10.0 : 0.0
+accPts += ta.correlation(close, obv, 20) > 0.25 ? 8.0 : 0.0
+accPts += rvol >= 1.0 and close > open ? 8.0 : 0.0
+float accumScore = math.min(100.0, accPts)
+
+float distPts = 0.0
+distPts += distributing ? 18.0 : 0.0
+distPts += cmf < -0.05 ? 12.0 : cmf < 0 ? 6.0 : 0.0
+distPts += obvSlope < 0 ? 12.0 : 0.0
+distPts += adSlope < 0 ? 10.0 : 0.0
+distPts += rvol >= 1.8 and close < open and high >= ta.highest(high, 20) * 0.995 ? 12.0 : 0.0
+float distRisk = math.min(100.0, distPts)
+
+float spread = high - low
+float closePos = spread > syminfo.mintick ? (close - low) / spread : 0.5
+bool ultraVol = rvol >= 2.2 or rvol252 >= 2.0
+bool wyckSC = ultraVol and closePos > 0.55 and low <= ta.lowest(low, 12)
+bool wyckBC = ultraVol and closePos < 0.42 and high >= ta.highest(high, 12)
+bool absorption = ultraVol and spread <= ta.sma(spread, 10) * 0.88 and closePos >= 0.42 and closePos <= 0.62
+
+// ─── Base / squeeze ───
+float rangeN = ta.highest(high, accBaseBars) - ta.lowest(low, accBaseBars)
+bool tightBase = rangeN <= atr * baseRangeAtr
+float atrMa20 = ta.sma(atr, 20)
+bool squeezeOn = atr < atrMa20 * 0.85
+bool rangeContract = rangeN < ta.sma(ta.highest(high, accBaseBars) - ta.lowest(low, accBaseBars), accBaseBars) * 0.9
+bool inBase = tightBase or (squeezeOn and rangeContract)
+bool accPhaseBox = inBase and cmf > 0.02 and obvSlope > 0 and accumScore >= effMinAcc - 5
+
+// ─── Market ───
+f_mktTr() =>
+    int sc = 0
+    float e20 = ta.ema(close, 20)
+    float e50 = ta.ema(close, 50)
+    sc += close > e20 ? 1 : -1
+    sc += e20 > e50 ? 1 : -1
+    sc
+
+f_mktMom() =>
+    close[20] > 0 ? (close / close[20] - 1.0) * 100.0 : 0.0
+
+int tr30 = request.security(mktSym, timeframe.period, f_mktTr(), barmerge.gaps_off, barmerge.lookahead_off)
+float mom30 = request.security(mktSym, timeframe.period, f_mktMom(), barmerge.gaps_off, barmerge.lookahead_off)
+float benchRoc = request.security(mktSym, timeframe.period, ta.roc(close, 20), barmerge.gaps_off, barmerge.lookahead_off)
+bool rsLeader = ta.roc(close, 20) - benchRoc > 0
+bool heavySell = mom30 < -4.0 and tr30 <= -1
+bool bearBlock = blockBearMkt and heavySell
+
+float dPrev = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+float dayPct = dPrev > 0 ? (close - dPrev) / dPrev * 100.0 : 0.0
+float haltPct = egxBoard == "SME تميّز" or egxBoard == "SME نايل" or egxBoard == "غير نشط" ? 5.0 : 10.0
+float luldPct = egxBoard == "غير نشط" ? 5.0 : (egxBoard == "SME تميّز" or egxBoard == "SME نايل" ? 10.0 : 20.0)
+bool nearLimit = blockLimitUp and dPrev > 0 and (dayPct >= math.min(limitPct, haltPct - 1.0) or dayPct >= luldPct - 0.25)
+float dayPct100 = useMktHalt100 ? request.security("EGX:EGX100EWI", "D", close[1] > 0 ? (close - close[1]) / close[1] * 100.0 : 0.0, barmerge.gaps_off, barmerge.lookahead_off) : 0.0
+bool mktHalt100 = useMktHalt100 and dayPct100 <= -10.0
+bool sundaySkip = skipSundayBuy and dayofweek == dayofweek.sunday
+
+float hi252 = ta.highest(high, 252)
+float lo252 = ta.lowest(low, 252)
+float roc252 = lo252 > 0 ? (close / lo252 - 1.0) * 100.0 : na
+float pctFromHi = hi252 > 0 ? (close - hi252) / hi252 * 100.0 : na
+
+// ─── Structure ───
+float pl = ta.pivotlow(low, pivotLen, pivotLen)
+float ph = ta.pivothigh(high, pivotLen, pivotLen)
+var float swingLow = na
+var float swingHigh = na
+if not na(pl)
+    swingLow := pl
+if not na(ph)
+    swingHigh := ph
+
+int structP = 5
+float phs = ta.pivothigh(high, structP, structP)
+var float actHigh = na
+var int structDir = 0
+if not na(phs)
+    actHigh := phs
+bool bullBreak = sigOk and not na(actHigh) and close > actHigh and close[1] <= actHigh
+if bullBreak
+    structDir := 1
+    actHigh := na
+
+bool supportBreak = sigOk and not na(swingLow) and close < swingLow and close[1] >= swingLow
+bool retestSupport = sigOk and not na(swingLow) and low <= swingLow * 1.006 and close > swingLow
+bool fakeBreakUp = sigOk and not na(swingHigh) and high > swingHigh and close < swingHigh and rvol > 1.05
+bool rawBreak = bullBreak and rvol >= 1.2
+var float brkHoldLvl = na
+var int brkHoldBars = 0
+if barstate.isconfirmed
+    if rawBreak
+        brkHoldLvl := nz(swingHigh, close[1])
+        brkHoldBars := 1
+    else if not na(brkHoldLvl) and close > brkHoldLvl
+        brkHoldBars += 1
+    else
+        brkHoldLvl := na
+        brkHoldBars := 0
+bool breakConfirmed = sigOk and not na(brkHoldLvl) and brkHoldBars >= breakConfirmBars and (rvol >= 1.2 or rvol[1] >= 1.2)
+bool breakRetest = retestSupport and structDir == 1 and not fakeBreakUp
+
+float zw = atr * zoneAtr
+float buyTop = nz(swingLow, low) + zw
+float buyBot = nz(swingLow, low) - zw * 1.2
+bool inBuyZone = low <= buyTop and high >= buyBot
+bool nearSupport = low <= buyTop and close >= buyBot
+bool pullBackReacc = structDir == 1 and close > ema50 and low <= ema21 and close > ema21
+
+bool fvgBull = low > high[2] and close > open and volume > volMa
+var box fvgBox = na
+if showFvg and fvgBull and sigOk
+    box.delete(fvgBox)
+    fvgBox := box.new(bar_index - 2, low, bar_index + 12, high[2], bgcolor=color.new(color.lime, 92), border_color=color.new(color.lime, 50), text="FVG", text_size=size.tiny)
+
+int breakStateNum = fakeBreakUp ? 5 : breakConfirmed ? 4 : breakRetest ? 3 : bullBreak ? 2 : inBase and squeezeOn ? 1 : 0
+
+// ─── Cycle 12 (مبسّط) ───
+bool dnTrendC = close < ema21 and ema21 < ema50 and structDir <= 0
+bool upTrendC = structDir == 1 and close > ema21
+bool extRallyC = upTrendC and close > ema50 + atr * 2.5 and rsi > 62
+bool distPhaseC = distRisk >= accumScore + 15 and distRisk >= effExitDist - 5 and (close > hi252 * 0.96 or distributing)
+bool pullBackC = upTrendC and pullBackReacc
+
+var int cycle12 = 3
+var int cycle12Bars = 0
+int newCycle12 = cycle12
+if dnTrendC
+    newCycle12 := 1
+else if inBase and accumScore >= effMinAcc
+    newCycle12 := 4
+else if inBase
+    newCycle12 := 3
+else if breakConfirmed and not upTrendC
+    newCycle12 := 5
+else if pullBackC
+    newCycle12 := 7
+else if extRallyC
+    newCycle12 := 8
+else if distPhaseC
+    newCycle12 := 9
+else if supportBreak
+    newCycle12 := 11
+else if upTrendC
+    newCycle12 := 6
+
+f_cycleName(int st) =>
+    st == 3 ? "3 قاعدة" : st == 4 ? "4 تجميع" : st == 5 ? "5 اختراق" : st == 6 ? "6 صاعد" : st == 7 ? "7 إعادة تجميع" : st == 8 ? "8 ممتد" : st == 9 ? "9 تصريف" : st == 11 ? "11 كسر" : str.tostring(st)
+
+if sigOk
+    if newCycle12 != cycle12
+        cycle12 := newCycle12
+        cycle12Bars := 0
+    else
+        cycle12Bars += 1
+
+bool cycleBuyOk = cycle12 >= effMinCycle and cycle12 <= effMaxCycle
+bool cycleWatchOk = allowCycle3Watch and (cycle12 == 3 or cycle12 == 4)
+
+// ─── Levels / R:R ───
+float swingRange = nz(swingHigh - swingLow, atr * 4)
+float t1 = na(swingHigh) ? close + atr * 2.5 : swingHigh
+float t2 = nz(swingLow, close) + swingRange * 1.618
+float t3 = nz(swingLow, close) + swingRange * 2.618
+float entryPx = (buyTop + buyBot) / 2.0
+float stopPx = buyBot - atr * 0.65
+float riskPx = math.max(entryPx - stopPx, syminfo.mintick)
+float rr = riskPx > 0 ? (t1 - entryPx) / riskPx : na
+float rrT2 = riskPx > 0 ? (t2 - entryPx) / riskPx : na
+float rrT3 = riskPx > 0 ? (t3 - entryPx) / riskPx : na
+float tHalf = entryPx + (t1 - entryPx) * 0.35
+float tMidT2 = entryPx + (t2 - entryPx) * 0.45
+
+bool chase = not na(pctFromHi) and pctFromHi > -2.5 and rsi > 74 and (not na(rr) and rr < 1.0 or cycle12 >= 8)
+bool postCrashBounce = not na(roc252) and roc252 > 80 and pctFromHi < -35 and distRisk >= 40
+
+// ─── Score / setup ───
+float score = 0.0
+score += bullStack ? 18.0 : 0.0
+score += above200 ? 12.0 : -4.0
+score += htfBull ? 14.0 : -8.0
+score += macdBull ? 8.0 : 0.0
+score += accumScore >= 50 ? 14.0 : accumScore >= 35 ? 7.0 : 0.0
+score += distRisk >= 45 ? -10.0 : 0.0
+score += rvolStrong ? 8.0 : 0.0
+score += rsLeader ? 8.0 : 0.0
+score += cycleBuyOk ? 10.0 : cycleWatchOk ? 5.0 : cycle12 == 9 ? -15.0 : 0.0
+score += mtfOk ? 5.0 : -3.0
+score := math.max(0.0, math.min(100.0, score))
+
+int setupHits = 0
+setupHits += bullStack or (htfBull and close > ema50) ? 1 : 0
+setupHits += htfBull ? 1 : 0
+setupHits += macdBull ? 1 : 0
+setupHits += accumScore >= effMinAcc ? 1 : 0
+setupHits += distRisk < effMaxDist ? 1 : 0
+setupHits += rsLeader ? 1 : 0
+setupHits += structDir == 1 or breakConfirmed ? 1 : 0
+setupHits += inBuyZone or nearSupport or pullBackReacc ? 1 : 0
+setupHits += retestSupport or breakRetest ? 1 : 0
+setupHits += not na(rr) and rr >= effMinRR ? 1 : 0
+setupHits += mtfOk ? 1 : 0
+setupHits += rvol >= 1.0 or rvol252 >= 1.2 ? 1 : 0
+setupHits += cycleBuyOk ? 1 : 0
+
+string setupTier = setupHits >= 9 ? "A" : setupHits >= 7 ? "B" : setupHits >= 5 ? "C" : "D"
+int setupTierNum = setupHits >= 9 ? 4 : setupHits >= 7 ? 3 : setupHits >= 5 ? 2 : 1
+float rank = math.max(0.0, math.min(100.0, score * 0.55 + setupHits / 11.0 * 45.0))
+
+float opportunity = math.min(100.0, accumScore * 0.32 + rank * 0.28 + (100.0 - distRisk) * 0.18 + (cycleBuyOk ? 12.0 : cycleWatchOk ? 6.0 : 0.0) + (breakConfirmed ? 8.0 : breakRetest ? 5.0 : 0.0) + (rsLeader ? 5.0 : 0.0))
+bool oppStrong = opportunity >= effMinOpp and setupHits >= 7 and distRisk < 55
+
+float runnerDna = 0.0
+runnerDna += inBase or cycleWatchOk ? 15.0 : 0.0
+runnerDna += accumScore >= 55 ? 20.0 : accumScore >= 45 ? 10.0 : 0.0
+runnerDna += distRisk < 40 ? 15.0 : distRisk < 50 ? 8.0 : 0.0
+runnerDna += rvol252 >= 1.15 or rvolStrong ? 12.0 : 0.0
+runnerDna += rsLeader ? 12.0 : 0.0
+runnerDna += squeezeOn ? 10.0 : 0.0
+runnerDna += breakStateNum >= 3 ? 8.0 : breakStateNum == 1 ? 5.0 : 0.0
+runnerDna += cycle12Bars >= 8 and cycle12 <= 4 ? math.min(8.0, cycle12Bars * 0.5) : 0.0
+runnerDna := math.min(100.0, runnerDna)
+
+bool locationOk = nearSupport or breakRetest or (pullBackReacc and cycle12 == 7) or (breakConfirmed and cycle12 == 5) or (allowScEntry and wyckSC and nearSupport)
+bool vetoBuy = supportBreak or bearBlock or nearLimit or chase or postCrashBounce or fakeBreakUp or distRisk >= effMaxDist + 10
+
+bool gateLiq = liqOk
+bool gateMtf = mtfOk
+bool gateRR = not na(rr) and rr >= effMinRR
+bool gateAcc = accumScore >= effMinAcc
+bool gateDist = distRisk < effMaxDist
+bool gateCycle = cycleBuyOk or (allowScEntry and cycleWatchOk and wyckSC)
+bool gateLoc = locationOk
+bool gateRs = rsLeader or htfBull
+bool gateStruct = structDir == 1 or breakConfirmed or breakRetest or inBase
+bool gateVeto = not vetoBuy
+int gatesPass = (gateLiq ? 1 : 0) + (gateMtf ? 1 : 0) + (gateRR ? 1 : 0) + (gateAcc ? 1 : 0) + (gateDist ? 1 : 0) + (gateCycle ? 1 : 0) + (gateLoc ? 1 : 0) + (gateRs ? 1 : 0) + (gateStruct ? 1 : 0) + (gateVeto ? 1 : 0)
+
+bool investZone = score >= 52 and liqOk and not vetoBuy and accumScore >= effMinAcc - 2 and distRisk < effMaxDist + 5 and not na(rr) and rr >= effMinRR and gatesPass >= effMinGates
+float t1PctH = close > 0 ? (t1 - close) / close * 100.0 : 0.0
+bool hurdleOk = not gateHurdle or usdEarner or t1PctH >= tBillAfterTax * holdDaysHurdle / 365.0
+bool earningsOk = not blockEarnings or earningsBars <= 0 or earningsBars > 5
+bool tpOk = not blockAboveTp or brokerTp <= 0 or close < brokerTp * 0.98
+bool microOk = not sundaySkip and not mktHalt100 and hurdleOk and earningsOk and tpOk
+bool investBuy = sigOk and investZone and (cycleBuyOk or (allowScEntry and wyckSC and cycleWatchOk)) and setupHits >= effMinSetup and rank >= effMinRank and locationOk and microOk
+
+bool addBuy = sigOk and allowAddCycle7 and investZone and cycle12 == 7 and pullBackReacc and distRisk < 55 and structDir == 1 and not investBuy
+bool holdRun = cycle12 == 6 and structDir == 1 and distRisk < effExitDist - 5 and not supportBreak
+bool trimPartial = sigOk and (cycle12 == 8 or (distRisk >= 55 and distRisk < effExitDist and cycle12 >= 6) or wyckBC)
+
+bool exitWarn = sigOk and (supportBreak or distRisk >= effExitDist or cycle12 == 9 or fakeBreakUp or (cycle12 == 8 and chase) or wyckBC)
+bool watchList = sigOk and cycleWatchOk and accumScore >= effMinAcc - 5 and distRisk < effMaxDist and liqOk and not chase
+float breakLvl = nz(actHigh, nz(swingHigh, ta.highest(high, accBaseBars)))
+bool preBreak = sigOk and (cycle12 == 3 or cycle12 == 4) and squeezeOn and accumScore >= effMinAcc - 3 and distRisk < 45 and breakLvl > 0 and close > breakLvl * 0.97 and close <= breakLvl * 1.025
+
+int runnerPhase = cycle12 == 9 or distRisk >= effExitDist ? 5 : cycle12 >= 6 ? 4 : cycle12 == 5 ? 3 : cycle12 == 4 ? 2 : cycle12 == 3 ? 1 : 0
+
+int finalCode = exitWarn ? 0 : investBuy ? 5 : addBuy ? 4 : holdRun ? 3 : trimPartial ? 1 : watchList or preBreak ? 2 : 1
+
+bool screenerPass = watchList and rank >= 55 and setupHits >= 6
+bool screenerPre = preBreak and runnerDna >= effMinDna - 5 and accumScore >= 55
+bool screenerPro = investBuy or addBuy or (watchList and accumScore >= 60 and distRisk < 42 and setupHits >= 7 and rank >= 58) or screenerPre
+bool screenerUltra = screenerPro and oppStrong and runnerDna >= effMinDna and gatesPass >= 9 and setupTierNum >= 3
+
+float winEst = math.max(0.35, math.min(0.72, (rank / 100.0) * 0.45 + (not na(rrT2) ? math.min(rrT2, 4.0) / 4.0 * 0.35 : 0.2)))
+float kellyPct = not na(rrT2) and rrT2 > 0 ? math.max(0.0, math.min(15.0, (winEst - (1.0 - winEst) / rrT2) * 100.0)) : na
+
+// ─── Visual ───
+plot(showLevels ? entryPx : na, "Entry", color=color.new(color.lime, 45), linewidth=1, style=plot.style_linebr)
+plot(showLevels ? stopPx : na, "Stop", color=color.new(color.red, 35), linewidth=2, style=plot.style_linebr)
+plot(showLevels ? t1 : na, "T1", color=color.new(color.aqua, 25), style=plot.style_linebr)
+plot(showLevels ? t2 : na, "T2", color=color.new(color.aqua, 50), style=plot.style_linebr)
+plot(showLevels ? t3 : na, "T3", color=color.new(color.blue, 55), style=plot.style_linebr)
+plot(showLevels ? tHalf : na, "جزئي 35%", color=color.new(color.yellow, 45), style=plot.style_circles)
+plot(showLevels ? tMidT2 : na, "جزئي T2 45%", color=color.new(color.orange, 50), style=plot.style_circles)
+
+plot(ema21, "EMA21", color=color.new(color.blue, 60))
+plot(ema50, "EMA50", color=color.new(color.orange, 55))
+
+plotshape(showMarks and investBuy, "BUY", shape.triangleup, location.belowbar, color.lime, size=size.normal, text="INV")
+plotshape(showMarks and addBuy, "ADD", shape.triangleup, location.belowbar, color.teal, size=size.small, text="+7")
+plotshape(showMarks and trimPartial and not exitWarn, "TRIM", shape.diamond, location.abovebar, color.orange, size=size.tiny, text="−")
+plotshape(showMarks and exitWarn and not investBuy, "EXIT", shape.triangledown, location.abovebar, color.red, size=size.small, text="OUT")
+plotshape(showMarks and (watchList or preBreak) and not investBuy and not addBuy, "WATCH", shape.circle, location.belowbar, color.new(color.yellow, 0), size=size.tiny, text="◌")
+
+var box accBox = na
+if showAccBox and accPhaseBox and sigOk
+    box.delete(accBox)
+    accBox := box.new(bar_index - accBaseBars, ta.highest(high, accBaseBars), bar_index, ta.lowest(low, accBaseBars), border_color=color.new(color.teal, 35), bgcolor=color.new(color.teal, 90), text="تراكم", text_size=size.tiny, text_color=color.teal)
+
+bgcolor(showCycleBg and cycle12 >= 4 and cycle12 <= 7 ? color.new(color.teal, 96) : showCycleBg and cycle12 == 9 ? color.new(color.red, 96) : na)
+
+string decision = supportBreak ? "🔴 كسر دعم — اخرج" : exitWarn ? "🔴 تصريف/خروج" : nearLimit ? "🟠 قرب halt — لا شراء" : mktHalt100 ? "🟠 halt EGX100" : chase ? "🟠 مطاردة — انتظر" : postCrashBounce ? "🟠 ارتداد بعد سقوط — فخ" : investBuy ? "🟢 استثمار — شراء" : addBuy ? "🟢 إضافة — دورة 7" : trimPartial ? "🟠 جني جزئي — T2/trail" : holdRun ? "🟡 امسك — موجة 6" : preBreak ? "🟡 ما قبل الاختراق" : watchList ? "🟡 مراقبة — قاعدة/تجميع" : "⚪ راقب"
+color decCol = str.contains(decision, "🔴") ? color.red : str.contains(decision, "🟢") ? color.lime : str.contains(decision, "🟠") ? color.orange : str.contains(decision, "🟡") ? color.yellow : color.gray
+
+var table tbl = table.new(position.top_right, 2, 18, bgcolor=color.new(color.black, 82), border_width=1)
+if showTable and barstate.islast
+    table.clear(tbl, 0, 0, 1, 17)
+    table.cell(tbl, 0, 0, "EGX عدّاء", text_color=color.white, text_size=size.normal)
+    table.cell(tbl, 1, 0, profile, text_color=color.yellow, text_size=size.tiny)
+    table.cell(tbl, 0, 1, "قرار", text_color=color.gray, text_size=size.small)
+    table.cell(tbl, 1, 1, decision, text_color=decCol, text_size=size.small)
+    table.cell(tbl, 0, 2, "دورة 12", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl, 1, 2, f_cycleName(cycle12) + " · " + str.tostring(cycle12Bars) + "ش", text_color=cycleBuyOk ? color.lime : cycle12 == 9 ? color.red : color.gray, text_size=size.tiny)
+    table.cell(tbl, 0, 3, "رتبة / إعداد", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl, 1, 3, "R" + str.tostring(rank, "#") + " · " + setupTier + " " + str.tostring(setupHits) + "/11", text_color=rank >= effMinRank ? color.lime : color.yellow, text_size=size.tiny)
+    table.cell(tbl, 0, 4, "تجم · تص", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl, 1, 4, str.tostring(accumScore, "#") + " · " + str.tostring(distRisk, "#"), text_color=accumScore >= effMinAcc and distRisk < effMaxDist ? color.lime : color.orange, text_size=size.tiny)
+    table.cell(tbl, 0, 5, "R/R · RVOL", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl, 1, 5, str.tostring(rr, "#.##") + " · " + str.tostring(rvol, "#.##"), text_color=not na(rr) and rr >= effMinRR ? color.lime : color.gray, text_size=size.tiny)
+    table.cell(tbl, 0, 6, "من قاع 252", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl, 1, 6, str.tostring(roc252, "#") + "% · من قمة " + str.tostring(pctFromHi, "#") + "%", text_color=roc252 > 200 ? color.orange : color.gray, text_size=size.tiny)
+    table.cell(tbl, 0, 7, "دخول / وقف", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl, 1, 7, str.tostring(entryPx, format.mintick) + " · " + str.tostring(stopPx, format.mintick), text_color=color.white, text_size=size.tiny)
+    table.cell(tbl, 0, 8, "T1 / T2 / T3", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl, 1, 8, str.tostring(t1, format.mintick) + " · " + str.tostring(t2, format.mintick) + " · " + str.tostring(t3, format.mintick), text_color=color.aqua, text_size=size.tiny)
+    table.cell(tbl, 0, 9, "اختراق", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl, 1, 9, breakConfirmed ? "مؤكد" : breakRetest ? "retest" : fakeBreakUp ? "وهمي" : "—", text_color=breakConfirmed ? color.lime : color.red, text_size=size.tiny)
+    table.cell(tbl, 0, 10, "EGX30", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl, 1, 10, heavySell ? "ضغط" : "OK", text_color=heavySell ? color.red : color.gray, text_size=size.tiny)
+    table.cell(tbl, 0, 11, "مرحلة", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl, 1, 11, runnerPhase == 1 ? "قاعدة" : runnerPhase == 2 ? "تجميع" : runnerPhase == 3 ? "اختراق" : runnerPhase == 4 ? "موجة" : runnerPhase == 5 ? "خروج" : "—", text_color=color.white, text_size=size.tiny)
+    table.cell(tbl, 0, 12, "ماسح", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl, 1, 12, screenerPro ? "Pro ✓" : screenerPass ? "Watch ✓" : "—", text_color=screenerPro ? color.lime : screenerPass ? color.yellow : color.gray, text_size=size.tiny)
+    table.cell(tbl, 0, 13, "فرصة / DNA", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl, 1, 13, str.tostring(opportunity, "#") + " · DNA " + str.tostring(runnerDna, "#"), text_color=oppStrong ? color.lime : color.gray, text_size=size.tiny)
+    table.cell(tbl, 0, 14, "بوابات", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl, 1, 14, str.tostring(gatesPass) + "/10" + (showGateTbl ? " L" + (gateLiq ? "✓" : "×") + " M" + (gateMtf ? "✓" : "×") : ""), text_color=gatesPass >= effMinGates ? color.lime : color.orange, text_size=size.tiny)
+    table.cell(tbl, 0, 15, "RR→T2/T3", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl, 1, 15, str.tostring(rrT2, "#.#") + " / " + str.tostring(rrT3, "#.#"), text_color=not na(rrT2) and rrT2 >= 2.5 ? color.lime : color.gray, text_size=size.tiny)
+    table.cell(tbl, 0, 16, "كود", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl, 1, 16, str.tostring(finalCode) + " · " + (screenerUltra ? "Ultra" : screenerPro ? "Pro" : screenerPre ? "Pre" : "—"), text_color=finalCode >= 4 ? color.lime : finalCode <= 1 ? color.red : color.yellow, text_size=size.tiny)
+    table.cell(tbl, 0, 17, "فعل", text_color=color.gray, text_size=size.tiny)
+    string actTxt = investBuy ? "تنفيذ" : addBuy ? "إضافة" : exitWarn ? "خروج" : trimPartial ? "جني جزئي" : holdRun ? "امسك" : watchList or preBreak ? "راقب" : "لا"
+    table.cell(tbl, 1, 17, actTxt + (useKellyDisp and not na(kellyPct) ? " · K" + str.tostring(kellyPct, "#.#") + "%" : ""), text_color=decCol, text_size=size.tiny)
+
+var table banner = table.new(position.bottom_left, 1, 4, bgcolor=color.new(color.black, 10), border_width=2)
+if showBanner and barstate.islast
+    table.clear(banner, 0, 0, 0, 3)
+    table.cell(banner, 0, 0, decision, bgcolor=color.new(decCol, 75), text_color=color.white, text_size=size.large)
+    table.cell(banner, 0, 1, f_cycleName(cycle12) + " · Opp " + str.tostring(opportunity, "#") + " · DNA " + str.tostring(runnerDna, "#") + " · " + str.tostring(gatesPass) + "/10", bgcolor=color.new(color.gray, 88), text_color=color.white, text_size=size.small)
+    table.cell(banner, 0, 2, "RR " + str.tostring(rr, "#.#") + "→T2 " + str.tostring(rrT2, "#.#") + " · RVOL " + str.tostring(rvol, "#.#"), bgcolor=color.new(color.gray, 90), text_color=color.white, text_size=size.tiny)
+    table.cell(banner, 0, 3, "35% @ " + str.tostring(tHalf, format.mintick) + " · 45%T2 @ " + str.tostring(tMidT2, format.mintick), bgcolor=color.new(color.green, 90), text_color=color.white, text_size=size.tiny)
+
+plot(investBuy ? 1 : 0, "EGXR_Buy", display=display.data_window)
+plot(addBuy ? 1 : 0, "EGXR_AddBuy", display=display.data_window)
+plot(holdRun ? 1 : 0, "EGXR_Hold", display=display.data_window)
+plot(trimPartial ? 1 : 0, "EGXR_Trim", display=display.data_window)
+plot(exitWarn ? 1 : 0, "EGXR_ExitWarn", display=display.data_window)
+plot(watchList ? 1 : 0, "EGXR_Watch", display=display.data_window)
+plot(preBreak ? 1 : 0, "EGXR_PreBreak", display=display.data_window)
+plot(rank, "EGXR_Rank", display=display.data_window)
+plot(opportunity, "EGXR_Opportunity", display=display.data_window)
+plot(runnerDna, "EGXR_DNA", display=display.data_window)
+plot(rr, "EGXR_RR", display=display.data_window)
+plot(rrT2, "EGXR_RR_T2", display=display.data_window)
+plot(setupHits, "EGXR_Setup", display=display.data_window)
+plot(setupTierNum, "EGXR_SetupTier", display=display.data_window)
+plot(accumScore, "EGXR_Acc", display=display.data_window)
+plot(distRisk, "EGXR_Dist", display=display.data_window)
+plot(cycle12, "EGXR_Cycle12", display=display.data_window)
+plot(runnerPhase, "EGXR_Phase", display=display.data_window)
+plot(breakStateNum, "EGXR_BreakState", display=display.data_window)
+plot(gatesPass, "EGXR_GatesPass", display=display.data_window)
+plot(finalCode, "EGXR_FinalCode", display=display.data_window)
+plot(screenerPass ? 1 : 0, "EGXR_Screener", display=display.data_window)
+plot(screenerPre ? 1 : 0, "EGXR_ScreenerPre", display=display.data_window)
+plot(screenerPro ? 1 : 0, "EGXR_ScreenerPro", display=display.data_window)
+plot(screenerUltra ? 1 : 0, "EGXR_ScreenerUltra", display=display.data_window)
+plot(oppStrong ? 1 : 0, "EGXR_OppStrong", display=display.data_window)
+plot(chase ? 1 : 0, "EGXR_ChaseWarn", display=display.data_window)
+plot(nearLimit ? 1 : 0, "EGXR_LimitBlock", display=display.data_window)
+plot(useKellyDisp ? kellyPct : na, "EGXR_KellyPct", display=display.data_window)
+plot(1, "EGXR_Runner", display=display.data_window)
+
+alertcondition(investBuy, "EGX عدّاء — شراء استثمار", "EGX عدّاء: إشارة شراء استثمار — راجع الدخول والوقف")
+alertcondition(addBuy, "EGX عدّاء — إضافة 7", "EGX عدّاء: إضافة محتملة — إعادة تجميع")
+alertcondition(trimPartial, "EGX عدّاء — جني جزئي", "EGX عدّاء: جني جزئي — دورة 8 أو BC")
+alertcondition(exitWarn, "EGX عدّاء — خروج", "EGX عدّاء: تحذير خروج (تصريف/كسر/مطاردة)")
+alertcondition(watchList, "EGX عدّاء — مراقبة", "EGX عدّاء: قاعدة/تجميع — أضف للقائمة")
+alertcondition(preBreak, "EGX عدّاء — ما قبل الاختراق", "EGX عدّاء: تماسك تحت المقاومة — راقب الكسر")
+alertcondition(screenerUltra, "EGX عدّاء — Ultra", "EGX عدّاء: ماسح Ultra (DNA+فرصة+بوابات)")
+alertcondition(screenerPro, "EGX عدّاء — Pro", "EGX عدّاء: نجاح ماسح Pro")
+alertcondition(oppStrong and sigOk, "EGX عدّاء — فرصة قوية", "EGX عدّاء: فرصة ≥ العتبة + B+")
+alertcondition(wyckSC and sigOk, "EGX عدّاء — SC", "EGX عدّاء: ذروة بيع محتملة (SC)")
+alertcondition(cycle12 == 4 and sigOk, "EGX عدّاء — دورة 4", "EGX عدّاء: مرحلة 4 تجميع")
+alertcondition(cycle12 == 5 and breakConfirmed, "EGX عدّاء — دورة 5", "EGX عدّاء: اختراق أولي")
+alertcondition(cycle12 == 9 and sigOk, "EGX عدّاء — دورة 9", "EGX عدّاء: تصريف — جني")

@@ -1,0 +1,71 @@
+//@version=6
+indicator("EGX سوق فقط — نظام 30/70/100", shorttitle="EGX Mkt", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// مؤشر خفيف على EGX30 (أو أي شارت) — بدون منطق سهم
+// plots: EGXMkt_BlockBuy · EGXMkt_RegimeId · EGXMkt = 1
+
+string G = "═══ مؤشرات ═══"
+string sym30 = input.symbol("EGX:EGX30", "EGX30", group=G)
+string sym70 = input.symbol("EGX:EGX70EWI", "EGX70", group=G)
+string sym100 = input.symbol("EGX:EGX100EWI", "EGX100", group=G)
+bool showTable = input.bool(true, "جدول", group=G)
+bool useMktHalt100 = input.bool(true, "منع شراء إذا EGX100 ≤ −10%", group=G)
+
+f_tr() =>
+    int sc = 0
+    float e20 = ta.ema(close, 20)
+    float e50 = ta.ema(close, 50)
+    sc += close > e20 ? 1 : -1
+    sc += e20 > e50 ? 1 : -1
+    sc
+
+f_mom() =>
+    close[20] > 0 ? (close / close[20] - 1.0) * 100.0 : 0.0
+
+int tr30 = request.security(sym30, timeframe.period, f_tr(), barmerge.gaps_off, barmerge.lookahead_off)
+int tr70 = request.security(sym70, timeframe.period, f_tr(), barmerge.gaps_off, barmerge.lookahead_off)
+int tr100 = request.security(sym100, timeframe.period, f_tr(), barmerge.gaps_off, barmerge.lookahead_off)
+float mom30 = request.security(sym30, timeframe.period, f_mom(), barmerge.gaps_off, barmerge.lookahead_off)
+float mom70 = request.security(sym70, timeframe.period, f_mom(), barmerge.gaps_off, barmerge.lookahead_off)
+float mom100 = request.security(sym100, timeframe.period, f_mom(), barmerge.gaps_off, barmerge.lookahead_off)
+
+bool heavySell = mom30 < -4.0 and tr30 <= -1
+bool broadUp = tr30 >= 1 and tr70 >= 1 and mom30 > 0
+bool narrowUp = tr30 >= 1 and tr70 <= 0 and mom30 > 0
+bool riskOff = heavySell or (tr30 <= -1 and tr70 <= -1)
+
+int regimeId = heavySell ? 1 : broadUp ? 5 : narrowUp ? 3 : tr30 >= 1 ? 4 : tr30 <= -1 ? 2 : 6
+string regimeTxt = heavySell ? "ضغط بيعي" : broadUp ? "صعود واسع" : narrowUp ? "صعود ضيق" : tr30 >= 1 ? "صاعد" : tr30 <= -1 ? "هابط" : "محايد"
+
+float dayPct100 = useMktHalt100 ? request.security(sym100, "D", close[1] > 0 ? (close - close[1]) / close[1] * 100.0 : 0.0, barmerge.gaps_off, barmerge.lookahead_off) : 0.0
+bool mktHalt100 = useMktHalt100 and dayPct100 <= -10.0
+bool blockBuy = heavySell or mktHalt100
+bool allowAggressive = broadUp and not heavySell and not mktHalt100
+float riskScore = heavySell ? 85.0 : riskOff ? 65.0 : broadUp ? 25.0 : 45.0
+
+var table t = table.new(position.middle_center, 2, 6, border_width=1)
+if showTable and barstate.islast
+    table.clear(t, 0, 0, 1, 5)
+    table.cell(t, 0, 0, "EGX Market", text_color=color.white, text_size=size.normal)
+    table.cell(t, 1, 0, regimeTxt, text_color=heavySell ? color.red : broadUp ? color.lime : color.yellow, text_size=size.normal)
+    table.cell(t, 0, 1, "TR 30/70/100", text_color=color.gray, text_size=size.small)
+    table.cell(t, 1, 1, str.tostring(tr30) + " / " + str.tostring(tr70) + " / " + str.tostring(tr100), text_size=size.small)
+    table.cell(t, 0, 2, "Mom %", text_color=color.gray, text_size=size.small)
+    table.cell(t, 1, 2, str.tostring(mom30, "#.#") + " · " + str.tostring(mom70, "#.#"), text_size=size.small)
+    table.cell(t, 0, 3, "Block BUY", text_color=color.gray, text_size=size.small)
+    table.cell(t, 1, 3, mktHalt100 ? "EGX100 halt" : blockBuy ? "نعم" : "لا", text_color=blockBuy ? color.red : color.lime, text_size=size.small)
+    table.cell(t, 0, 4, "Risk", text_color=color.gray, text_size=size.small)
+    table.cell(t, 1, 4, str.tostring(riskScore, "#"), text_size=size.small)
+
+plot(regimeId, "EGXMkt_RegimeId", display=display.all)
+plot(blockBuy ? 1 : 0, "EGXMkt_BlockBuy", display=display.all)
+plot(not blockBuy ? 1 : 0, "EGX_RegimeOk", display=display.all)
+plot(mktHalt100 ? 1 : 0, "EGXMkt_Halt100", display=display.all)
+plot(dayPct100, "EGXMkt_DayPct100", display=display.data_window)
+plot(allowAggressive ? 1 : 0, "EGXMkt_AggressiveOk", display=display.all)
+plot(riskScore, "EGXMkt_RiskScore", display=display.all)
+plot(mom30, "EGXMkt_Mom30", display=display.all)
+plot(1, "EGXMkt", display=display.all)
+
+alertcondition(blockBuy, "EGX Mkt — منع شراء", "EGX: bear regime — block new buys")
+alertcondition(allowAggressive, "EGX Mkt — صعود واسع", "EGX: broad up market")

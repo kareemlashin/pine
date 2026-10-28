@@ -1,0 +1,29 @@
+//@version=6
+indicator("EGX Volume SNR — signal / noise", shorttitle="EGX VSNR", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// SNR = |Δclose|×V / range noise · docs/EGX_VOLUME.md
+
+string G = "SNR"
+int len = input.int(14, "Smooth", group=G)
+float minSnr = input.float(1.25, "Min SNR", step=0.05, group=G)
+
+float rng = math.max(high - low, syminfo.mintick)
+float noise = ta.sma(rng, len)
+float signal = math.abs(close - close[1]) * volume
+float snr = signal / math.max(noise * ta.sma(volume, len), 1.0)
+float snrMa = ta.sma(snr, len)
+
+bool loud = snr >= minSnr and snr > snrMa
+bool quiet = snrMa > 0 and snr < snrMa * 0.6
+
+plot(snr, "EGVSNR_Val", color=color.fuchsia, linewidth=2, display=display.all)
+plot(snrMa, "SNR MA", color=color.gray, linewidth=1)
+hline(minSnr, "Min", color=color.lime, linestyle=hline.style_dotted)
+
+var table t = table.new(position.top_right, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "SNR", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, loud ? "LOUD" : quiet ? "quiet" : "—", text_size=size.tiny)
+
+plot(loud ? 1 : 0, "EGVSNR_Loud", display=display.all)

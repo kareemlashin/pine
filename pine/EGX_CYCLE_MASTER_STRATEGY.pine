@@ -1,0 +1,118 @@
+//@version=6
+strategy("EGX سيكل — اختبار (سوق + فرصة)", shorttitle="EGX سيكل ST", overlay=true, pyramiding=1, calc_bars_count=5000, commission_type=strategy.commission.percent, commission_value=0.125, slippage=2, default_qty_type=strategy.percent_of_equity, default_qty_value=10, initial_capital=100000, currency=currency.EGP)
+
+// اختبار مبسّط — ليس نصيحة استثمارية.
+
+float i_oppMin = input.float(62.0, "حد الفرصة")
+float i_mktRiskMax = input.float(55.0, "حد مخاطر السوق")
+float i_minRR = input.float(1.5, "حد R/R")
+float i_minAvgVol = input.float(2000.0, "حد متوسط الحجم")
+int   i_pivotLen = input.int(5, "Pivot")
+int   i_atrLen = input.int(14, "ATR")
+int   i_scrSetup = input.int(6, "حد Setup (من 11)")
+bool  i_confirm = input.bool(true, "دخول عند الإغلاق")
+bool  i_useScr = input.bool(true, "يتطلب فلتر Screener")
+bool  i_blockLimit = input.bool(true, "منع شراء قرب halt/LULD")
+string i_egxBoard = input.string("نشط (EGX100)", "لوحة", options=["نشط (EGX100)", "EGX30 (بيع مكشوف)", "SME تميّز", "SME نايل", "غير نشط"])
+bool  i_mktHalt100 = input.bool(true, "منع إذا EGX100 ≤ −10%")
+
+string i_sym30 = input.symbol("EGX:EGX30", "EGX30")
+
+f_trendPack() =>
+    int sc = 0
+    float e20 = ta.ema(close, 20)
+    float e50 = ta.ema(close, 50)
+    float e100 = ta.ema(close, 100)
+    sc += close > e20 ? 1 : close < e20 ? -1 : 0
+    sc += e20 > e50 ? 1 : e20 < e50 ? -1 : 0
+    sc += e50 > e100 ? 1 : e50 < e100 ? -1 : 0
+    sc
+
+f_indexPack() =>
+    int tr = f_trendPack()
+    float mom = close[20] > 0 ? (close / close[20] - 1.0) * 100.0 : 0.0
+    [tr, mom]
+
+[int tr30, float mom30] = request.security(i_sym30, timeframe.period, f_indexPack(), barmerge.gaps_off, barmerge.lookahead_off)
+int trD = request.security(syminfo.tickerid, "D", f_trendPack(), barmerge.gaps_off, barmerge.lookahead_off)
+int trW = request.security(syminfo.tickerid, "W", f_trendPack(), barmerge.gaps_off, barmerge.lookahead_off)
+
+float mktRisk = tr30 <= -2 and mom30 < -4 ? 75.0 : tr30 >= 2 ? 28.0 : 48.0
+
+float pHigh = ta.pivothigh(high, i_pivotLen, i_pivotLen)
+float pLow = ta.pivotlow(low, i_pivotLen, i_pivotLen)
+var float swingHigh = na
+var float swingLow = na
+if not na(pHigh)
+    swingHigh := pHigh
+if not na(pLow)
+    swingLow := pLow
+
+float atr = ta.atr(i_atrLen)
+float volAvg = ta.sma(volume, 20)
+float rvol = volAvg > 0 ? volume / volAvg : na
+float cmf = ta.cmf(20)
+float rsi = ta.rsi(close, 14)
+float ema200 = ta.ema(close, 200)
+
+bool barOk = i_confirm ? barstate.isconfirmed : true
+float dPrevClose = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+float dayChgPct = dPrevClose > 0 ? (close - dPrevClose) / dPrevClose * 100.0 : 0.0
+float haltPct = i_egxBoard == "SME تميّز" or i_egxBoard == "SME نايل" or i_egxBoard == "غير نشط" ? 5.0 : 10.0
+float luldPct = i_egxBoard == "غير نشط" ? 5.0 : (i_egxBoard == "SME تميّز" or i_egxBoard == "SME نايل" ? 10.0 : 20.0)
+bool nearLimitUp = i_blockLimit and dPrevClose > 0 and (dayChgPct >= math.min(9.0, haltPct - 1.0) or dayChgPct >= luldPct - 0.25)
+float dayPct100 = i_mktHalt100 ? request.security("EGX:EGX100EWI", "D", close[1] > 0 ? (close - close[1]) / close[1] * 100.0 : 0.0, barmerge.gaps_off, barmerge.lookahead_off) : 0.0
+bool mktHalt100 = i_mktHalt100 and dayPct100 <= -10.0
+bool microOk = not nearLimitUp and not mktHalt100
+bool bosUp = barOk and not na(swingHigh) and close > swingHigh and close[1] <= nz(swingHigh[1], swingHigh)
+
+float zoneW = atr * 0.35
+float demandHi = na(swingLow) ? na : swingLow + zoneW
+float demandLo = na(swingLow) ? na : swingLow - zoneW
+float fibB = na(swingLow) or na(swingHigh) ? na : swingHigh - swingLow
+float tgt1 = na(fibB) ? close + atr * 2 : swingHigh + fibB * 0.618
+float stopL = na(demandLo) ? close - atr * 2 : demandLo - atr * 0.5
+float entryP = demandHi
+float risk = na(entryP) ? na : entryP - stopL
+float rr = risk > 0 ? (tgt1 - entryP) / risk : na
+
+int acc = 0
+acc += not na(rvol) and rvol > 1.0 ? 1 : 0
+acc += cmf > 0.05 ? 1 : 0
+acc += not na(swingLow) and low <= swingLow * 1.01 and close > swingLow ? 1 : 0
+int dist = 0
+dist += not na(rvol) and rvol > 1.2 and close < open ? 1 : 0
+
+float sTrend = math.max(0.0, math.min(100.0, 50.0 + trD / 3.0 * 100.0))
+float sVol = math.max(0.0, math.min(100.0, 40.0 + acc * 12.0 - dist * 10.0))
+float sMkt = 100.0 - mktRisk
+float opportunity = sTrend * 0.35 + sVol * 0.35 + sMkt * 0.30
+
+bool inZone = not na(demandLo) and low <= demandHi and high >= demandLo
+bool liqOk = volAvg >= i_minAvgVol
+int setup = 0
+setup += trD > 0 ? 1 : 0
+setup += trW >= 0 ? 1 : 0
+setup += bosUp ? 1 : 0
+setup += acc >= dist ? 1 : 0
+setup += inZone ? 1 : 0
+setup += not na(rr) and rr >= i_minRR ? 1 : 0
+setup += liqOk ? 1 : 0
+setup += rsi > 42 and rsi < 75 ? 1 : 0
+setup += close > ema200 * 0.97 ? 1 : 0
+setup += mktRisk <= i_mktRiskMax ? 1 : 0
+setup += opportunity >= i_oppMin - 5 ? 1 : 0
+setup += rvol >= 0.85 ? 1 : 0
+
+bool scrOk = not i_useScr or setup >= i_scrSetup
+bool breakOk = bosUp and volume > volAvg * 1.2
+bool setupOk = barOk and microOk and liqOk and trD > 0 and mktRisk <= i_mktRiskMax and opportunity >= i_oppMin and inZone and dist <= acc and not na(rr) and rr >= i_minRR and scrOk and (breakOk or rvol >= 1.0)
+
+if setupOk and strategy.position_size == 0
+    strategy.entry("شراء", strategy.long)
+    strategy.exit("خروج", "شراء", stop=stopL, limit=tgt1)
+
+if barOk and strategy.position_size > 0 and (close < nz(swingLow, stopL) or dist > acc + 2)
+    strategy.close("شراء")
+
+plot(opportunity, "الفرصة", display=display.data_window)

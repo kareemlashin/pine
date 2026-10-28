@@ -1,0 +1,31 @@
+//@version=6
+indicator("EGX Volume Halt — ultra quiet", shorttitle="EGX VHlt", overlay=true, max_tables_count=2, calc_bars_count=5000)
+
+// حجم شبه متوقف ثم عودة · docs/EGX_VOLUME.md
+
+string G = "Halt"
+int quietLen = input.int(3, "Quiet bars", minval=2, group=G)
+float maxR = input.float(0.55, "Max RVOL quiet", group=G)
+float wakeR = input.float(1.25, "Wake RVOL", group=G)
+
+float vma = ta.sma(volume, 20)
+bool quiet = true
+for i = 1 to quietLen
+    if volume[i] / math.max(vma[i], 1.0) > maxR
+        quiet := false
+
+float rvol = volume / math.max(vma, 1.0)
+bool wake = quiet[1] and rvol >= wakeR
+bool wakeUp = wake and close >= open
+
+bgcolor(quiet ? color.new(color.gray, 94) : na)
+plotshape(wakeUp, "Wake", shape.diamond, location.belowbar, color=color.orange, size=size.small, text="W")
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "Halt", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, quiet ? "QUIET" : wake ? "WAKE" : "—", text_size=size.tiny)
+
+plot(quiet ? 1 : 0, "EGVHlt_Quiet", display=display.all)
+plot(wakeUp ? 1 : 0, "EGVHlt_WakeUp", display=display.all)

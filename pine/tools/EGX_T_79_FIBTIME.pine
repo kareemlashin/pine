@@ -1,0 +1,25 @@
+//@version=6
+indicator("EGX Tool 79 فيبو زمني — Fib time 8/13/21", shorttitle="EGX T-FIBTIME", overlay=true, max_labels_count=80, max_lines_count=80, max_boxes_count=40, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة و موجات · #79/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+int look = input.int(120, "مرساة قاع")
+int loB = bar_index + ta.lowestbars(low, look)
+int bars = bar_index - loB
+bool hit = bars == 8 or bars == 13 or bars == 21 or bars == 34 or bars == 55 or bars == 89
+int vote = hit ? 0 : close > ta.ema(close, 50) ? 1 : -1
+bgcolor(hit ? color.new(color.aqua, 82) : na)
+
+plot(vote, "EGXT_FIBTIME_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_FIBTIME_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_FIBTIME_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "FIBTIME", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-FIBTIME صاعد", "EGX Tool FIBTIME: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-FIBTIME هابط", "EGX Tool FIBTIME: vote هابط")

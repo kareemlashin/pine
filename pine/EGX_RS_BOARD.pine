@@ -1,0 +1,124 @@
+//@version=6
+indicator("EGX RS — مئوي 20 سهم", shorttitle="EGX RS20", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// RS percentile vs 20-name universe (ليس 217) — سقف request.security
+// EGXRS_Pct · EGXRS_Top70 · EGXRS_LeaderOk
+// رموز افتراضية: docs/EGX_SYMBOLS.md — عدّل حسب توفر TradingView
+// ═══════════════════════════════════════════════════════════════════════════════
+
+string G = "═══ كون 20 سهم ═══"
+string s01 = input.symbol("EGX:COMI", "01", group=G)
+string s02 = input.symbol("EGX:SWDY", "02", group=G)
+string s03 = input.symbol("EGX:TMGH", "03", group=G)
+string s04 = input.symbol("EGX:HRHO", "04", group=G)
+string s05 = input.symbol("EGX:FWRY", "05", group=G)
+string s06 = input.symbol("EGX:UNIP", "06", group=G)
+string s07 = input.symbol("EGX:ETEL", "07", group=G)
+string s08 = input.symbol("EGX:EAST", "08", group=G)
+string s09 = input.symbol("EGX:PHDC", "09", group=G)
+string s10 = input.symbol("EGX:OCDI", "10", group=G)
+string s11 = input.symbol("EGX:SKPC", "11", group=G)
+string s12 = input.symbol("EGX:ACGC", "12", group=G)
+string s13 = input.symbol("EGX:CNIN", "13", group=G)
+string s14 = input.symbol("EGX:EFIH", "14", group=G)
+string s15 = input.symbol("EGX:HELI", "15", group=G)
+string s16 = input.symbol("EGX:EMFD", "16", group=G)
+string s17 = input.symbol("EGX:ORWE", "17", group=G)
+string s18 = input.symbol("EGX:ABUK", "18", group=G)
+string s19 = input.symbol("EGX:MFPC", "19", group=G)
+string s20 = input.symbol("EGX:CIRA", "20", group=G)
+string bench = input.symbol("EGX:EGX30", "Benchmark", group=G)
+int rsLen = input.int(20, "RS فترة", minval=5, group=G)
+float topPct = input.float(70.0, "حد مئوي قائد", minval=50, maxval=95, group=G)
+bool showTbl = input.bool(true, "جدول 20", group=G)
+
+f_roc(string sym) =>
+    str.length(sym) > 0 ? request.security(sym, timeframe.period, ta.roc(close, rsLen), barmerge.gaps_off, barmerge.lookahead_off) : float(na)
+
+float bRoc = request.security(bench, timeframe.period, ta.roc(close, rsLen), barmerge.gaps_off, barmerge.lookahead_off)
+
+f_sp(float roc) =>
+    not na(roc) and not na(bRoc) ? roc - bRoc : float(na)
+
+float r01 = f_sp(f_roc(s01))
+float r02 = f_sp(f_roc(s02))
+float r03 = f_sp(f_roc(s03))
+float r04 = f_sp(f_roc(s04))
+float r05 = f_sp(f_roc(s05))
+float r06 = f_sp(f_roc(s06))
+float r07 = f_sp(f_roc(s07))
+float r08 = f_sp(f_roc(s08))
+float r09 = f_sp(f_roc(s09))
+float r10 = f_sp(f_roc(s10))
+float r11 = f_sp(f_roc(s11))
+float r12 = f_sp(f_roc(s12))
+float r13 = f_sp(f_roc(s13))
+float r14 = f_sp(f_roc(s14))
+float r15 = f_sp(f_roc(s15))
+float r16 = f_sp(f_roc(s16))
+float r17 = f_sp(f_roc(s17))
+float r18 = f_sp(f_roc(s18))
+float r19 = f_sp(f_roc(s19))
+float r20 = f_sp(f_roc(s20))
+
+float mySp = ta.roc(close, rsLen) - bRoc
+
+f_below(float sp, float ref) =>
+    not na(sp) and not na(ref) and sp < ref ? 1 : 0
+
+f_alive(float sp) =>
+    not na(sp) ? 1 : 0
+
+int nUni = f_alive(r01) + f_alive(r02) + f_alive(r03) + f_alive(r04) + f_alive(r05) + f_alive(r06) + f_alive(r07) + f_alive(r08) + f_alive(r09) + f_alive(r10) + f_alive(r11) + f_alive(r12) + f_alive(r13) + f_alive(r14) + f_alive(r15) + f_alive(r16) + f_alive(r17) + f_alive(r18) + f_alive(r19) + f_alive(r20)
+int below = f_below(r01, mySp) + f_below(r02, mySp) + f_below(r03, mySp) + f_below(r04, mySp) + f_below(r05, mySp) + f_below(r06, mySp) + f_below(r07, mySp) + f_below(r08, mySp) + f_below(r09, mySp) + f_below(r10, mySp) + f_below(r11, mySp) + f_below(r12, mySp) + f_below(r13, mySp) + f_below(r14, mySp) + f_below(r15, mySp) + f_below(r16, mySp) + f_below(r17, mySp) + f_below(r18, mySp) + f_below(r19, mySp) + f_below(r20, mySp)
+float rsPct = nUni > 0 ? below / nUni * 100.0 : 50.0
+bool rsTop = rsPct >= topPct
+
+f_mx2(float a, float b) =>
+    math.max(nz(a, -1e9), nz(b, -1e9))
+
+float leaderSp = f_mx2(r01, f_mx2(r02, f_mx2(r03, f_mx2(r04, f_mx2(r05, f_mx2(r06, f_mx2(r07, f_mx2(r08, f_mx2(r09, f_mx2(r10, f_mx2(r11, f_mx2(r12, f_mx2(r13, f_mx2(r14, f_mx2(r15, f_mx2(r16, f_mx2(r17, f_mx2(r18, f_mx2(r19, r20)))))))))))))))))))
+bool leaderOk = leaderSp > -1e8 and leaderSp > 0
+
+f_cell(table t, int row, string name, float sp) =>
+    table.cell(t, 0, row, str.tostring(row), text_size=size.tiny, text_color=color.gray)
+    table.cell(t, 1, row, name, text_size=size.tiny, text_color=color.white)
+    table.cell(t, 2, row, na(sp) ? "—" : str.tostring(sp, "#.#"), text_size=size.tiny, text_color=not na(sp) and sp > 0 ? color.lime : color.gray)
+
+var table t = table.new(position.top_right, 3, 22, border_width=1)
+if showTbl and barstate.islast
+    table.clear(t, 0, 0, 2, 21)
+    table.cell(t, 0, 0, "#", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 0, "سهم", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 2, 0, "RS20", text_color=color.gray, text_size=size.tiny)
+    f_cell(t, 1, s01, r01)
+    f_cell(t, 2, s02, r02)
+    f_cell(t, 3, s03, r03)
+    f_cell(t, 4, s04, r04)
+    f_cell(t, 5, s05, r05)
+    f_cell(t, 6, s06, r06)
+    f_cell(t, 7, s07, r07)
+    f_cell(t, 8, s08, r08)
+    f_cell(t, 9, s09, r09)
+    f_cell(t, 10, s10, r10)
+    f_cell(t, 11, s11, r11)
+    f_cell(t, 12, s12, r12)
+    f_cell(t, 13, s13, r13)
+    f_cell(t, 14, s14, r14)
+    f_cell(t, 15, s15, r15)
+    f_cell(t, 16, s16, r16)
+    f_cell(t, 17, s17, r17)
+    f_cell(t, 18, s18, r18)
+    f_cell(t, 19, s19, r19)
+    f_cell(t, 20, s20, r20)
+    table.cell(t, 0, 21, "Pct", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 21, str.tostring(rsPct, "#") + "% · n=" + str.tostring(nUni), text_size=size.tiny, text_color=rsTop ? color.lime : color.white)
+    table.cell(t, 2, 21, rsTop ? "TOP" : "—", text_color=rsTop ? color.lime : color.gray, text_size=size.tiny)
+
+plot(rsPct, "EGXRS_Pct", color=color.aqua)
+plot(rsTop ? 1 : 0, "EGXRS_Top70", display=display.all)
+plot(mySp, "EGXRS_MySpread", display=display.all)
+plot(leaderSp > -1e8 ? leaderSp : na, "EGXRS_LeaderSp", display=display.all)
+plot(leaderOk ? 1 : 0, "EGXRS_LeaderOk", display=display.all)
+plot(1, "EGXRS", display=display.data_window)

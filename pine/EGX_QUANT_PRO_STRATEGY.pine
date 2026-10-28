@@ -1,0 +1,199 @@
+//@version=6
+strategy("EGX كوانت — اختبار (مضاربة / استثمار)", shorttitle="EGX كوانت ST", overlay=true, pyramiding=1, calc_bars_count=5000, commission_type=strategy.commission.percent, commission_value=0.125, slippage=2, default_qty_type=strategy.percent_of_equity, default_qty_value=10, initial_capital=100000, currency=currency.EGP)
+
+// اختبار مبسّط — ليس نصيحة استثمارية · يومي/60m مضاربة · أسبوعي استثمار
+
+string G_MODE = "═══ الوضع ═══"
+string G_IN = "═══ الدخول ═══"
+string G_FLT = "═══ فلاتر ═══"
+string G_EX = "═══ الخروج ═══"
+
+string i_mode = input.string("مضاربة", "الوضع", options=["مضاربة", "استثمار"], group=G_MODE)
+int   i_pivotLen   = input.int(5, "Pivot", group=G_IN)
+int   i_volAvgLen  = input.int(20, "متوسط الحجم", group=G_IN)
+float i_minAvgVol  = input.float(1000.0, "حد أدنى متوسط حجم", group=G_IN)
+float i_rvolMin    = input.float(1.0, "حد RVOL (مضاربة)", group=G_IN)
+float i_oppEntry   = input.float(62.0, "حد الفرصة", group=G_IN)
+float i_accMin     = input.float(45.0, "حد تراكم", group=G_IN)
+float i_distMax    = input.float(60.0, "حد مخاطرة تصريف", group=G_IN)
+float i_minRR      = input.float(1.5, "حد عائد/مخاطرة", group=G_IN)
+int   i_atrLen     = input.int(14, "ATR", group=G_IN)
+bool  i_useConfirm = input.bool(true, "دخول عند إغلاق الشمعة", group=G_IN)
+string i_tfD       = input.timeframe("D", "اتجاه (مضاربة)", group=G_IN)
+string i_tfW       = input.timeframe("W", "اتجاه (استثمار)", group=G_IN)
+float i_accInvest  = input.float(55.0, "حد تراكم (استثمار)", group=G_IN)
+bool  i_useCycle   = input.bool(true, "فلتر دورة (3–7)", group=G_FLT)
+bool  i_blockDist  = input.bool(true, "منع عند DistRisk≥65", group=G_FLT)
+bool  i_reqBreak   = input.bool(false, "مضاربة: BOS+RVOL فقط", group=G_FLT)
+int   i_minSetup   = input.int(0, "حد شروط إعداد (0=إيقاف)", minval=0, maxval=11, group=G_FLT)
+float i_minRank    = input.float(0, "حد ترتيب EGX (0=إيقاف)", minval=0, maxval=100, group=G_FLT)
+bool  i_usePartial = input.bool(true, "خروج جزئي عند نصف الهدف", group=G_EX)
+float i_partialPct = input.float(50.0, "نسبة الخروج الجزئي %", minval=10, maxval=90, group=G_EX)
+bool  i_useTrail = input.bool(false, "وقف متحرك بعد الجزئي", group=G_EX)
+float i_trailAtr = input.float(2.0, "متحرك × ATR", minval=1.0, step=0.1, group=G_EX)
+bool  i_blockChase = input.bool(true, "منع مطاردة (قرب 252 + RSI)", group=G_FLT)
+bool  i_blockLimit = input.bool(true, "منع شراء قرب halt/LULD", group=G_FLT)
+string i_egxBoard = input.string("نشط (EGX100)", "لوحة", options=["نشط (EGX100)", "EGX30 (بيع مكشوف)", "SME تميّز", "SME نايل", "غير نشط"], group=G_FLT)
+bool  i_mktHalt100 = input.bool(true, "منع إذا EGX100 ≤ −10%", group=G_FLT)
+
+strategy.risk.max_drawdown(50, strategy.percent_of_equity)
+
+f_trendPack() =>
+    int sc = 0
+    float c = close
+    float e20 = ta.ema(close, 20)
+    float e50 = ta.ema(close, 50)
+    float e100 = ta.ema(close, 100)
+    sc += c > e20 ? 1 : c < e20 ? -1 : 0
+    sc += e20 > e50 ? 1 : e20 < e50 ? -1 : 0
+    sc += e50 > e100 ? 1 : e50 < e100 ? -1 : 0
+    sc
+
+int trD = request.security(syminfo.tickerid, i_tfD, f_trendPack(), barmerge.gaps_off, barmerge.lookahead_off)
+int trW = request.security(syminfo.tickerid, i_tfW, f_trendPack(), barmerge.gaps_off, barmerge.lookahead_off)
+float ema20 = ta.ema(close, 20)
+float ema50 = ta.ema(close, 50)
+float ema200 = ta.ema(close, 200)
+
+float pHigh = ta.pivothigh(high, i_pivotLen, i_pivotLen)
+float pLow  = ta.pivotlow(low, i_pivotLen, i_pivotLen)
+var float swingHigh = na
+var float swingLow  = na
+if not na(pHigh)
+    swingHigh := pHigh
+if not na(pLow)
+    swingLow := pLow
+
+float atr = ta.atr(i_atrLen)
+float volAvg = ta.sma(volume, i_volAvgLen)
+float rvol = volAvg > 0 ? volume / volAvg : na
+float cmf = ta.cmf(20)
+float obvSlope = ta.linreg(ta.obv, 10, 0) - ta.linreg(ta.obv, 10, 1)
+
+float accPts = 0.0
+accPts += rvol > 1.0 and math.abs(close - open) < atr * 0.25 ? 14.0 : 0.0
+accPts += cmf > 0.05 ? 8.0 : 0.0
+accPts += obvSlope > 0 ? 8.0 : 0.0
+accPts += not na(swingLow) and low <= swingLow * 1.01 and close > swingLow ? 12.0 : 0.0
+float accumScore100 = math.min(100.0, accPts)
+
+float distPts = 0.0
+distPts += rvol > 1.2 and close < open ? 12.0 : 0.0
+distPts += cmf < -0.05 ? 8.0 : 0.0
+distPts += obvSlope < 0 ? 8.0 : 0.0
+float distRisk100 = math.min(100.0, distPts)
+
+var float lastSwingHigh = na
+var float lastSwingLow = na
+if not na(pHigh)
+    lastSwingHigh := pHigh
+if not na(pLow)
+    lastSwingLow := pLow
+bool bosUp = not na(lastSwingHigh) and close > lastSwingHigh and close[1] <= lastSwingHigh
+bool trueBreakVol = rvol >= i_rvolMin * 0.9
+bool breakOk = not i_reqBreak or (bosUp and trueBreakVol)
+
+int consolLen = 20
+bool squeezeOn = ta.atr(i_atrLen) < ta.sma(ta.atr(i_atrLen), consolLen) * 0.65
+bool inBase = squeezeOn and math.abs(close - ema50) < atr * 1.2
+var int cycleState = 3
+bool upTrend = close > ema50 and ema50 > ema200
+bool distPhase = distRisk100 >= 65 and not na(swingHigh) and high >= swingHigh - atr * 0.5
+int newCycle = cycleState
+if distPhase
+    newCycle := 9
+else if bosUp and trueBreakVol
+    newCycle := 5
+else if inBase
+    newCycle := 3
+else if upTrend
+    newCycle := 6
+else if close < ema50
+    newCycle := 1
+if barstate.isconfirmed
+    cycleState := newCycle
+bool cycleOk = not i_useCycle or (cycleState >= 3 and cycleState <= 7)
+
+float zoneW = atr * 0.35
+float demandHi = na(swingLow) ? na : swingLow + zoneW
+float demandLo = na(swingLow) ? na : swingLow - zoneW
+float fibBase = na(swingLow) or na(swingHigh) ? na : swingHigh - swingLow
+float tgtSwing = na(fibBase) ? close + atr * 2 : swingHigh + fibBase * 0.618
+float tgtInvest = na(fibBase) ? close + atr * 4 : swingHigh + fibBase * 1.0
+float tgt1 = i_mode == "استثمار" ? tgtInvest : tgtSwing
+float stopL = na(demandLo) ? close - atr * 2 : demandLo - atr * 0.5
+float stopInvest = na(swingLow) ? ema200 - atr * 2 : swingLow - atr
+float stopUse = i_mode == "استثمار" ? stopInvest : stopL
+float entryP = i_mode == "استثمار" ? nz(demandLo, ema200) : demandHi
+float risk = na(entryP) ? na : entryP - stopUse
+float rr = risk > 0 ? (tgt1 - entryP) / risk : na
+
+float sTrend = i_mode == "استثمار" ? math.max(0.0, math.min(100.0, 50.0 + trW / 3.0 * 100.0)) : math.max(0.0, math.min(100.0, 50.0 + trD / 3.0 * 100.0))
+float sVol = math.max(0.0, math.min(100.0, accumScore100 * 0.6 + (100.0 - distRisk100) * 0.4))
+float sRR = na(rr) ? 40.0 : math.min(100.0, rr / 3.0 * 100.0)
+float opportunity = sTrend * 0.35 + sVol * 0.45 + sRR * 0.20
+
+int setupHits = 0
+setupHits += close > ema20 and ema20 > ema50 ? 1 : 0
+setupHits += trW > 0 and close > ema200 ? 1 : 0
+setupHits += cmf > 0 and obvSlope > 0 ? 1 : 0
+setupHits += rvol >= i_rvolMin ? 1 : 0
+setupHits += not na(rr) and rr >= i_minRR ? 1 : 0
+bool setupOk = i_minSetup <= 0 or setupHits >= i_minSetup
+float egxRank = math.max(0.0, math.min(100.0, opportunity * 0.6 + setupHits / 11.0 * 40.0))
+bool rankOk = i_minRank <= 0 or egxRank >= i_minRank
+float rsi = ta.rsi(close, 14)
+float hi252 = ta.highest(high, 252)
+bool chaseWarn = hi252 > 0 and (close - hi252) / hi252 * 100 > -3 and rsi > 72 and not na(rr) and rr < 1.25
+bool chaseOk = not i_blockChase or not chaseWarn
+
+float dPrevClose = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+float dayChgPct = dPrevClose > 0 ? (close - dPrevClose) / dPrevClose * 100.0 : 0.0
+float haltPct = i_egxBoard == "SME تميّز" or i_egxBoard == "SME نايل" or i_egxBoard == "غير نشط" ? 5.0 : 10.0
+float luldPct = i_egxBoard == "غير نشط" ? 5.0 : (i_egxBoard == "SME تميّز" or i_egxBoard == "SME نايل" ? 10.0 : 20.0)
+bool nearLimitUp = i_blockLimit and dPrevClose > 0 and (dayChgPct >= math.min(9.0, haltPct - 1.0) or dayChgPct >= luldPct - 0.25)
+float dayPct100 = i_mktHalt100 ? request.security("EGX:EGX100EWI", "D", close[1] > 0 ? (close - close[1]) / close[1] * 100.0 : 0.0, barmerge.gaps_off, barmerge.lookahead_off) : 0.0
+bool mktHalt100 = i_mktHalt100 and dayPct100 <= -10.0
+bool microOk = not nearLimitUp and not mktHalt100
+
+bool barOk = i_useConfirm ? barstate.isconfirmed : true
+bool inZone = not na(demandLo) and low <= demandHi and high >= demandLo
+bool atEma = low <= ema200 + atr and close >= ema200 * 0.98
+bool liqOk = volAvg >= i_minAvgVol
+bool distBlock = i_blockDist and distRisk100 >= 65
+bool swingSetup = i_mode == "مضاربة" and barOk and liqOk and setupOk and rankOk and chaseOk and microOk and not distBlock and cycleOk and breakOk and trD > 0 and inZone and rvol >= i_rvolMin and accumScore100 >= i_accMin and distRisk100 <= i_distMax and opportunity >= i_oppEntry and not na(rr) and rr >= i_minRR
+bool investSetup = i_mode == "استثمار" and barOk and liqOk and setupOk and rankOk and chaseOk and microOk and not distBlock and cycleOk and trW > 0 and close > ema200 * 0.97 and (inZone or atEma) and accumScore100 >= i_accInvest and distRisk100 <= i_distMax + 10 and opportunity >= i_oppEntry - 5 and not na(rr) and rr >= i_minRR * 0.8
+bool longSetup = swingSetup or investSetup
+float tHalf = entryP + (tgt1 - entryP) * 0.5
+
+var bool tookHalf = false
+var float trailStop = na
+if strategy.position_size == 0
+    tookHalf := false
+    trailStop := na
+
+if longSetup and strategy.position_size == 0
+    strategy.entry("L", strategy.long, comment=i_mode == "استثمار" ? "است" : "مض")
+    trailStop := stopUse
+    tookHalf := false
+
+if strategy.position_size > 0
+    if i_usePartial and not tookHalf and barOk and high >= tHalf and high[1] < tHalf
+        strategy.close("L", qty_percent=i_partialPct, comment="نصف")
+        tookHalf := true
+    if i_useTrail and tookHalf and barOk
+        trailStop := math.max(nz(trailStop, stopUse), close - atr * i_trailAtr)
+    float exitStop = i_useTrail and tookHalf and not na(trailStop) ? trailStop : stopUse
+    strategy.exit("LX", "L", stop=exitStop, limit=tgt1)
+
+if barOk and strategy.position_size > 0 and (distRisk100 >= 75 or cycleState >= 9 or close < nz(swingLow, stopUse))
+    strategy.close("L", comment="إلغاء")
+
+plot(opportunity, "الفرصة", color=color.new(color.blue, 70), display=display.data_window)
+plot(accumScore100, "تراكم", display=display.data_window)
+plot(distRisk100, "تصريف", display=display.data_window)
+plot(cycleState, "دورة", display=display.data_window)
+plot(egxRank, "ترتيب", display=display.data_window)
+plot(setupHits, "شروط_إعداد", display=display.data_window)
+plot(chaseWarn ? 1 : 0, "مطاردة", display=display.data_window)
+plot(i_useTrail and strategy.position_size > 0 ? trailStop : na, "وقف_متحرك", color=color.orange, style=plot.style_linebr)

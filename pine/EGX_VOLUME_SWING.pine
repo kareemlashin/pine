@@ -1,0 +1,43 @@
+//@version=6
+indicator("EGX Volume at Swings — pivot V", shorttitle="EGX VSw", overlay=true, max_labels_count=120, max_tables_count=2, calc_bars_count=5000)
+
+// حجم عند قيعان/قمم pivot · docs/EGX_VOLUME.md
+
+string G = "Pivot"
+int left = input.int(5, "Left", minval=2, group=G)
+int right = input.int(5, "Right", minval=2, group=G)
+float rvolMin = input.float(1.2, "RVOL عند pivot", group=G)
+bool markLabels = input.bool(true, "Labels", group=G)
+
+float pl = ta.pivotlow(low, left, right)
+float ph = ta.pivothigh(high, left, right)
+float vma = ta.sma(volume, 20)
+
+bool pivotLow = not na(pl)
+bool pivotHigh = not na(ph)
+int off = right
+float rAt = volume[off] / math.max(vma[off], 1.0)
+float buyPct = (close[off] - low[off]) / math.max(high[off] - low[off], syminfo.mintick) * 100.0
+
+bool volLow = pivotLow and rAt >= rvolMin
+bool volHigh = pivotHigh and rAt >= rvolMin
+bool accLow = volLow and buyPct >= 55.0
+bool distHigh = volHigh and buyPct <= 45.0
+
+plotshape(accLow, "Acc pivot", shape.labelup, location=location.belowbar, color=color.lime, size=size.small, text="V↓", offset=-right)
+plotshape(distHigh, "Dist pivot", shape.labeldown, location=location.abovebar, color=color.red, size=size.small, text="V↑", offset=-right)
+
+if markLabels and barstate.isconfirmed and accLow
+    label.new(bar_index - right, low[right], "Pivot+\nR" + str.tostring(rAt, "#.#"), style=label.style_label_up, color=color.new(color.lime, 30), textcolor=color.white, size=size.tiny)
+if markLabels and barstate.isconfirmed and distHigh
+    label.new(bar_index - right, high[right], "Pivot-\nR" + str.tostring(rAt, "#.#"), style=label.style_label_down, color=color.new(color.red, 30), textcolor=color.white, size=size.tiny)
+
+var table t = table.new(position.top_right, 2, 3, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 2)
+    table.cell(t, 0, 0, "Swing V", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, accLow ? "Acc low" : distHigh ? "Dist high" : "—", text_size=size.tiny)
+
+plot(accLow ? 1 : 0, "EGVSw_AccLow", display=display.all)
+plot(distHigh ? 1 : 0, "EGVSw_DistHigh", display=display.all)
+plot(volLow ? rAt : na, "EGVSw_RAtLow", display=display.all)

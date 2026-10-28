@@ -1,0 +1,41 @@
+//@version=6
+indicator("EGX Tool 82 نيوويف — NeoWave proxy", shorttitle="EGX T-NEOWAVE", overlay=true, max_labels_count=80, max_lines_count=80, max_boxes_count=40, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة و موجات · #82/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+int len = input.int(8, "Swing")
+float ph = ta.pivothigh(high, len, len)
+float pl = ta.pivotlow(low, len, len)
+var array<int> bars = array.new_int()
+var array<float> px = array.new_float()
+if not na(ph)
+    array.push(bars, bar_index - len)
+    array.push(px, ph)
+if not na(pl)
+    array.push(bars, bar_index - len)
+    array.push(px, pl)
+if array.size(px) > 10
+    array.shift(bars)
+    array.shift(px)
+int vote = 0
+if array.size(px) >= 3
+    int t1 = array.get(bars, array.size(bars) - 1) - array.get(bars, array.size(bars) - 2)
+    int t0 = array.get(bars, array.size(bars) - 2) - array.get(bars, array.size(bars) - 3)
+    bool timeOK = t0 > 0 and t1 >= int(t0 * 0.382) and t1 <= int(t0 * 2.618)
+    float last = array.get(px, array.size(px) - 1)
+    vote := timeOK and close > last ? 1 : timeOK and close < last ? -1 : 0
+plot(close, "nw", display=display.none)
+
+plot(vote, "EGXT_NEOWAVE_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_NEOWAVE_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_NEOWAVE_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "NEOWAVE", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-NEOWAVE صاعد", "EGX Tool NEOWAVE: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-NEOWAVE هابط", "EGX Tool NEOWAVE: vote هابط")

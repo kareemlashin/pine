@@ -1,0 +1,25 @@
+//@version=6
+indicator("EGX Tool 57 STARC — STARC Bands", shorttitle="EGX T-STARC", overlay=true, max_labels_count=80, max_lines_count=80, max_boxes_count=40, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة د التقلب · #57/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+float mid = ta.sma(close, 15)
+float band = ta.atr(15) * 1.33
+plot(mid + band, "STARC+", color=color.red)
+plot(mid, "STARC", color=color.gray)
+plot(mid - band, "STARC-", color=color.lime)
+int vote = close > mid and close < mid + band ? 1 : close < mid and close > mid - band ? -1 : close >= mid + band ? -1 : 1
+
+plot(vote, "EGXT_STARC_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_STARC_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_STARC_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "STARC", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-STARC صاعد", "EGX Tool STARC: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-STARC هابط", "EGX Tool STARC: vote هابط")

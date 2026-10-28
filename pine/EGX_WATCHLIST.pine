@@ -1,0 +1,92 @@
+//@version=6
+indicator("EGX محفظة — Rank سريع", shorttitle="EGX WL", overlay=false, max_labels_count=1)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// مراقبة حتى 6 رموز EGX (ROC20 vs EGX30 + RVOL) — إطار D
+// ═══════════════════════════════════════════════════════════════════════════════
+
+string G = "رموز"
+string s1 = input.symbol("EGX:COMI", "1", group=G)
+string s2 = input.symbol("EGX:SWDY", "2", group=G)
+string s3 = input.symbol("EGX:TMGH", "3", group=G)
+string s4 = input.symbol("EGX:ETEL", "4", group=G)
+string s5 = input.symbol("EGX:FWRY", "5", group=G)
+string s6 = input.symbol("EGX:HRHO", "6", group=G)
+string bench = input.symbol("EGX:EGX30", "مؤشر", group=G)
+string mkt100 = input.symbol("EGX:EGX100EWI", "EGX100", group=G)
+bool useMktHalt100 = input.bool(true, "EGX100 halt", group=G)
+
+f_mktTrWl() =>
+    int sc = 0
+    float e20 = ta.ema(close, 20)
+    float e50 = ta.ema(close, 50)
+    sc += close > e20 ? 1 : -1
+    sc += e20 > e50 ? 1 : -1
+    sc
+float mom30Wl = request.security(bench, timeframe.period, close[20] > 0 ? (close / close[20] - 1.0) * 100.0 : 0.0, barmerge.gaps_off, barmerge.lookahead_off)
+int tr30Wl = request.security(bench, timeframe.period, f_mktTrWl(), barmerge.gaps_off, barmerge.lookahead_off)
+bool bearWl = mom30Wl < -4.0 and tr30Wl <= -1
+float dayPct100Wl = useMktHalt100 ? request.security(mkt100, "D", close[1] > 0 ? (close - close[1]) / close[1] * 100.0 : 0.0, barmerge.gaps_off, barmerge.lookahead_off) : 0.0
+bool halt100Wl = useMktHalt100 and dayPct100Wl <= -10.0
+bool regimeOkWl = not bearWl and not halt100Wl
+
+f_snap(string sym) =>
+    float c = request.security(sym, timeframe.period, close, barmerge.gaps_off, barmerge.lookahead_off)
+    float roc = request.security(sym, timeframe.period, ta.roc(close, 20), barmerge.gaps_off, barmerge.lookahead_off)
+    float vma = request.security(sym, timeframe.period, ta.sma(volume, 20), barmerge.gaps_off, barmerge.lookahead_off)
+    float vol = request.security(sym, timeframe.period, volume, barmerge.gaps_off, barmerge.lookahead_off)
+    float rvol = vma > 0 ? vol / vma : na
+    float bRoc = request.security(bench, timeframe.period, ta.roc(close, 20), barmerge.gaps_off, barmerge.lookahead_off)
+    float rs = roc - bRoc
+    float rk = math.max(0.0, math.min(100.0, 50.0 + rs * 3.0 + (rvol >= 1.2 ? 12.0 : rvol >= 1.0 ? 6.0 : 0.0)))
+    [sym, rk, rs, rvol]
+
+[r1, rk1, rs1, rv1] = f_snap(s1)
+[r2, rk2, rs2, rv2] = f_snap(s2)
+[r3, rk3, rs3, rv3] = f_snap(s3)
+[r4, rk4, rs4, rv4] = f_snap(s4)
+[r5, rk5, rs5, rv5] = f_snap(s5)
+[r6, rk6, rs6, rv6] = f_snap(s6)
+
+float topRk = math.max(rk1, math.max(rk2, math.max(rk3, math.max(rk4, math.max(rk5, rk6)))))
+
+var table wl = table.new(position.top_right, 4, 8, bgcolor=color.new(#0d1117, 5), border_width=1)
+if barstate.islast
+    table.clear(wl, 0, 0, 3, 7)
+    table.cell(wl, 0, 0, "رمز", bgcolor=color.new(#161b22, 0), text_color=color.gray, text_size=size.tiny)
+    table.cell(wl, 1, 0, "Rank", bgcolor=color.new(#161b22, 0), text_color=color.gray, text_size=size.tiny)
+    table.cell(wl, 2, 0, "RS20", bgcolor=color.new(#161b22, 0), text_color=color.gray, text_size=size.tiny)
+    table.cell(wl, 3, 0, "RVOL", bgcolor=color.new(#161b22, 0), text_color=color.gray, text_size=size.tiny)
+    table.cell(wl, 0, 1, s1, text_color=color.white, text_size=size.tiny)
+    table.cell(wl, 1, 1, str.tostring(rk1, "#"), text_color=rk1 >= 65 ? color.lime : color.white, text_size=size.tiny)
+    table.cell(wl, 2, 1, str.tostring(rs1, "#.#") + "%", text_color=rs1 > 0 ? color.lime : color.orange, text_size=size.tiny)
+    table.cell(wl, 3, 1, str.tostring(rv1, "#.##"), text_color=color.white, text_size=size.tiny)
+    table.cell(wl, 0, 2, s2, text_color=color.white, text_size=size.tiny)
+    table.cell(wl, 1, 2, str.tostring(rk2, "#"), text_color=rk2 >= 65 ? color.lime : color.white, text_size=size.tiny)
+    table.cell(wl, 2, 2, str.tostring(rs2, "#.#") + "%", text_color=rs2 > 0 ? color.lime : color.orange, text_size=size.tiny)
+    table.cell(wl, 3, 2, str.tostring(rv2, "#.##"), text_color=color.white, text_size=size.tiny)
+    table.cell(wl, 0, 3, s3, text_color=color.white, text_size=size.tiny)
+    table.cell(wl, 1, 3, str.tostring(rk3, "#"), text_color=rk3 >= 65 ? color.lime : color.white, text_size=size.tiny)
+    table.cell(wl, 2, 3, str.tostring(rs3, "#.#") + "%", text_color=rs3 > 0 ? color.lime : color.orange, text_size=size.tiny)
+    table.cell(wl, 3, 3, str.tostring(rv3, "#.##"), text_color=color.white, text_size=size.tiny)
+    table.cell(wl, 0, 4, s4, text_color=color.white, text_size=size.tiny)
+    table.cell(wl, 1, 4, str.tostring(rk4, "#"), text_color=rk4 >= 65 ? color.lime : color.white, text_size=size.tiny)
+    table.cell(wl, 2, 4, str.tostring(rs4, "#.#") + "%", text_color=rs4 > 0 ? color.lime : color.orange, text_size=size.tiny)
+    table.cell(wl, 3, 4, str.tostring(rv4, "#.##"), text_color=color.white, text_size=size.tiny)
+    table.cell(wl, 0, 5, s5, text_color=color.white, text_size=size.tiny)
+    table.cell(wl, 1, 5, str.tostring(rk5, "#"), text_color=rk5 >= 65 ? color.lime : color.white, text_size=size.tiny)
+    table.cell(wl, 2, 5, str.tostring(rs5, "#.#") + "%", text_color=rs5 > 0 ? color.lime : color.orange, text_size=size.tiny)
+    table.cell(wl, 3, 5, str.tostring(rv5, "#.##"), text_color=color.white, text_size=size.tiny)
+    table.cell(wl, 0, 6, s6, text_color=color.white, text_size=size.tiny)
+    table.cell(wl, 1, 6, str.tostring(rk6, "#"), text_color=rk6 >= 65 ? color.lime : color.white, text_size=size.tiny)
+    table.cell(wl, 2, 6, str.tostring(rs6, "#.#") + "%", text_color=rs6 > 0 ? color.lime : color.orange, text_size=size.tiny)
+    table.cell(wl, 3, 6, str.tostring(rv6, "#.##"), text_color=color.white, text_size=size.tiny)
+    table.cell(wl, 0, 7, "Regime", text_color=color.gray, text_size=size.tiny)
+    table.cell(wl, 1, 7, regimeOkWl ? "OK" : bearWl ? "Bear" : "H100", text_color=regimeOkWl ? color.lime : color.orange, text_size=size.tiny)
+    table.cell(wl, 2, 7, "Top", text_color=color.gray, text_size=size.tiny)
+    table.cell(wl, 3, 7, str.tostring(topRk, "#"), text_color=topRk >= 65 ? color.lime : color.white, text_size=size.tiny)
+
+plot(rk1, "EGXWL_Rank1", display=display.data_window)
+plot(topRk, "EGXWL_TopRank", display=display.data_window)
+plot(regimeOkWl ? 1 : 0, "EGX_RegimeOk", display=display.all)
+plot(1, "EGXWL", display=display.data_window)

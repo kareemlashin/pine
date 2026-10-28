@@ -1,0 +1,26 @@
+//@version=6
+indicator("EGX Tool 56 أولسر — Ulcer Index", shorttitle="EGX T-ULCER", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة د التقلب · #56/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+int len = input.int(14, "Ulcer")
+float maxC = ta.highest(close, len)
+float dd = 100.0 * (close - maxC) / math.max(maxC, syminfo.mintick)
+float v = math.sqrt(ta.sma(dd * dd, len))
+int vote = v < 5 ? 1 : v > 12 ? -1 : 0
+plot(v, "EGXT_ULCER", color=color.red, linewidth=2)
+hline(5, "5", color=color.lime)
+
+plot(vote, "EGXT_ULCER_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_ULCER_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_ULCER_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "ULCER", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-ULCER صاعد", "EGX Tool ULCER: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-ULCER هابط", "EGX Tool ULCER: vote هابط")

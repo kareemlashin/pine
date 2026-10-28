@@ -1,0 +1,33 @@
+//@version=6
+indicator("EGX Volume Oscillator — PVT · force", shorttitle="EGX VOsc", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// PVT + force index (vol-weighted) · docs/EGX_VOLUME.md
+
+string G = "Osc"
+int fast = input.int(9, "Fast EMA", group=G)
+int slow = input.int(21, "Slow EMA", group=G)
+int fiLen = input.int(13, "Force MA", group=G)
+
+float pvt = ta.cum((close - close[1]) / math.max(close[1], syminfo.mintick) * volume)
+float pvtOsc = ta.ema(pvt, fast) - ta.ema(pvt, slow)
+
+float fiRaw = ta.ema(ta.change(close) * volume, fiLen)
+float fiNorm = fiRaw / math.max(ta.sma(volume, fiLen) * syminfo.mintick * 100, 1.0)
+
+bool bull = pvtOsc > 0 and fiNorm > 0 and ta.crossover(pvtOsc, 0)
+bool bear = pvtOsc < 0 and fiNorm < 0 and ta.crossunder(pvtOsc, 0)
+
+plot(pvtOsc, "PVT osc", color=color.fuchsia, linewidth=2)
+plot(fiNorm, "Force", color=color.yellow, linewidth=1)
+hline(0, "0", color=color.gray)
+bgcolor(pvtOsc > 0 ? color.new(color.teal, 92) : color.new(color.red, 92))
+
+var table t = table.new(position.top_left, 2, 3, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 2)
+    table.cell(t, 0, 0, "Osc", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, pvtOsc > 0 ? "Acc" : "Dist", text_size=size.tiny)
+
+plot(bull ? 1 : 0, "EGVOsc_BullX", display=display.all)
+plot(bear ? 1 : 0, "EGVOsc_BearX", display=display.all)
+plot(fiNorm, "EGVOsc_Force", display=display.all)

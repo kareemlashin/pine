@@ -1,0 +1,70 @@
+//@version=6
+indicator("EGX Volume Climax — spike · dry · z", shorttitle="EGX VCLX", overlay=false, max_labels_count=80, max_tables_count=3, calc_bars_count=5000)
+
+// ذروة حجم · جفاف · Z-Score · RVOL · حجم×سعر · docs/EGX_VOLUME.md
+
+string G = "EGX"
+string profile = input.string("يومي", "ملف", options=["يومي", "مضاربة", "مخصص"], group=G)
+int maLen = input.int(20, "MA", minval=5, group=G)
+int rankLen = input.int(500, "رتبة %", minval=50, group=G)
+float rvolThr = input.float(2.0, "RVOL climax", minval=1.2, step=0.1, group=G)
+float zThr = input.float(2.5, "Z climax", minval=1.5, step=0.1, group=G)
+float dryPct = input.float(0.42, "جفاف < MA ×", minval=0.2, maxval=0.6, step=0.02, group=G)
+string egxBoardLim = input.string("نشط (EGX100)", "لوحة", options=["نشط (EGX100)", "EGX30 (بيع مكشوف)", "SME تميّز", "SME نايل", "غير نشط"], group=G)
+bool blockLimitLim = input.bool(true, "منع قرب halt/LULD", group=G)
+
+
+float effRvol = profile == "مضاربة" ? 1.7 : rvolThr
+int effRank = profile == "مضاربة" ? 250 : rankLen
+
+float volMa = ta.sma(volume, maLen)
+float volStd = ta.stdev(volume, maLen)
+float rvol = volume / math.max(volMa, 1.0)
+float z = volStd > 0 ? (volume - volMa) / volStd : 0.0
+float pct = ta.percentrank(volume, effRank)
+bool climax = rvol >= effRvol or z >= zThr or pct >= 92.0
+bool dry = volume < volMa * dryPct and volMa > 0
+
+float rng = math.max(high - low, syminfo.mintick)
+float dPrevLim = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+float dayPctLim = dPrevLim > 0 ? (close - dPrevLim) / dPrevLim * 100.0 : 0.0
+float haltPctLim = egxBoardLim == "SME تميّز" or egxBoardLim == "SME نايل" or egxBoardLim == "غير نشط" ? 5.0 : 10.0
+float luldPctLim = egxBoardLim == "غير نشط" ? 5.0 : (egxBoardLim == "SME تميّز" or egxBoardLim == "SME نايل" ? 10.0 : 20.0)
+bool nearLimitLim = blockLimitLim and dPrevLim > 0 and (dayPctLim >= math.min(9.0, haltPctLim - 1.0) or dayPctLim >= luldPctLim - 0.25)
+
+bool buyClimax = climax and (close - low) / rng >= 0.55 and not nearLimitLim
+bool sellClimax = climax and (close - low) / rng <= 0.45
+float dVol = volume * close
+float dPct = ta.percentrank(dVol, effRank)
+bool dollarClimax = dPct >= 92.0
+
+color col = buyClimax ? color.lime : sellClimax ? color.red : climax ? color.orange : close >= open ? color.teal : color.maroon
+plot(volume, "V", style=plot.style_columns, color=color.new(col, climax ? 10 : 50))
+plot(volMa, "MA", color=color.yellow, linewidth=2)
+plot(rvol, "RVOL", color=color.white, scale=scale.right, linewidth=1)
+plot(effRvol, "RVOL thr", color=color.red, scale=scale.right, style=plot.style_line)
+
+plotshape(climax, "CLX", shape.diamond, location=location.top, color=col, size=size.tiny, text="!")
+plotshape(dry, "DRY", shape.xcross, location=location.bottom, color=color.gray, size=size.tiny)
+plotshape(buyClimax, "SC", shape.triangleup, location=location.belowbar, color=color.lime, size=size.tiny, text="SC", display=display.pane)
+plotshape(sellClimax, "BC", shape.triangledown, location=location.abovebar, color=color.red, size=size.tiny, text="BC", display=display.pane)
+
+var table t = table.new(position.top_left, 2, 5, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 4)
+    table.cell(t, 0, 0, "Climax", bgcolor=color.black, text_color=color.yellow, text_size=size.small)
+    table.cell(t, 1, 0, climax ? (buyClimax ? "Buy CLX" : sellClimax ? "Sell CLX" : "CLX") : dry ? "DRY" : "—", text_size=size.tiny)
+    table.cell(t, 0, 1, "RVOL/Z", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 1, str.tostring(rvol, "#.##") + " / " + str.tostring(z, "#.##"), text_size=size.tiny)
+    table.cell(t, 0, 2, "Rank %", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 2, str.tostring(pct, "#"), text_size=size.tiny)
+
+plot(climax ? 1 : 0, "EGVClx_Climax", display=display.all)
+plot(buyClimax ? 1 : 0, "EGVClx_BuyClx", display=display.all)
+plot(sellClimax ? 1 : 0, "EGVClx_SellClx", display=display.all)
+plot(dry ? 1 : 0, "EGVClx_Dry", display=display.all)
+
+alertcondition(buyClimax, "EGV buy climax", "Buy climax SC")
+alertcondition(sellClimax, "EGV sell climax", "Sell climax BC")
+
+plot(nearLimitLim ? 1 : 0, "EGX_NearLimit", display=display.data_window)

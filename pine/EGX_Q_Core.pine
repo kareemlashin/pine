@@ -1,0 +1,87 @@
+//@version=6
+library("EGX_Q_Core", overlay=true)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// مكتبة قرar مشتركة — انشر على TV: import UserName/EGX_Q_Core/1 as Q
+// تستخدم في: BOARD_UNIFIED · SCREENER · PRESETS (بعد النشر)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export type QLite
+    int act
+    float rank
+    float buy
+    float acc
+    float dist
+    int cycle
+    float dna
+    float trap
+
+export f_accDist() =>
+    float mfm = ((close - low) - (high - close)) / math.max(high - low, syminfo.mintick)
+    float cmf = ta.sma(mfm * volume, 20) / ta.sma(volume, 20)
+    float obvSl = ta.linreg(ta.obv, 10, 0) - ta.linreg(ta.obv, 10, 1)
+    bool accOk = cmf > 0 and obvSl > 0
+    bool distOk = cmf < 0 and obvSl < 0
+    float acc = math.min(100.0, (accOk ? 25.0 : 0.0) + (cmf > 0.05 ? 12.0 : cmf > 0 ? 6.0 : 0.0) + (obvSl > 0 ? 15.0 : 0.0))
+    float dist = math.min(100.0, (distOk ? 25.0 : 0.0) + (cmf < -0.05 ? 12.0 : cmf < 0 ? 6.0 : 0.0) + (obvSl < 0 ? 15.0 : 0.0))
+    [acc, dist, cmf, obvSl]
+
+export f_runnerDna(int cycle, float acc, float dist, bool squeeze, bool rs, float rvol, float rvol252) =>
+    float d = 0.0
+    d += cycle <= 4 ? 18.0 : cycle <= 7 ? 12.0 : 0.0
+    d += acc >= 55 ? 22.0 : acc >= 45 ? 12.0 : 0.0
+    d += dist < 40 ? 18.0 : dist < 50 ? 10.0 : 0.0
+    d += squeeze ? 12.0 : 0.0
+    d += rvol252 >= 1.1 or rvol >= 1.3 ? 10.0 : 0.0
+    d += rs ? 10.0 : 0.0
+    math.min(100.0, d)
+
+export f_liteDecision(float minVol, string benchSym, string egxBoard) =>
+    float atr = ta.atr(14)
+    float volMa = ta.sma(volume, 20)
+    bool liq = volMa >= minVol
+    float rvol = volume / math.max(volMa, 1.0)
+    [acc, dist, _c, _o] = f_accDist()
+    float hi = ta.highest(high, 252)
+    float lo = ta.lowest(low, 252)
+    float pctHi = hi > 0 ? (close - hi) / hi * 100.0 : 0.0
+    float rocB = lo > 0 ? (close / lo - 1.0) * 100.0 : 0.0
+    float trapF = rocB > 100 and pctHi < -28 and dist >= 38 ? 1.0 : 0.0
+    float rsi = ta.rsi(close, 14)
+    bool chase = pctHi > -3 and rsi > 72
+    float dPrevL = close[1]
+    float dayPctL = dPrevL > 0 ? (close - dPrevL) / dPrevL * 100.0 : 0.0
+    float haltPctL = egxBoard == "SME تميّز" or egxBoard == "SME نايل" or egxBoard == "غير نشط" ? 5.0 : 10.0
+    float luldPctL = egxBoard == "غير نشط" ? 5.0 : (egxBoard == "SME تميّز" or egxBoard == "SME نايل" ? 10.0 : 20.0)
+    bool nearLimit = dayPctL >= math.min(9.0, haltPctL - 1.0) or dayPctL >= luldPctL - 0.25
+    float pl = ta.pivotlow(low, 8, 8)
+    var float sl = na
+    if not na(pl)
+        sl := pl
+    bool supBr = not na(sl) and close < sl and close[1] >= sl
+    float zw = atr * 0.35
+    bool atZ = low <= nz(sl, low) + zw and close >= nz(sl, low) - zw * 1.2
+    bool ret = not na(sl) and low <= sl * 1.006 and close > sl
+    int cyc = acc >= 55 ? 4 : 3
+    if dist >= 55
+        cyc := 9
+    if supBr
+        cyc := 11
+    float br = request.security(benchSym, timeframe.period, ta.roc(close, 20), barmerge.gaps_off, barmerge.lookahead_off)
+    bool rs = ta.roc(close, 20) - br > 0
+    float rk = math.min(100.0, acc * 0.45 + (100.0 - dist) * 0.25 + (rs ? 12.0 : 0.0) + (atZ ? 8.0 : 0.0))
+    bool squeeze = atr < ta.sma(atr, 14) * 0.85
+    float dna = f_runnerDna(cyc, acc, dist, squeeze, rs, rvol, volume / math.max(ta.sma(volume, 252), 1.0))
+    bool buy = liq and acc >= 55 and dist < 50 and cyc >= 4 and cyc <= 7 and (atZ or ret) and not supBr and not chase and trapF == 0 and not nearLimit
+    bool exit = supBr or dist >= 65 or trapF > 0 or cyc == 9
+    int act = exit ? 0 : buy ? 4 : cyc <= 4 and acc >= 48 ? 2 : 1
+    QLite.new(act, rk, buy ? 1.0 : 0.0, acc, dist, cyc, dna, trapF)
+
+export f_volBounceLite(int zoneLook, float minNet) =>
+    float r = math.max(high - low, syminfo.mintick)
+    float bV = volume * (close - low) / r
+    float netPct = volume > 0 ? bV / volume * 100.0 : 50.0
+    float volMa = ta.sma(volume, 20)
+    float rvol = volume / math.max(volMa, 1.0)
+    bool bounce = close > open and rvol >= 1.0 and netPct >= minNet
+    [bounce ? 1.0 : 0.0, netPct, rvol]

@@ -1,0 +1,35 @@
+//@version=6
+indicator("EGX Volume Flow Index", shorttitle="EGX VVFI", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// VFI مبسّط (typical price × vol trend) · docs/EGX_VOLUME.md
+
+string G = "VFI"
+int len = input.int(30, "VFI MA", minval=10, group=G)
+float vCoef = input.float(2.5, "Cutoff coef", group=G)
+
+float tp = hlc3
+float tpChg = tp - tp[1]
+float inter = tpChg > 0 ? volume : tpChg < 0 ? -volume : 0.0
+float vCut = ta.stdev(inter, len) * vCoef
+float vMax = ta.sma(volume, len) * 0.2
+float vCap = math.min(vCut, vMax)
+float vInter = math.abs(inter) < vCap ? inter : inter > 0 ? vCap : -vCap
+var float vfi = 0.0
+vfi += vInter
+float vfiMa = ta.sma(vfi, len)
+
+bool bull = vfi > vfiMa and tpChg > 0
+bool bear = vfi < vfiMa and tpChg < 0
+
+plot(vfi, "EGVVFI_Val", color=color.fuchsia, linewidth=2, display=display.all)
+plot(vfiMa, "MA", color=color.gray, linewidth=1, display=display.none)
+hline(0, "0", color=color.gray)
+
+var table t = table.new(position.top_right, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "VFI", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, bull ? "In" : bear ? "Out" : "—", text_size=size.tiny)
+
+plot(bull ? 1 : 0, "EGVVFI_Bull", display=display.all)
+plot(bear ? 1 : 0, "EGVVFI_Bear", display=display.all)

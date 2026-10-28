@@ -1,0 +1,341 @@
+//@version=6
+indicator("EGX Big Trades — صفقات كبيرة شراء/بيع", shorttitle="EGX BigTrades", overlay=true, max_labels_count=100)
+
+// تنبيه: هذا المؤشر يحلل أحجام شموع الفريم الأصغر، وليس سجل التنفيذات الفعلية.
+// تصنيف الشراء/البيع تقديري من حركة الشمعة أو مقارنة الإغلاق السابق.
+
+// ===== المدخلات =====
+ltf         = input.timeframe("1", "فريم التفصيل")
+minVol      = input.int(30000, "أقل كمية للصفقة الكبيرة (سهم)", minval=1)
+maxRows     = input.int(20, "أقصى عدد صفوف جدول الصفقات", minval=5, maxval=50)
+sortBy      = input.string("الكمية", "ترتيب جدول الصفقات", options=["الوقت", "الكمية"])
+classMode   = input.string("اتجاه الشمعة", "طريقة تصنيف شراء/بيع", options=["اتجاه الشمعة", "مقارنة بإغلاق السابق"])
+startT      = input.time(timestamp("19 Jul 2026 00:00 +0300"), "من تاريخ")
+endT        = input.time(timestamp("18 Oct 2026 23:59 +0300"), "إلى تاريخ")
+binSize     = input.float(0.05, "عرض الشريحة السعرية (ج)", minval=0.01, step=0.01)
+topLevels   = input.int(12, "عدد المستويات السعرية", minval=5, maxval=20)
+maxDailyRows = input.int(18, "أقصى أيام في الجدول اليومي", minval=5, maxval=40)
+showTrades  = input.bool(true, "جدول الصفقات الكبيرة")
+showSummary = input.bool(true, "جدول الملخص")
+showDaily   = input.bool(true, "جدول يومي")
+showLevels  = input.bool(true, "جدول الكمية عند كل سعر")
+showLabels  = input.bool(true, "علامات أكبر الصفقات")
+logTrades   = input.bool(false, "اطبع الصفقات في Pine Logs")
+
+// ===== التخزين =====
+var array<float> bScore = array.new<float>()
+var array<float> bVol   = array.new<float>()
+var array<float> bPrice = array.new<float>()
+var array<float> bHi    = array.new<float>()
+var array<float> bLo    = array.new<float>()
+var array<int>   bTime  = array.new<int>()
+var array<int>   bSide  = array.new<int>()
+
+var map<int, float> lvlVol  = map.new<int, float>()
+var map<int, float> lvlBuy  = map.new<int, float>()
+var map<int, float> lvlSell = map.new<int, float>()
+var map<int, int>   dCnt     = map.new<int, int>()
+var map<int, float> dBuyVol  = map.new<int, float>()
+var map<int, float> dSellVol = map.new<int, float>()
+var map<int, float> dBuyVal  = map.new<int, float>()
+var map<int, float> dSellVal = map.new<int, float>()
+
+var float totalVol = 0.0
+var float totalVal = 0.0
+var int scanned = 0
+var float prevC = na
+
+var int bigCnt = 0
+var float bigVol = 0.0
+var float bigVal = 0.0
+var int buyCnt = 0
+var float buyVol = 0.0
+var float buyVal = 0.0
+var int sellCnt = 0
+var float sellVol = 0.0
+var float sellVal = 0.0
+var int neutCnt = 0
+var float neutVol = 0.0
+var float neutVal = 0.0
+var float maxBuyVol = 0.0
+var float maxBuyPx = na
+var int maxBuyT = na
+var float maxSellVol = 0.0
+var float maxSellPx = na
+var int maxSellT = na
+
+[vArr, oArr, cArr, hArr, lArr, tArr] = request.security_lower_tf(syminfo.tickerid, ltf, [volume, open, close, high, low, time])
+
+float barBuy = 0.0
+float barSell = 0.0
+
+// ===== المعالجة =====
+if barstate.isconfirmed and array.size(vArr) > 0
+    for i = 0 to array.size(vArr) - 1
+        int t = array.get(tArr, i)
+        float v = array.get(vArr, i)
+        float o = array.get(oArr, i)
+        float c = array.get(cArr, i)
+        float h = array.get(hArr, i)
+        float l = array.get(lArr, i)
+
+        int side = 0
+        if classMode == "اتجاه الشمعة"
+            side := c > o ? 1 : c < o ? -1 : (not na(prevC) and c > prevC ? 1 : not na(prevC) and c < prevC ? -1 : 0)
+        else
+            side := not na(prevC) and c > prevC ? 1 : not na(prevC) and c < prevC ? -1 : 0
+
+        if t >= startT and t <= endT and not na(v) and v > 0 and not na(c)
+            int k = int(math.round(c / binSize))
+            lvlVol.put(k, nz(lvlVol.get(k)) + v)
+            if side > 0
+                lvlBuy.put(k, nz(lvlBuy.get(k)) + v)
+            else if side < 0
+                lvlSell.put(k, nz(lvlSell.get(k)) + v)
+
+            totalVol += v
+            totalVal += v * c
+            scanned += 1
+
+            if v >= minVol
+                int dk = year(t, "Africa/Cairo") * 10000 + month(t, "Africa/Cairo") * 100 + dayofmonth(t, "Africa/Cairo")
+                dCnt.put(dk, nz(dCnt.get(dk)) + 1)
+                bigCnt += 1
+                bigVol += v
+                bigVal += v * c
+
+                if side > 0
+                    buyCnt += 1
+                    buyVol += v
+                    buyVal += v * c
+                    barBuy += v
+                    dBuyVol.put(dk, nz(dBuyVol.get(dk)) + v)
+                    dBuyVal.put(dk, nz(dBuyVal.get(dk)) + v * c)
+                    if v > maxBuyVol
+                        maxBuyVol := v
+                        maxBuyPx := c
+                        maxBuyT := t
+                else if side < 0
+                    sellCnt += 1
+                    sellVol += v
+                    sellVal += v * c
+                    barSell += v
+                    dSellVol.put(dk, nz(dSellVol.get(dk)) + v)
+                    dSellVal.put(dk, nz(dSellVal.get(dk)) + v * c)
+                    if v > maxSellVol
+                        maxSellVol := v
+                        maxSellPx := c
+                        maxSellT := t
+                else
+                    neutCnt += 1
+                    neutVol += v
+                    neutVal += v * c
+
+                if logTrades
+                    log.info("{0},{1},{2},{3},{4}", str.format_time(t, "yyyy-MM-dd HH:mm", "Africa/Cairo"), side > 0 ? "شراء" : side < 0 ? "بيع" : "محايد", str.tostring(c, "0.00"), str.tostring(v, "#"), str.tostring(v * c, "#"))
+
+                float score = sortBy == "الكمية" ? v : float(t)
+                if array.size(bScore) < maxRows or score > array.min(bScore)
+                    array.push(bScore, score)
+                    array.push(bVol, v)
+                    array.push(bPrice, c)
+                    array.push(bHi, h)
+                    array.push(bLo, l)
+                    array.push(bTime, t)
+                    array.push(bSide, side)
+                    if array.size(bScore) > maxRows
+                        int idx = array.indexof(bScore, array.min(bScore))
+                        array.remove(bScore, idx)
+                        array.remove(bVol, idx)
+                        array.remove(bPrice, idx)
+                        array.remove(bHi, idx)
+                        array.remove(bLo, idx)
+                        array.remove(bTime, idx)
+                        array.remove(bSide, idx)
+        prevC := c
+
+plot(barBuy, "شراء كبير (أسهم)", color=color.rgb(0, 190, 125), display=display.data_window)
+plot(barSell, "بيع كبير (أسهم)", color=color.rgb(235, 75, 85), display=display.data_window)
+plot(barBuy - barSell, "صافي كبير (أسهم)", color=color.rgb(65, 145, 235), display=display.data_window)
+
+// لوحتان فقط: يسار = ملخص+يومي ، يمين = صفقات+مستويات. يمنع التداخل تماماً.
+int leftRows = 14 + maxDailyRows
+int rightRows = 6 + maxRows + topLevels
+color panelBg = color.rgb(18, 24, 34)
+var table tbL = table.new(position.top_left, 8, leftRows, bgcolor=panelBg, border_width=1, border_color=color.rgb(70, 82, 98), frame_color=color.rgb(40, 70, 110), frame_width=2)
+var table tbR = table.new(position.top_right, 8, rightRows, bgcolor=panelBg, border_width=1, border_color=color.rgb(70, 82, 98), frame_color=color.rgb(40, 70, 110), frame_width=2)
+var array<label> lbls = array.new<label>()
+
+color hdrBg  = color.rgb(45, 55, 72)
+color titBg  = color.rgb(25, 75, 135)
+color buyBg  = color.rgb(12, 78, 58)
+color selBg  = color.rgb(110, 32, 38)
+color neuBg  = color.rgb(48, 54, 64)
+color topLevelBg = color.rgb(10, 88, 68)
+color rowBg = color.rgb(32, 40, 52)
+color warningBg = color.rgb(120, 35, 35)
+color spacerBg = color.rgb(18, 24, 34)
+color txt = color.white
+
+fmtDate(int key) =>
+    string s = str.tostring(key)
+    str.substring(s, 0, 4) + "-" + str.substring(s, 4, 6) + "-" + str.substring(s, 6, 8)
+
+fillRow(table tb, int row, array<string> vals, color bg) =>
+    int lastCol = array.size(vals) - 1
+    for col = 0 to lastCol
+        table.cell(tb, col, row, array.get(vals, col), bgcolor=bg, text_color=txt, text_size=size.tiny, text_halign=text.align_center)
+
+titleRow(table tb, int row, int lastCol, string txtIn, color bg) =>
+    table.cell(tb, 0, row, txtIn, text_color=txt, bgcolor=bg, text_size=size.small, text_halign=text.align_center)
+    table.merge_cells(tb, 0, row, lastCol, row)
+
+if barstate.islast
+    table.clear(tbL, 0, 0, 7, leftRows - 1)
+    table.clear(tbR, 0, 0, 7, rightRows - 1)
+
+    // ---- اللوحة اليسرى: الملخص ثم الأيام الأحدث ----
+    int rL = 0
+    if showSummary
+        titleRow(tbL, rL, 7, "ملخص الصفقات الكبيرة ≥ " + str.tostring(minVol, "#,###"), titBg)
+        rL += 1
+        fillRow(tbL, rL, array.from("الجانب", "العدد", "الأسهم", "القيمة ج", "متوسط", "% كمية", "", ""), hdrBg)
+        rL += 1
+
+        array<string> names = array.from("شراء*", "بيع*", "محايد", "الإجمالي")
+        array<float> cnts = array.from(float(buyCnt), float(sellCnt), float(neutCnt), float(bigCnt))
+        array<float> vols = array.from(buyVol, sellVol, neutVol, bigVol)
+        array<float> valsA = array.from(buyVal, sellVal, neutVal, bigVal)
+        for i = 0 to 3
+            color bg = i == 0 ? buyBg : i == 1 ? selBg : neuBg
+            float vv = array.get(vols, i)
+            float vl = array.get(valsA, i)
+            fillRow(tbL, rL, array.from(array.get(names, i), str.tostring(array.get(cnts, i), "#,###"), str.tostring(vv, "#,###"), str.tostring(vl, "#,###"), vv > 0 ? str.tostring(vl / vv, "0.000") : "-", bigVol > 0 ? str.tostring(100.0 * vv / bigVol, "0.0") + "%" : "-", "", ""), bg)
+            rL += 1
+
+        fillRow(tbL, rL, array.from("صافي شراء-بيع", "", str.tostring(buyVol - sellVol, "#,###"), str.tostring(buyVal - sellVal, "#,###"), "", "", "", ""), hdrBg)
+        rL += 1
+        string maxBuyText = na(maxBuyPx) ? "-" : str.tostring(maxBuyVol, "#,###") + " @ " + str.tostring(maxBuyPx, "0.00") + " | " + str.format_time(maxBuyT, "yyyy-MM-dd HH:mm", "Africa/Cairo")
+        string maxSellText = na(maxSellPx) ? "-" : str.tostring(maxSellVol, "#,###") + " @ " + str.tostring(maxSellPx, "0.00") + " | " + str.format_time(maxSellT, "yyyy-MM-dd HH:mm", "Africa/Cairo")
+        titleRow(tbL, rL, 7, "أكبر شراء*: " + maxBuyText, buyBg)
+        rL += 1
+        titleRow(tbL, rL, 7, "أكبر بيع*: " + maxSellText, selBg)
+        rL += 1
+        titleRow(tbL, rL, 7, "الكبيرة " + (totalVol > 0 ? str.tostring(100.0 * bigVol / totalVol, "0.0") : "0") + "% من حجم الفترة (" + str.tostring(totalVol, "#,###") + ") | VWAP " + (totalVol > 0 ? str.tostring(totalVal / totalVol, "0.000") : "-"), neuBg)
+        rL += 1
+        titleRow(tbL, rL, 7, "* تصنيف تقديري وليس اتجاه المبادر الفعلي", neuBg)
+        rL += 1
+
+    if showSummary and showDaily
+        titleRow(tbL, rL, 7, "", spacerBg)
+        rL += 1
+
+    if showDaily
+        titleRow(tbL, rL, 7, "ملخص يومي | آخر " + str.tostring(maxDailyRows) + " يوم", titBg)
+        rL += 1
+        fillRow(tbL, rL, array.from("التاريخ", "عدد", "شراء", "بيع", "صافي", "م.شراء", "م.بيع", "% شراء"), hdrBg)
+        rL += 1
+        array<int> dkeys = dCnt.keys()
+        array.sort(dkeys, order.ascending)
+        int totalD = array.size(dkeys)
+        int rowsD = math.min(totalD, maxDailyRows)
+        int startD = totalD - rowsD
+        if rowsD > 0
+            for i = 0 to rowsD - 1
+                int key = array.get(dkeys, startD + i)
+                float bvv = nz(dBuyVol.get(key))
+                float svv = nz(dSellVol.get(key))
+                float bvl = nz(dBuyVal.get(key))
+                float svl = nz(dSellVal.get(key))
+                float net = bvv - svv
+                color bg = net > 0 ? buyBg : net < 0 ? selBg : neuBg
+                fillRow(tbL, rL, array.from(fmtDate(key), str.tostring(nz(dCnt.get(key))), str.tostring(bvv, "#,###"), str.tostring(svv, "#,###"), str.tostring(net, "#,###"), bvv > 0 ? str.tostring(bvl / bvv, "0.00") : "-", svv > 0 ? str.tostring(svl / svv, "0.00") : "-", bvv + svv > 0 ? str.tostring(100.0 * bvv / (bvv + svv), "0") + "%" : "-"), bg)
+                rL += 1
+
+    // ---- اللوحة اليمنى: الصفقات ثم الكمية عند السعر ----
+    int rR = 0
+    if showTrades
+        titleRow(tbR, rR, 7, "صفقات ≥ " + str.tostring(minVol, "#,###") + " | شموع " + ltf, titBg)
+        rR += 1
+        fillRow(tbR, rR, array.from("#", "التاريخ/الوقت", "الجانب", "السعر", "الكمية", "القيمة ج", "أدنى", "أعلى"), hdrBg)
+        rR += 1
+
+        int nTrades = array.size(bScore)
+        if nTrades == 0
+            titleRow(tbR, rR, 7, "لا توجد بيانات ضمن الشروط الحالية", warningBg)
+            rR += 1
+        else
+            array<int> idxs = array.new<int>()
+            for j = 0 to nTrades - 1
+                array.push(idxs, j)
+            for a = 0 to nTrades - 2
+                for b = a + 1 to nTrades - 1
+                    int ia = array.get(idxs, a)
+                    int ib = array.get(idxs, b)
+                    bool swap = sortBy == "الكمية" ? array.get(bVol, ib) > array.get(bVol, ia) : array.get(bTime, ib) < array.get(bTime, ia)
+                    if swap
+                        array.set(idxs, a, ib)
+                        array.set(idxs, b, ia)
+            for i = 0 to nTrades - 1
+                int j = array.get(idxs, i)
+                int sd = array.get(bSide, j)
+                color bg = sd > 0 ? buyBg : sd < 0 ? selBg : neuBg
+                fillRow(tbR, rR, array.from(str.tostring(i + 1), str.format_time(array.get(bTime, j), "yyyy-MM-dd HH:mm", "Africa/Cairo"), sd > 0 ? "شراء*" : sd < 0 ? "بيع*" : "محايد", str.tostring(array.get(bPrice, j), "0.00"), str.tostring(array.get(bVol, j), "#,###"), str.tostring(array.get(bVol, j) * array.get(bPrice, j), "#,###"), str.tostring(array.get(bLo, j), "0.00"), str.tostring(array.get(bHi, j), "0.00")), bg)
+                rR += 1
+
+    if showTrades and showLevels
+        titleRow(tbR, rR, 7, "", spacerBg)
+        rR += 1
+
+    if showLevels
+        titleRow(tbR, rR, 7, "الكمية عند كل سعر | شريحة " + str.tostring(binSize, "0.00"), titBg)
+        rR += 1
+        fillRow(tbR, rR, array.from("#", "السعر", "شراء*", "بيع*", "الإجمالي", "القيمة ج", "% كمية", ""), hdrBg)
+        rR += 1
+        array<int> keys = lvlVol.keys()
+        array<float> vals = lvlVol.values()
+        int m = array.size(keys)
+        if m > 0
+            array<int> order2 = array.new<int>()
+            for j = 0 to m - 1
+                array.push(order2, j)
+            for a = 0 to m - 2
+                for b = a + 1 to m - 1
+                    int ia = array.get(order2, a)
+                    int ib = array.get(order2, b)
+                    if array.get(vals, ib) > array.get(vals, ia)
+                        array.set(order2, a, ib)
+                        array.set(order2, b, ia)
+            int rows = math.min(m, topLevels)
+            for i = 0 to rows - 1
+                int j = array.get(order2, i)
+                int k = array.get(keys, j)
+                float sh = array.get(vals, j)
+                float px = k * binSize
+                color bg = i == 0 ? topLevelBg : rowBg
+                fillRow(tbR, rR, array.from(str.tostring(i + 1), str.tostring(px, "0.00"), str.tostring(nz(lvlBuy.get(k)), "#,###"), str.tostring(nz(lvlSell.get(k)), "#,###"), str.tostring(sh, "#,###"), str.tostring(sh * px, "#,###"), totalVol > 0 ? str.tostring(100.0 * sh / totalVol, "0.0") + "%" : "-", ""), bg)
+                rR += 1
+            titleRow(tbR, rR, 7, "* الشراء/البيع تقديري حسب اتجاه الشموع", hdrBg)
+
+    // ---- علامات أكبر الصفقات ----
+    for lb in lbls
+        label.delete(lb)
+    array.clear(lbls)
+    if showLabels and array.size(bScore) > 0
+        array<int> idxL = array.new<int>()
+        for j = 0 to array.size(bVol) - 1
+            array.push(idxL, j)
+        int nLabels = array.size(idxL)
+        for a = 0 to nLabels - 2
+            for b = a + 1 to nLabels - 1
+                int ia = array.get(idxL, a)
+                int ib = array.get(idxL, b)
+                if array.get(bVol, ib) > array.get(bVol, ia)
+                    array.set(idxL, a, ib)
+                    array.set(idxL, b, ia)
+        int labelCount = math.min(array.size(bScore), 30)
+        for i = 0 to labelCount - 1
+            int j = array.get(idxL, i)
+            int sd = array.get(bSide, j)
+            label lb = label.new(array.get(bTime, j), array.get(bPrice, j), str.tostring(array.get(bVol, j), "#,###"), xloc=xloc.bar_time, style=label.style_label_down, color=sd > 0 ? color.new(color.rgb(0, 155, 105), 10) : sd < 0 ? color.new(color.rgb(210, 55, 65), 10) : color.new(color.rgb(95, 105, 120), 10), textcolor=color.white, size=size.small)
+            array.push(lbls, lb)

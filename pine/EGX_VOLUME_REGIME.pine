@@ -1,0 +1,31 @@
+//@version=6
+indicator("EGX Volume Regime — L/M/H", shorttitle="EGX VRgm", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// نظام حجم: منخفض / عادي / مرتفع / extreme · docs/EGX_VOLUME.md
+
+string G = "Regime"
+int maLen = input.int(20, "MA", group=G)
+float lowR = input.float(0.75, "Low RVOL max", group=G)
+float highR = input.float(1.4, "High RVOL min", group=G)
+float extR = input.float(2.2, "Extreme RVOL", group=G)
+
+float vma = ta.sma(volume, maLen)
+float rvol = volume / math.max(vma, 1.0)
+
+int regime = rvol >= extR ? 4 : rvol >= highR ? 3 : rvol <= lowR ? 1 : 2
+string tag = regime == 4 ? "EXT" : regime == 3 ? "HIGH" : regime == 1 ? "LOW" : "MID"
+
+color rCol = regime == 4 ? color.orange : regime == 3 ? color.lime : regime == 1 ? color.gray : color.teal
+plot(regime, "EGVRgm_Code", color=rCol, linewidth=2, style=plot.style_stepline, display=display.all)
+plot(rvol, "RVOL", color=color.yellow, linewidth=1, display=display.none)
+
+var table t = table.new(position.middle_right, 2, 3, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 2)
+    table.cell(t, 0, 0, "Regime", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, tag, text_color=rCol, text_size=size.normal)
+    table.cell(t, 0, 1, "RVOL", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 1, str.tostring(rvol, "#.##"), text_size=size.tiny)
+
+plot(regime >= 3 ? 1 : 0, "EGVRgm_High", display=display.all)
+plot(regime == 4 ? 1 : 0, "EGVRgm_Extreme", display=display.all)

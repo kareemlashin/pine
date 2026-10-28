@@ -1,0 +1,25 @@
+//@version=6
+indicator("EGX Tool 81 مربع 9 — Gann Square of 9", shorttitle="EGX T-SQUARE9", overlay=true, max_labels_count=80, max_lines_count=80, max_boxes_count=40, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة و موجات · #81/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+float root = math.sqrt(math.max(close, 0.0))
+float up = math.pow(root + 1.0, 2.0)
+float dn = math.pow(math.max(root - 1.0, 0.0), 2.0)
+int vote = close > (up + dn) / 2.0 ? 1 : -1
+plot(up, "Sq9+", color=color.red)
+plot(dn, "Sq9-", color=color.lime)
+
+plot(vote, "EGXT_SQUARE9_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_SQUARE9_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_SQUARE9_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "SQUARE9", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-SQUARE9 صاعد", "EGX Tool SQUARE9: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-SQUARE9 هابط", "EGX Tool SQUARE9: vote هابط")

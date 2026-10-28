@@ -1,0 +1,106 @@
+//@version=6
+indicator("EGX عدّاء — ماسح", shorttitle="EGX R Scr", overlay=false, calc_bars_count=5000)
+
+// ماسح استثمار عدّاء — بدون overlay · إطار D
+// Pro: EGXR_ScreenerPro = 1 · Ultra: EGXR_ScreenerUltra = 1 · Buy: EGXR_Buy = 1
+// تحليل كامل: pine/EGX_RUNNER_INVEST.pine
+
+string G = "فلتر"
+string profile = input.string("استثمار عدّاء", "ملف", options=["استثمار عدّاء", "مخصص"], group=G)
+float minAccIn = input.float(58.0, "حد تجميع", group=G)
+float maxDistIn = input.float(50.0, "أقصى تصريف", group=G)
+float minRankIn = input.float(60.0, "حد Rank", group=G)
+float minOppIn = input.float(62.0, "حد فرصة", group=G)
+float minDnaIn = input.float(55.0, "DNA Ultra", group=G)
+int minSetupIn = input.int(7, "إعداد /11", group=G)
+int minGatesIn = input.int(8, "بوابات /10", group=G)
+float minVolIn = input.float(800.0, "متوسط حجم", group=G)
+string egxBoard = input.string("نشط (EGX100)", "لوحة", options=["نشط (EGX100)", "EGX30 (بيع مكشوف)", "SME تميّز", "SME نايل", "غير نشط"], group=G)
+bool onClose = input.bool(true, "إغلاق الشمعة", group=G)
+
+bool custom = profile == "مخصص"
+float effMinAcc = custom ? minAccIn : 58.0
+float effMaxDist = custom ? maxDistIn : 50.0
+float effMinRank = custom ? minRankIn : 60.0
+float effMinOpp = custom ? minOppIn : 62.0
+float effMinDna = custom ? minDnaIn : 55.0
+int effMinSetup = custom ? minSetupIn : 7
+int effMinGates = custom ? minGatesIn : 8
+float effMinVol = custom ? minVolIn : 800.0
+
+bool sigOk = not onClose or barstate.isconfirmed
+
+float ema21 = ta.ema(close, 21)
+float ema50 = ta.ema(close, 50)
+bool bullStack = ema21 > ema50
+float wClose = request.security(syminfo.tickerid, "W", close, barmerge.gaps_off, barmerge.lookahead_off)
+float wEma50 = request.security(syminfo.tickerid, "W", ta.ema(close, 50), barmerge.gaps_off, barmerge.lookahead_off)
+bool htfBull = wClose > wEma50
+float rsi = ta.rsi(close, 14)
+float atr = ta.atr(14)
+float volMa = ta.sma(volume, 20)
+bool liqOk = volMa >= effMinVol
+float rvol = volume / math.max(volMa, 1.0)
+
+float cmf = ta.sma(((close - low) - (high - close)) / math.max(high - low, syminfo.mintick) * volume, 20) / ta.sma(volume, 20)
+float obvSl = ta.linreg(ta.obv, 10, 0) - ta.linreg(ta.obv, 10, 1)
+float accumScore = math.min(100.0, (cmf > 0 and obvSl > 0 ? 40.0 : 0.0) + (cmf > 0 ? 15.0 : 0.0) + (obvSl > 0 ? 10.0 : 0.0))
+float distRisk = math.min(100.0, (cmf < 0 and obvSl < 0 ? 40.0 : 0.0) + (cmf < -0.05 ? 10.0 : 0.0))
+
+float pl = ta.pivotlow(low, 8, 8)
+var float swingLow = na
+if not na(pl)
+    swingLow := pl
+bool supportBreak = sigOk and not na(swingLow) and close < swingLow and close[1] >= swingLow
+float zw = atr * 0.35
+bool nearSupport = low <= nz(swingLow, low) + zw and close >= nz(swingLow, low) - zw * 1.2
+
+string mkt = "EGX:EGX30"
+float mom30 = request.security(mkt, timeframe.period, close[20] > 0 ? (close / close[20] - 1.0) * 100.0 : 0.0, barmerge.gaps_off, barmerge.lookahead_off)
+int tr30 = request.security(mkt, timeframe.period, close > ta.ema(close, 20) ? 1 : -1, barmerge.gaps_off, barmerge.lookahead_off)
+bool bearBlock = mom30 < -4.0 and tr30 <= -1
+
+float dPrev = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+float dayPct = dPrev > 0 ? (close - dPrev) / dPrev * 100.0 : 0.0
+float haltPct = egxBoard == "SME تميّز" or egxBoard == "SME نايل" or egxBoard == "غير نشط" ? 5.0 : 10.0
+float luldPct = egxBoard == "غير نشط" ? 5.0 : (egxBoard == "SME تميّز" or egxBoard == "SME نايل" ? 10.0 : 20.0)
+bool nearLimit = dayPct >= math.min(9.0, haltPct - 1.0) or dayPct >= luldPct - 0.25
+
+float hi252 = ta.highest(high, 252)
+float pctHi = hi252 > 0 ? (close - hi252) / hi252 * 100.0 : 0.0
+bool chase = pctHi > -2.5 and rsi > 74
+
+int cycle12 = accumScore >= effMinAcc and distRisk < effMaxDist ? 4 : distRisk >= 55 ? 9 : 3
+bool cycleBuyOk = cycle12 >= 4 and cycle12 <= 7
+
+int setupHits = 0
+setupHits += bullStack or htfBull ? 1 : 0
+setupHits += accumScore >= effMinAcc ? 1 : 0
+setupHits += distRisk < effMaxDist ? 1 : 0
+setupHits += nearSupport ? 1 : 0
+setupHits += cycleBuyOk ? 1 : 0
+setupHits += rvol >= 1.0 ? 1 : 0
+setupHits += htfBull ? 1 : 0
+setupHits += liqOk ? 1 : 0
+
+float rank = math.min(100.0, accumScore * 0.5 + setupHits / 8.0 * 40.0)
+float opportunity = math.min(100.0, accumScore * 0.35 + rank * 0.35 + (100.0 - distRisk) * 0.2)
+bool oppStrong = opportunity >= effMinOpp and setupHits >= 7 and distRisk < 55
+
+float runnerDna = math.min(100.0, (accumScore >= 55 ? 25.0 : 0.0) + (distRisk < 40 ? 20.0 : 0.0) + (rvol >= 1.15 ? 15.0 : 0.0) + (cycleBuyOk ? 15.0 : 0.0))
+int gatesPass = (liqOk ? 1 : 0) + (htfBull ? 1 : 0) + (accumScore >= effMinAcc ? 1 : 0) + (distRisk < effMaxDist ? 1 : 0) + (cycleBuyOk ? 1 : 0) + (nearSupport ? 1 : 0) + (not bearBlock ? 1 : 0) + (not chase ? 1 : 0) + (not nearLimit ? 1 : 0) + (not supportBreak ? 1 : 0)
+
+bool investBuy = sigOk and liqOk and accumScore >= effMinAcc and distRisk < effMaxDist and cycleBuyOk and nearSupport and setupHits >= effMinSetup and rank >= effMinRank and gatesPass >= effMinGates and not bearBlock and not chase and not nearLimit and not supportBreak
+bool watchList = sigOk and cycle12 <= 4 and accumScore >= effMinAcc - 5 and distRisk < effMaxDist and liqOk
+bool screenerPass = watchList and rank >= 55 and setupHits >= 6
+bool screenerPro = investBuy or (watchList and accumScore >= 60 and distRisk < 42 and setupHits >= 7 and rank >= 58)
+bool screenerUltra = screenerPro and oppStrong and runnerDna >= effMinDna and gatesPass >= 9
+
+plot(investBuy ? 1 : 0, "EGXR_Buy", display=display.data_window)
+plot(screenerPass ? 1 : 0, "EGXR_Screener", display=display.data_window)
+plot(screenerPro ? 1 : 0, "EGXR_ScreenerPro", display=display.data_window)
+plot(screenerUltra ? 1 : 0, "EGXR_ScreenerUltra", display=display.data_window)
+plot(rank, "EGXR_Rank", display=display.data_window)
+plot(runnerDna, "EGXR_DNA", display=display.data_window)
+plot(gatesPass, "EGXR_GatesPass", display=display.data_window)
+plot(1, "EGXR_RunnerScr", display=display.data_window)

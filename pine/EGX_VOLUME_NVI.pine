@@ -1,0 +1,36 @@
+//@version=6
+indicator("EGX Volume NVI · PVI", shorttitle="EGX VNP", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// Negative / Positive Volume Index · docs/EGX_VOLUME.md
+
+string G = "NVI/PVI"
+int maLen = input.int(255, "NVI EMA", minval=50, group=G)
+
+var float nvi = 1000.0
+var float pvi = 1000.0
+float chg = close[1] > 0 ? (close - close[1]) / close[1] * 100.0 : 0.0
+
+if volume < volume[1]
+    nvi += nvi * chg / 100.0
+if volume > volume[1]
+    pvi += pvi * chg / 100.0
+
+float nviMa = ta.ema(nvi, maLen)
+float pviMa = ta.ema(pvi, maLen)
+
+bool smart = nvi > nviMa and close > ta.sma(close, 50)
+bool crowd = pvi > pviMa and volume > ta.sma(volume, 20)
+
+plot(nvi, "NVI", color=color.teal, linewidth=2)
+plot(nviMa, "NVI MA", color=color.new(color.teal, 50))
+plot(pvi, "PVI", color=color.orange, linewidth=1)
+plot(pviMa, "PVI MA", color=color.new(color.orange, 50))
+
+var table t = table.new(position.top_right, 2, 3, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 2)
+    table.cell(t, 0, 0, "NVI/PVI", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, smart ? "Smart $" : crowd ? "Crowd $" : "—", text_size=size.tiny)
+
+plot(smart ? 1 : 0, "EGVNP_Smart", display=display.all)
+plot(crowd ? 1 : 0, "EGVNP_Crowd", display=display.all)

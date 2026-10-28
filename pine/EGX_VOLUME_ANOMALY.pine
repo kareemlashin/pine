@@ -1,0 +1,49 @@
+//@version=6
+indicator("EGX Volume Anomaly — spike days", shorttitle="EGX VAnom", overlay=true, max_labels_count=100, max_tables_count=2, calc_bars_count=5000)
+
+// أيام شذوذ: RVOL · Z · gap · حجم×سعر · docs/EGX_VOLUME.md
+
+string G = "إعداد"
+int look = input.int(252, "رتبة %", minval=60, group=G)
+float zThr = input.float(2.2, "Z حد", group=G)
+float gapPct = input.float(1.5, "Gap %", minval=0.5, group=G)
+bool markLabels = input.bool(true, "تسميات على الشارت", group=G)
+
+float volMa = ta.sma(volume, 20)
+float rvol = volume / math.max(volMa, 1.0)
+float z = (volume - volMa) / math.max(ta.stdev(volume, 20), 1.0)
+float pct = ta.percentrank(volume, look)
+float dVol = volume * close
+float dPct = ta.percentrank(dVol, look)
+
+float prevC = close[1]
+float gapUp = prevC > 0 ? (open - prevC) / prevC * 100.0 : 0.0
+float gapDn = prevC > 0 ? (prevC - open) / prevC * 100.0 : 0.0
+bool gap = gapUp >= gapPct or gapDn >= gapPct
+
+bool anom = rvol >= 2.0 or z >= zThr or pct >= 95.0 or dPct >= 95.0
+bool anomGap = anom and gap
+
+string tag = anomGap ? "GAP!" : anom ? "VOL!" : "—"
+color c = close >= open ? color.lime : color.red
+
+plotshape(anom, "Anomaly", shape.flag, location=location.abovebar, color=c, size=size.tiny, text="!")
+plotshape(anomGap, "GapAnom", shape.xcross, location=location.abovebar, color=color.orange, size=size.small)
+
+var label lb = na
+if markLabels and barstate.isconfirmed and anom
+    label.delete(lb)
+    lb := label.new(bar_index, high, tag + "\nR" + str.tostring(rvol, "#.#") + " Z" + str.tostring(z, "#.#"), style=label.style_label_down, color=color.new(color.black, 30), textcolor=color.white, size=size.tiny)
+
+var table t = table.new(position.top_left, 2, 3, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 2)
+    table.cell(t, 0, 0, "Anomaly", bgcolor=color.black, text_color=color.orange, text_size=size.small)
+    table.cell(t, 1, 0, anom ? "YES" : "—", text_size=size.tiny)
+    table.cell(t, 0, 1, "Rank %", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 1, str.tostring(pct, "#"), text_size=size.tiny)
+
+plot(anom ? 1 : 0, "EGVAn_Anom", display=display.all)
+plot(anomGap ? 1 : 0, "EGVAn_GapVol", display=display.all)
+
+alertcondition(anomGap, "Gap+Vol", "Volume anomaly with gap")

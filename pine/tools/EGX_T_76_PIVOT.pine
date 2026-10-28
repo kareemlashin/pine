@@ -1,0 +1,29 @@
+//@version=6
+indicator("EGX Tool 76 بيفوت كلاسيك — Classic Floor Pivots", shorttitle="EGX T-PIVOT", overlay=true, max_labels_count=80, max_lines_count=80, max_boxes_count=40, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة و موجات · #76/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+float dHi = request.security(syminfo.tickerid, "D", high[1], barmerge.gaps_off, barmerge.lookahead_off)
+float dLo = request.security(syminfo.tickerid, "D", low[1], barmerge.gaps_off, barmerge.lookahead_off)
+float dCl = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+float pp = (dHi + dLo + dCl) / 3.0
+float r1 = 2.0 * pp - dLo
+float s1 = 2.0 * pp - dHi
+int vote = close > pp ? 1 : -1
+plot(r1, "R1", color=color.red)
+plot(pp, "PP", color=color.yellow, linewidth=2)
+plot(s1, "S1", color=color.lime)
+
+plot(vote, "EGXT_PIVOT_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_PIVOT_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_PIVOT_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "PIVOT", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-PIVOT صاعد", "EGX Tool PIVOT: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-PIVOT هابط", "EGX Tool PIVOT: vote هابط")

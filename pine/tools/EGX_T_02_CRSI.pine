@@ -1,0 +1,29 @@
+//@version=6
+indicator("EGX Tool 02 كونورز RSI — Connors RSI-2", shorttitle="EGX T-CRSI", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة أ الزخم · #02/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+int rsiLen = input.int(3, "RSI")
+int stkLen = input.int(2, "Streak RSI")
+int prLen = input.int(100, "PercentRank")
+float streak = 0.0
+streak := close > close[1] ? (nz(streak[1]) > 0 ? nz(streak[1]) + 1.0 : 1.0) : close < close[1] ? (nz(streak[1]) < 0 ? nz(streak[1]) - 1.0 : -1.0) : 0.0
+float v = (ta.rsi(close, rsiLen) + ta.rsi(streak, stkLen) + ta.percentrank(ta.roc(close, 1), prLen)) / 3.0
+int vote = v < 15 ? 1 : v > 85 ? -1 : 0
+plot(v, "EGXT_CRSI_Val", color=color.orange, linewidth=2)
+hline(15, "15", color=color.lime)
+hline(85, "85", color=color.red)
+
+plot(vote, "EGXT_CRSI_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_CRSI_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_CRSI_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "CRSI", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-CRSI صاعد", "EGX Tool CRSI: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-CRSI هابط", "EGX Tool CRSI: vote هابط")

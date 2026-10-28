@@ -1,0 +1,31 @@
+//@version=6
+indicator("EGX Tool 12 فيشر — Fisher Transform", shorttitle="EGX T-FISHER", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة أ الزخم · #12/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+int len = input.int(10, "Fisher")
+float fhh = ta.highest(hl2, len)
+float fll = ta.lowest(hl2, len)
+float fv = 0.0
+fv := 0.66 * ((hl2 - fll) / math.max(fhh - fll, syminfo.mintick) - 0.5) + 0.67 * nz(fv[1])
+fv := math.max(math.min(fv, 0.999), -0.999)
+float fish = 0.0
+fish := 0.5 * math.log((1.0 + fv) / (1.0 - fv)) + 0.5 * nz(fish[1])
+int vote = fish > fish[1] and fish > 0 ? 1 : fish < fish[1] and fish < 0 ? -1 : 0
+plot(fish, "EGXT_FISH_Val", color=color.fuchsia, linewidth=2)
+plot(fish[1], "EGXT_FISH_Trig", color=color.gray)
+hline(0, "0", color=color.gray)
+
+plot(vote, "EGXT_FISHER_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_FISHER_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_FISHER_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "FISHER", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-FISHER صاعد", "EGX Tool FISHER: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-FISHER هابط", "EGX Tool FISHER: vote هابط")

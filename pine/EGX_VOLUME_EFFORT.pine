@@ -1,0 +1,44 @@
+//@version=6
+indicator("EGX Volume Effort vs Result", shorttitle="EGX VEff", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// جهد (حجم×مدى) vs نتيجة (إغلاق) · docs/EGX_VOLUME.md
+
+string G = "VSA"
+int maLen = input.int(20, "MA vol", group=G)
+int atrLen = input.int(14, "ATR", group=G)
+float mismatchThr = input.float(1.4, "حد عدم تطابق", step=0.1, group=G)
+
+float vma = ta.sma(volume, maLen)
+float rvol = volume / math.max(vma, 1.0)
+float atr = ta.atr(atrLen)
+float rng = math.max(high - low, syminfo.mintick)
+float spreadN = rng / math.max(atr, syminfo.mintick)
+float body = math.abs(close - open)
+float resultN = body / math.max(rng, syminfo.mintick)
+
+float effort = rvol * spreadN
+float score = effort / math.max(resultN, 0.15)
+
+bool noResultUp = effort >= mismatchThr and resultN < 0.35 and close >= open
+bool noResultDn = effort >= mismatchThr and resultN < 0.35 and close < open
+bool easyMoveUp = rvol < 0.9 and resultN > 0.6 and close > open
+bool easyMoveDn = rvol < 0.9 and resultN > 0.6 and close < open
+
+plot(effort, "Effort", color=color.fuchsia, linewidth=2)
+plot(resultN * 2.0, "Result×2", color=color.teal, linewidth=1)
+hline(mismatchThr, "Mismatch", color=color.orange, linestyle=hline.style_dashed)
+
+bgcolor(noResultUp ? color.new(color.red, 88) : noResultDn ? color.new(color.lime, 88) : na)
+
+var table t = table.new(position.top_left, 2, 4, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 3)
+    table.cell(t, 0, 0, "Eff/Res", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, noResultUp ? "HighV weak↑" : noResultDn ? "HighV weak↓" : easyMoveUp ? "LowV strong↑" : "—", text_size=size.tiny)
+    table.cell(t, 0, 1, "Effort", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 1, str.tostring(effort, "#.##"), text_size=size.tiny)
+
+plot(noResultUp ? 1 : 0, "EGVEff_NoResUp", display=display.all)
+plot(noResultDn ? 1 : 0, "EGVEff_NoResDn", display=display.all)
+plot(easyMoveUp ? 1 : 0, "EGVEff_EasyUp", display=display.all)
+plot(score, "EGVEff_Score", display=display.all)

@@ -1,0 +1,25 @@
+//@version=6
+indicator("EGX Tool 99 قوة نسبية — RS vs EGX30", shorttitle="EGX T-RS", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة ح بروفايل · #99/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+string mkt = input.symbol("EGX:EGX30", "مؤشر")
+float br = request.security(mkt, timeframe.period, ta.roc(close, 20), barmerge.gaps_off, barmerge.lookahead_off)
+float rs = ta.roc(close, 20) - br
+int vote = rs > 0 ? 1 : -1
+plot(rs, "EGXT_RS", color=rs >= 0 ? color.lime : color.red, linewidth=2)
+hline(0, "0", color=color.gray)
+
+plot(vote, "EGXT_RS_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_RS_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_RS_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "RS", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-RS صاعد", "EGX Tool RS: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-RS هابط", "EGX Tool RS: vote هابط")

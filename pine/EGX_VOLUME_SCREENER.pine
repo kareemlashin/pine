@@ -1,0 +1,152 @@
+//@version=6
+indicator("EGX Volume Screener", shorttitle="EGX Vol Scr", overlay=false, max_labels_count=1, max_tables_count=2)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ماسح فوليوم/مناطق — Watchlist · إطار D موصى
+// Pro: EGVScr_Pro = 1 · Pass: EGVScr_Pass = 1 · B1: EGVScr_B1 = 1
+// تحليل كامل: EGX_VOLUME_ZONES.pine + EGX_VOLUME.pine
+// ═══════════════════════════════════════════════════════════════════════════════
+
+string G = "فلتر"
+string profile = input.string("EGX يومي", "ملف", options=["EGX يومي", "مضاربة", "مخصص"], group=G)
+int zoneLook = input.int(400, "نافذة zones", minval=80, maxval=1500, group=G)
+int vpBins = input.int(28, "bins", minval=12, maxval=40, group=G)
+float minNetBuy = input.float(52.0, "حد Net buy % (شراء)", minval=45, maxval=65, group=G)
+float maxNetSell = input.float(48.0, "حد Net buy % (بيع)", maxval=55, minval=35, group=G)
+int minGrade = input.int(2, "حد Grade B1 (2=B)", minval=1, maxval=3, group=G)
+float minB1Str = input.float(65.0, "حد قوة B1 %", minval=40, maxval=95, group=G)
+float minRvol = input.float(1.0, "حد RVOL", minval=0.7, step=0.1, group=G)
+float minAvgVol = input.float(1000.0, "حد متوسط حجم", minval=0, group=G)
+bool useBounce = input.bool(true, "Pro يتطلب B1 bounce", group=G)
+bool confirmClose = input.bool(true, "إغلاق الشمعة", group=G)
+
+int effLook = profile == "مضاربة" ? 200 : profile == "مخصص" ? zoneLook : 400
+bool sigOk = not confirmClose or barstate.isconfirmed
+
+f_buyShare(int off) =>
+    float rng = math.max(high[off] - low[off], syminfo.mintick)
+    volume[off] > 0 ? (close[off] - low[off]) / rng : 0.5
+
+f_buyVol(int off) =>
+    volume[off] * f_buyShare(off)
+
+f_pxBin(float px, float lo, float step) =>
+    int bx = int(math.floor((px - lo) / step))
+    math.max(0, math.min(vpBins - 1, bx))
+
+f_profile() =>
+    int n = math.min(effLook, bar_index)
+    float hi = ta.highest(high, n)
+    float lo = ta.lowest(low, n)
+    float step = (hi - lo) / math.max(vpBins, 1)
+    step := step <= syminfo.mintick ? syminfo.mintick : step
+    array<float> buyB = array.new_float(vpBins, 0.0)
+    array<float> sellB = array.new_float(vpBins, 0.0)
+    float tB = 0.0
+    float tS = 0.0
+    for i = 0 to n - 1
+        float bV = f_buyVol(i)
+        float sV = volume[i] - bV
+        tB += bV
+        tS += sV
+        int bi = f_pxBin(close[i], lo, step)
+        int si = f_pxBin(open[i], lo, step)
+        array.set(buyB, bi, array.get(buyB, bi) + bV)
+        array.set(sellB, si, array.get(sellB, si) + sV)
+    float maxB = 0.0
+    int b1 = 0
+    float maxS = 0.0
+    int s1 = 0
+    for b = 0 to vpBins - 1
+        float vb = array.get(buyB, b)
+        float vs = array.get(sellB, b)
+        if vb > maxB
+            maxB := vb
+            b1 := b
+        if vs > maxS
+            maxS := vs
+            s1 := b
+    float bLo = lo + b1 * step
+    float bHi = lo + (b1 + 1) * step
+    float sLo = lo + s1 * step
+    float sHi = lo + (s1 + 1) * step
+    float bMid = (bLo + bHi) / 2.0
+    float sMid = (sLo + sHi) / 2.0
+    [tB, tS, maxB, maxS, bLo, bHi, sLo, sHi, bMid, sMid]
+
+[tBuy, tSell, maxBuy, maxSell, b1Lo, b1Hi, s1Lo, s1Hi, b1Mid, s1Mid] = f_profile()
+float netBuyPct = tBuy + tSell > 0 ? tBuy / (tBuy + tSell) * 100.0 : 50.0
+float b1Strength = tBuy > 0 ? maxBuy / tBuy * 100.0 : 0.0
+
+bool inB1 = low <= b1Hi and high >= b1Lo
+bool inS1 = low <= s1Hi and high >= s1Lo
+
+float volMa = ta.sma(volume, 20)
+float rvol = volume / math.max(volMa, 1.0)
+bool liqOk = volMa >= minAvgVol
+
+float pl = ta.pivotlow(low, 5, 5)
+var float swLo = na
+if not na(pl)
+    swLo := pl
+bool supB1 = not na(swLo) and swLo >= b1Lo and swLo <= b1Hi
+
+int touches = 0
+int nT = math.min(effLook, bar_index)
+for i = 0 to nT - 1
+    if low[i] <= b1Hi and high[i] >= b1Lo
+        touches += 1
+
+int gradeB1 = 1
+if b1Strength >= 70 and touches >= 2
+    gradeB1 := 2
+if b1Strength >= 85 and touches >= 3
+    gradeB1 := 3
+if netBuyPct >= 55 and supB1
+    gradeB1 := math.min(3, gradeB1 + 1)
+
+bool b1Bounce = inB1 and close > open and rvol >= minRvol and close > b1Mid
+bool s1Reject = inS1 and close < open and rvol >= minRvol and close < s1Mid
+
+bool passBuy = sigOk and liqOk and inB1 and gradeB1 >= minGrade and netBuyPct >= minNetBuy and b1Strength >= minB1Str and rvol >= minRvol
+bool proBuy = passBuy and supB1 and (not useBounce or b1Bounce)
+bool passSell = sigOk and liqOk and inS1 and netBuyPct <= maxNetSell and rvol >= minRvol
+
+float mfm = ((close - low) - (high - close)) / math.max(high - low, syminfo.mintick)
+float cmf = ta.sma(mfm * volume, 20) / ta.sma(volume, 20)
+float obvSl = ta.linreg(ta.obv, 10, 0) - ta.linreg(ta.obv, 10, 1)
+bool acc = cmf > 0 and obvSl > 0
+bool dist = cmf < 0 and obvSl < 0
+float magnet = (b1Mid + s1Mid) / 2.0
+float distMag = math.abs(close - magnet) / math.max(ta.atr(14), syminfo.mintick)
+
+float rank = math.max(0.0, math.min(100.0, netBuyPct * 0.3 + b1Strength * 0.25 + float(gradeB1) * 8.0 + (inB1 ? 12.0 : 0.0) + (b1Bounce ? 15.0 : 0.0) + math.min(rvol, 3.0) * 7.0 + (acc ? 5.0 : dist ? -8.0 : 0.0) - distMag * 2.0))
+
+var table t = table.new(position.middle_center, 2, 9, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 8)
+    table.cell(t, 0, 0, syminfo.ticker, text_color=color.white, text_size=size.normal)
+    table.cell(t, 1, 0, str.tostring(rank, "#") + " · " + (proBuy ? "Pro" : passBuy ? "Pass" : passSell ? "Sell" : "—"), text_color=proBuy ? color.lime : passBuy ? color.teal : passSell ? color.red : color.gray, text_size=size.normal)
+    table.cell(t, 0, 1, "Net buy %", text_color=color.gray, text_size=size.small)
+    table.cell(t, 1, 1, str.tostring(netBuyPct, "#.#"), text_size=size.small)
+    table.cell(t, 0, 2, "B1 / S1", text_color=color.gray, text_size=size.small)
+    table.cell(t, 1, 2, (inB1 ? "in B1" : "—") + " · " + (inS1 ? "in S1" : "—"), text_size=size.small)
+    table.cell(t, 0, 3, "Grade / RVOL", text_color=color.gray, text_size=size.small)
+    table.cell(t, 1, 3, str.tostring(gradeB1) + " · " + str.tostring(rvol, "#.##"), text_size=size.small)
+    table.cell(t, 0, 4, "B1 mid", text_color=color.gray, text_size=size.small)
+    table.cell(t, 1, 4, str.tostring(b1Mid, format.mintick), text_size=size.small)
+    table.cell(t, 0, 5, "Magnet", text_color=color.gray, text_size=size.small)
+    table.cell(t, 1, 5, str.tostring(magnet, format.mintick), text_size=size.small)
+    table.cell(t, 0, 6, "Acc/Dist", text_color=color.gray, text_size=size.small)
+    table.cell(t, 1, 6, acc ? "Acc" : dist ? "Dist" : "—", text_color=acc ? color.lime : dist ? color.red : color.gray, text_size=size.small)
+
+plot(rank, "EGVScr_Rank", display=display.all)
+plot(proBuy ? 1 : 0, "EGVScr_Pro", display=display.all)
+plot(passBuy ? 1 : 0, "EGVScr_Pass", display=display.all)
+plot(inB1 ? 1 : 0, "EGVScr_B1", display=display.all)
+plot(inS1 ? 1 : 0, "EGVScr_S1", display=display.all)
+plot(float(gradeB1), "EGVScr_GradeB1", display=display.all)
+plot(netBuyPct, "EGVScr_NetBuy", display=display.all)
+plot(rvol, "EGVScr_RVOL", display=display.all)
+plot(b1Bounce ? 1 : 0, "EGVScr_B1Bounce", display=display.all)
+plot(passSell ? 1 : 0, "EGVScr_SellPass", display=display.all)

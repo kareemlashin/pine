@@ -1,0 +1,66 @@
+//@version=6
+indicator("EGX Volume HVN Lite — nearest buy node", shorttitle="EGX VHVN", overlay=true, max_lines_count=15, max_tables_count=2, calc_bars_count=5000)
+
+// أقرب HVN شراء تحت/فوق السعر (خفيف) · docs/EGX_VOLUME.md
+
+string G = "HVN"
+int look = input.int(300, "Window", minval=80, group=G)
+int bins = input.int(22, "Bins", minval=12, group=G)
+
+f_bv(int i) =>
+    float r = math.max(high[i] - low[i], syminfo.mintick)
+    volume[i] * (close[i] - low[i]) / r
+
+int n = math.min(look, bar_index)
+float hi = ta.highest(high, n)
+float lo = ta.lowest(low, n)
+float step = math.max((hi - lo) / bins, syminfo.mintick)
+array<float> buyB = array.new_float(bins, 0.0)
+for i = 0 to n - 1
+    int bi = int(math.floor((close[i] - lo) / step))
+    bi := math.max(0, math.min(bins - 1, bi))
+    array.set(buyB, bi, array.get(buyB, bi) + f_bv(i))
+
+float px = close
+int curBin = int(math.floor((px - lo) / step))
+curBin := math.max(0, math.min(bins - 1, curBin))
+
+float hvnBelow = na
+float hvnAbove = na
+float bestBelow = 0.0
+float bestAbove = 0.0
+for b = 0 to bins - 1
+    float v = array.get(buyB, b)
+    float mid = lo + (b + 0.5) * step
+    if b < curBin and v > bestBelow
+        bestBelow := v
+        hvnBelow := mid
+    if b > curBin and v > bestAbove
+        bestAbove := v
+        hvnAbove := mid
+
+float b1 = na
+float maxB = 0.0
+for b = 0 to bins - 1
+    float v = array.get(buyB, b)
+    if v > maxB
+        maxB := v
+        b1 := lo + (b + 0.5) * step
+
+plot(b1, "B1 HVN", color=color.lime, linewidth=2)
+plot(hvnBelow, "HVN below", color=color.new(color.teal, 30), linewidth=1, style=plot.style_circles)
+plot(hvnAbove, "HVN above", color=color.new(color.orange, 30), linewidth=1, style=plot.style_circles)
+
+bool nearB1 = not na(b1) and math.abs(close - b1) / close * 100.0 <= 1.5
+bool aboveB1 = not na(b1) and close > b1
+
+var table t = table.new(position.bottom_right, 2, 4, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 3)
+    table.cell(t, 0, 0, "HVN Lite", bgcolor=color.black, text_color=color.yellow, text_size=size.small)
+    table.cell(t, 1, 0, nearB1 ? "Near B1" : "—", text_size=size.tiny)
+    table.cell(t, 0, 1, "B1", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 1, str.tostring(b1, format.mintick), text_size=size.tiny)
+
+plot(nearB1 ? 1 : 0, "EGVHVN_NearB1", display=display.all)
+plot(aboveB1 ? 1 : 0, "EGVHVN_AboveB1", display=display.all)

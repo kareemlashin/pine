@@ -1,0 +1,27 @@
+//@version=6
+indicator("EGX Tool 64 سيولة — Liquidity Pools", shorttitle="EGX T-LIQ", overlay=true, max_labels_count=80, max_lines_count=80, max_boxes_count=40, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة ه SMC · #64/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+int len = input.int(20, "Equal highs/lows")
+float eqH = ta.highest(high, len)
+float eqL = ta.lowest(low, len)
+bool nearH = high > eqH * 0.997 and high < eqH * 1.003
+bool nearL = low < eqL * 1.003 and low > eqL * 0.997
+int vote = nearL ? 1 : nearH ? -1 : 0
+plot(eqH, "BuySideLiq", color=color.new(color.red, 30))
+plot(eqL, "SellSideLiq", color=color.new(color.lime, 30))
+
+plot(vote, "EGXT_LIQ_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_LIQ_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_LIQ_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "LIQ", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-LIQ صاعد", "EGX Tool LIQ: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-LIQ هابط", "EGX Tool LIQ: vote هابط")

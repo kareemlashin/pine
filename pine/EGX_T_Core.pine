@@ -1,0 +1,107 @@
+//@version=6
+library("EGX_T_Core", overlay=true)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// EGX_T_Core v1 — lite 13-vote Tools pack + بوابات EGX (جلسة · halt100 · أحد)
+// انشر على TradingView ثم: import username/EGX_T_Core/1 as TC
+// مصدر منطق: scripts/tools_lite_f_tools.py · docs/EGX_TOOLS.md
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export type ToolsLiteOut
+    float score
+    int hits
+    int nGreen
+    int nRed
+    float rank
+    bool buyA
+    bool buyB
+    bool buyAny
+    bool pro
+    bool passSig
+    bool egxOK
+    float rvol
+    float rs20
+
+export f_egxSessId(string tz) =>
+    int id = 0
+    if not na(time(timeframe.period, "0830-1000:23456", tz))
+        id := 1
+    if not na(time(timeframe.period, "1000-1415:23456", tz))
+        id := 2
+    if not na(time(timeframe.period, "1415-1425:23456", tz))
+        id := 3
+    if not na(time(timeframe.period, "1425-1430:23456", tz))
+        id := 4
+    id
+
+export f_sessionEntryOk(bool useFilter, string tz) =>
+    not useFilter or not timeframe.isintraday or f_egxSessId(tz) == 2
+
+export f_boardHaltPct(string board) =>
+    board == "SME تميّز" or board == "SME نايل" or board == "غير نشط" ? 5.0 : 10.0
+
+export f_boardLuldPct(string board) =>
+    board == "غير نشط" ? 5.0 : board == "SME تميّز" or board == "SME نايل" ? 10.0 : 20.0
+
+export f_nearLimitDay(float dayPct, string board, bool blockLimit) =>
+    float haltPct = f_boardHaltPct(board)
+    float luldPct = f_boardLuldPct(board)
+    blockLimit and (dayPct >= math.min(9.0, haltPct - 1.0) or dayPct >= luldPct - 0.25)
+
+export f_mktHalt100(bool useGate, string mkt100) =>
+    useGate and request.security(mkt100, "D", close[1] > 0 ? (close - close[1]) / close[1] * 100.0 : 0.0, barmerge.gaps_off, barmerge.lookahead_off) <= -10.0
+
+export f_toolsLite13(float minVol, float sigMin, string egxBoard, bool blockLimit, float benchRoc20) =>
+    float ema20 = ta.ema(close, 20)
+    float ema50 = ta.ema(close, 50)
+    float ema200 = ta.ema(close, 200)
+    float rsi = ta.rsi(close, 14)
+    [macdL, macdS, macdH] = ta.macd(close, 12, 26, 9)
+    float volMa = ta.sma(volume, 20)
+    bool liq = volMa >= minVol
+    float rvol = volume / math.max(volMa, 1.0)
+    float rng = math.max(high - low, syminfo.mintick)
+    float cmf = ta.sma(((close - low) - (high - close)) / rng * volume, 20) / ta.sma(volume, 20)
+    float obvSl = ta.linreg(ta.obv, 10, 0) - ta.linreg(ta.obv, 10, 1)
+    [diP, diM, adx] = ta.dmi(14, 14)
+    [_, stDir] = ta.supertrend(3.0, 10)
+    float lookHi = ta.highest(high, 80)
+    float lookLo = ta.lowest(low, 80)
+    bool inDem = close <= lookHi - 0.618 * (lookHi - lookLo) and close >= lookLo
+    bool bosUp = close > ta.highest(high, 20)[1]
+    float hi = ta.highest(high, 252)
+    bool chase = hi > 0 and (close - hi) / hi * 100.0 > -3 and rsi > 72
+    float dPrev = close[1]
+    float dayPct = dPrev > 0 ? (close - dPrev) / dPrev * 100.0 : 0.0
+    bool nearLimit = f_nearLimitDay(dayPct, egxBoard, blockLimit)
+    int v01 = rsi > 52 and rsi < 68 ? 1 : rsi >= 68 ? 0 : -1
+    int v02 = macdH > 0 and macdL > macdS ? 1 : macdH < 0 ? -1 : 0
+    int v03 = ta.stoch(close, high, low, 14) > 50 ? 1 : -1
+    int v04 = ta.roc(close, 10) > 0 ? 1 : -1
+    int v05 = ta.mfi(hlc3, 14) > 50 ? 1 : -1
+    int v06 = adx > 22 and diP > diM ? 1 : adx > 22 and diM > diP ? -1 : 0
+    int v07 = close > ema20 and ema20 > ema50 and ema50 > ema200 ? 1 : close < ema20 and ema20 < ema50 ? -1 : 0
+    int v08 = stDir < 0 ? 1 : -1
+    int v10 = cmf > 0.05 ? 1 : cmf < -0.05 ? -1 : 0
+    int v11 = obvSl > 0 ? 1 : obvSl < 0 ? -1 : 0
+    int v12 = ta.accdist > ta.ema(ta.accdist, 20) ? 1 : -1
+    int v15 = bosUp ? 1 : close < ta.lowest(low, 20)[1] ? -1 : 0
+    int v16 = inDem ? 1 : close > lookHi * 0.98 ? -1 : 0
+    float score = (v01 + v02 + v03 + v04 + v05 + v06 + v07 + v08 + v10 + v11 + v12 + v15 + v16) / 13.0 * 100.0
+    int nG = (v01 == 1 ? 1 : 0) + (v02 == 1 ? 1 : 0) + (v03 == 1 ? 1 : 0) + (v04 == 1 ? 1 : 0) + (v05 == 1 ? 1 : 0) + (v06 == 1 ? 1 : 0) + (v07 == 1 ? 1 : 0) + (v08 == 1 ? 1 : 0) + (v10 == 1 ? 1 : 0) + (v11 == 1 ? 1 : 0) + (v12 == 1 ? 1 : 0) + (v15 == 1 ? 1 : 0) + (v16 == 1 ? 1 : 0)
+    int nR = (v01 == -1 ? 1 : 0) + (v02 == -1 ? 1 : 0) + (v03 == -1 ? 1 : 0) + (v04 == -1 ? 1 : 0) + (v05 == -1 ? 1 : 0) + (v06 == -1 ? 1 : 0) + (v07 == -1 ? 1 : 0) + (v08 == -1 ? 1 : 0) + (v10 == -1 ? 1 : 0) + (v11 == -1 ? 1 : 0) + (v12 == -1 ? 1 : 0) + (v15 == -1 ? 1 : 0) + (v16 == -1 ? 1 : 0)
+    bool locOK = inDem or bosUp or v16 == 1
+    bool moneyOK = v10 == 1 and v11 != -1 and v12 == 1
+    bool upTrend = v07 == 1 or v08 == 1
+    bool momOK = score >= sigMin * 0.5
+    bool trigOK = close > open and (v03 == 1 or v04 == 1)
+    bool volOK = rvol >= 0.9
+    int hits = (upTrend ? 1 : 0) + (locOK ? 1 : 0) + (momOK ? 1 : 0) + (moneyOK ? 1 : 0) + (trigOK ? 1 : 0) + (volOK ? 1 : 0)
+    bool egxOK = liq and not chase and not nearLimit
+    bool buyA = egxOK and locOK and moneyOK and hits >= 5 and score >= sigMin
+    bool buyB = egxOK and locOK and not buyA and hits >= 4 and score >= sigMin * 0.5
+    float rs20 = ta.roc(close, 20) - benchRoc20
+    float rank = math.max(0.0, math.min(100.0, score * 0.55 + hits / 6.0 * 100.0 * 0.30 + nG / 13.0 * 100.0 * 0.15 + (rs20 > 0 ? 5.0 : 0.0)))
+    bool passSig = egxOK and score >= sigMin * 0.45 and hits >= 3
+    bool pro = buyA and rank >= 55.0 and hits >= 5 and nG >= 10
+    ToolsLiteOut.new(score, hits, nG, nR, rank, buyA, buyB, buyA or buyB, pro, passSig, egxOK, rvol, rs20)

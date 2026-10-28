@@ -1,0 +1,32 @@
+//@version=6
+library("EGX_OppCore", overlay=true)
+
+// مرآة منطق EGX_افضل_فرص.pine — انشر Library ثم import username/EGX_OppCore/1
+// BOARD200 / WL / Hub يمكنها نسخ نفس المنطق حتى يتوفر import
+
+export f_oppLimits(string egxBoard) =>
+    float haltPct = egxBoard == "SME تميّز" or egxBoard == "SME نايل" or egxBoard == "غير نشط" ? 5.0 : 10.0
+    float luldPct = egxBoard == "غير نشط" ? 5.0 : (egxBoard == "SME تميّز" or egxBoard == "SME نايل" ? 10.0 : 20.0)
+    [haltPct, luldPct]
+
+export f_sectorTag(string symFull) =>
+    string t = str.replace(symFull, "EGX:", "")
+    switch t
+        "COMI" => "بنك"
+        "QNBE" => "بنك"
+        "HDBK" => "بنك"
+        "ADIB" => "بنك"
+        "CIEB" => "بنك"
+        "ABUK" => "بنك"
+        "SAUD" => "بنك"
+        "TMGH" => "عقار"
+        "PHDC" => "عقار"
+        "MNHD" => "عقار"
+        "OCDI" => "عقار"
+        "HELI" => "عقار"
+        "SWDY" => "صناع"
+        "ETEL" => "اتصالات"
+        "FWRY" => "تكنول"
+        "HRHO" => "استثمار"
+        "COMI" => "بنك"
+        => "—"

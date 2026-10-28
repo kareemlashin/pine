@@ -1,0 +1,121 @@
+//@version=6
+indicator("EGX Super Pass — 2-of-3 + Veto", shorttitle="EGX SP", overlay=false, calc_bars_count=5000)
+
+// Filter: EGXSP_Pro=1 · EGXSP_Pass=1 · EGXSP_Veto=0 · docs/EGX_SCREENER_MATRIX.md
+// مسارات: Opp Pro · Tools Pro (lite13) · Vol B1 — اثنان من ثلاثة + لا veto
+
+string G = "═══ عتبات ═══"
+float minOpp = input.float(55.0, "Opp Rank", minval=40, maxval=90, group=G)
+float minTool = input.float(55.0, "Tools Rank", minval=40, maxval=90, group=G)
+float minVolRank = input.float(58.0, "Vol Rank", minval=40, maxval=90, group=G)
+float sigMin = input.float(20.0, "Tools Score %", minval=10, maxval=50, group=G)
+int minSetup = input.int(7, "Opp setup", minval=4, maxval=11, group=G)
+int lanesNeed = input.int(2, "مسارات مطلوبة", minval=2, maxval=3, group=G)
+bool onClose = input.bool(true, "إغلاق", group=G)
+
+string Gv = "═══ Veto ═══"
+string bench = input.symbol("EGX:EGX30", "EGX30", group=Gv)
+string egxBoard = input.string("نشط (EGX100)", "لوحة", options=["نشط (EGX100)", "EGX30 (بيع مكشوف)", "SME تميّز", "SME نايل", "غير نشط"], group=Gv)
+bool blockLimit = input.bool(true, "قرب halt/LULD", group=Gv)
+bool blockBear = input.bool(true, "ضغط EGX30", group=Gv)
+bool blockChase = input.bool(true, "مطاردة", group=Gv)
+bool useMktHalt100 = input.bool(true, "EGX100 ≤ −10%", group=Gv)
+bool skipSunday = input.bool(false, "يوم الأحد", group=Gv)
+bool useSession = input.bool(false, "جلسة مستمر فقط", group=Gv)
+float minVol = input.float(800.0, "حد حجم", group=Gv)
+
+bool sigOk = not onClose or barstate.isconfirmed
+
+f_sess() =>
+    int id = 0
+    if not na(time(timeframe.period, "1000-1415:23456", "Africa/Cairo"))
+        id := 2
+    id
+bool sessionOk = not useSession or not timeframe.isintraday or f_sess() == 2
+bool sundayVeto = skipSunday and dayofweek == dayofweek.sunday
+
+f_mktTr() =>
+    int sc = 0
+    float e20 = ta.ema(close, 20)
+    float e50 = ta.ema(close, 50)
+    sc += close > e20 ? 1 : -1
+    sc += e20 > e50 ? 1 : -1
+    sc
+float mom30 = request.security(bench, timeframe.period, close[20] > 0 ? (close / close[20] - 1.0) * 100.0 : 0.0, barmerge.gaps_off, barmerge.lookahead_off)
+int tr30 = request.security(bench, timeframe.period, f_mktTr(), barmerge.gaps_off, barmerge.lookahead_off)
+bool bearMkt = blockBear and mom30 < -4.0 and tr30 <= -1
+float dayPct100 = useMktHalt100 ? request.security("EGX:EGX100EWI", "D", close[1] > 0 ? (close - close[1]) / close[1] * 100.0 : 0.0, barmerge.gaps_off, barmerge.lookahead_off) : 0.0
+bool mktHalt100 = useMktHalt100 and dayPct100 <= -10.0
+
+float dPrev = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+float dayPct = dPrev > 0 ? (close - dPrev) / dPrev * 100.0 : 0.0
+float haltPct = egxBoard == "SME تميّز" or egxBoard == "SME نايل" or egxBoard == "غير نشط" ? 5.0 : 10.0
+float luldPct = egxBoard == "غير نشط" ? 5.0 : (egxBoard == "SME تميّز" or egxBoard == "SME نايل" ? 10.0 : 20.0)
+bool nearLimit = blockLimit and dPrev > 0 and (dayPct >= math.min(9.0, haltPct - 1.0) or dayPct >= luldPct - 0.25)
+float hi252 = ta.highest(high, 252)
+bool chase = blockChase and hi252 > 0 and (close - hi252) / hi252 * 100.0 > -3 and ta.rsi(close, 14) > 72
+
+// Opp lane
+float ema9 = ta.ema(close, 9)
+float ema21 = ta.ema(close, 21)
+float ema50 = ta.ema(close, 50)
+bool bullStack = ema9 > ema21 and ema21 > ema50
+float wC = request.security(syminfo.tickerid, "W", close, barmerge.gaps_off, barmerge.lookahead_off)
+float wE = request.security(syminfo.tickerid, "W", ta.ema(close, 50), barmerge.gaps_off, barmerge.lookahead_off)
+bool htfBull = wC > wE
+[macdL, macdS, macdH] = ta.macd(close, 12, 26, 9)
+bool macdBull = macdH > 0 and macdL > macdS
+float volMa = ta.sma(volume, 20)
+bool liq = volMa >= minVol
+float rvol = volume / math.max(volMa, 1.0)
+float cmf = ta.sma(((close - low) - (high - close)) / math.max(high - low, syminfo.mintick) * volume, 14) / ta.sma(volume, 14)
+float obvSl = ta.linreg(ta.obv, 10, 0) - ta.linreg(ta.obv, 10, 1)
+bool acc = cmf > 0 and obvSl > 0
+float accSc = math.min(100.0, (acc ? 40.0 : 0.0) + (cmf > 0 ? 15.0 : 0.0))
+float pl = ta.pivotlow(low, 8, 8)
+var float sl = na
+if not na(pl)
+    sl := pl
+float atr = ta.atr(14)
+bool atZ = low <= nz(sl, low) + atr * 0.35 and close >= nz(sl, low) - atr * 0.42
+bool ret = not na(sl) and low <= sl * 1.006 and close > sl
+int setup = (bullStack ? 1 : 0) + (htfBull ? 1 : 0) + (macdBull ? 1 : 0) + (acc ? 1 : 0) + (atZ or ret ? 1 : 0) + (rvol >= 1.0 ? 1 : 0)
+float benchRoc = request.security(bench, timeframe.period, ta.roc(close, 20), barmerge.gaps_off, barmerge.lookahead_off)
+float oppRank = math.min(100.0, (bullStack ? 20.0 : 0.0) + setup / 12.0 * 50.0 + (ta.roc(close, 20) - benchRoc > 0 ? 8.0 : 0.0))
+bool laneOpp = sigOk and liq and accSc >= 50 and (atZ or ret) and setup >= minSetup and oppRank >= minOpp
+
+// Tools lane (lite13)
+float rsi = ta.rsi(close, 14)
+[diP, diM, adx] = ta.dmi(14, 14)
+[_, stDir] = ta.supertrend(3.0, 10)
+bool inDem = close <= ta.highest(high, 80) - 0.618 * (ta.highest(high, 80) - ta.lowest(low, 80)) and close >= ta.lowest(low, 80)
+bool bosUp = close > ta.highest(high, 20)[1]
+int sumV = (rsi > 52 and rsi < 68 ? 1 : rsi >= 68 ? 0 : -1) + (macdH > 0 and macdL > macdS ? 1 : macdH < 0 ? -1 : 0) + (ta.stoch(close, high, low, 14) > 50 ? 1 : -1) + (ta.roc(close, 10) > 0 ? 1 : -1) + (ta.mfi(hlc3, 14) > 50 ? 1 : -1) + (adx > 22 and diP > diM ? 1 : adx > 22 and diM > diP ? -1 : 0) + (close > ta.ema(close, 20) ? 1 : -1) + (stDir < 0 ? 1 : -1) + (cmf > 0.05 ? 1 : cmf < -0.05 ? -1 : 0) + (obvSl > 0 ? 1 : obvSl < 0 ? -1 : 0) + (bosUp or inDem ? 1 : 0)
+float toolScore = sumV / 11.0 * 100.0
+int hits = (close > ema50 ? 1 : 0) + ((inDem or bosUp) ? 1 : 0) + (toolScore >= sigMin * 0.5 ? 1 : 0) + (cmf > 0 and obvSl > 0 ? 1 : 0) + (close > open ? 1 : 0) + (rvol >= 0.9 ? 1 : 0)
+float toolRank = math.max(0.0, math.min(100.0, toolScore * 0.55 + hits / 6.0 * 100.0 * 0.30))
+bool laneTool = sigOk and liq and hits >= 5 and toolScore >= sigMin and toolRank >= minTool
+
+// Vol lane (EGX_VOLUME B1 lite)
+float volRank = math.min(100.0, (rvol >= 2.0 ? 35.0 : rvol >= 1.2 ? 25.0 : 10.0) + (close > open ? 20.0 : 0.0) + (acc ? 25.0 : 0.0) + (cmf > 0.1 ? 20.0 : 0.0))
+bool laneVol = sigOk and liq and rvol >= 1.0 and volRank >= minVolRank
+
+int laneCnt = (laneOpp ? 1 : 0) + (laneTool ? 1 : 0) + (laneVol ? 1 : 0)
+int vetoMask = (chase ? 1 : 0) + (nearLimit ? 2 : 0) + (bearMkt ? 4 : 0) + (mktHalt100 ? 8 : 0) + (sundayVeto ? 16 : 0) + (not sessionOk ? 32 : 0)
+bool veto = vetoMask > 0
+bool regimeOk = not bearMkt and not mktHalt100
+bool pass2 = sigOk and laneCnt >= lanesNeed and not veto and regimeOk
+bool proSP = pass2 and laneOpp and laneTool and oppRank >= minOpp + 5 and toolRank >= minTool + 5
+
+plot(pass2 ? 1 : 0, "EGXSP_Pass", display=display.all)
+plot(proSP ? 1 : 0, "EGXSP_Pro", display=display.all)
+plot(laneCnt, "EGXSP_Lanes", display=display.all)
+plot(vetoMask, "EGXSP_Veto", display=display.all)
+plot(regimeOk ? 1 : 0, "EGX_RegimeOk", display=display.all)
+plot(oppRank, "EGXSP_OppRank", display=display.data_window)
+plot(toolRank, "EGXSP_ToolRank", display=display.data_window)
+plot(volRank, "EGXSP_VolRank", display=display.data_window)
+plot(1, "EGXSP", display=display.all)
+
+alertcondition(proSP, "EGX Super Pass — Pro", "{{ticker}} EGXSP Pro")
+alertcondition(pass2, "EGX Super Pass — 2-of-3", "{{ticker}} EGXSP Pass")

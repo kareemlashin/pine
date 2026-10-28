@@ -1,0 +1,46 @@
+//@version=6
+indicator("EGX Volume Flows — CMF · OBV · MFI", shorttitle="EGX VFlow", overlay=false, max_tables_count=3, calc_bars_count=5000)
+
+// تدفقات مال · تراكم/تصريف · لوحة · docs/EGX_VOLUME.md
+
+string G = "إعداد"
+int cmfLen = input.int(20, "CMF", group=G)
+int mfiLen = input.int(14, "MFI", group=G)
+int obvLen = input.int(10, "OBV slope", group=G)
+bool showObv = input.bool(true, "OBV normalized", group=G)
+
+float mfm = ((close - low) - (high - close)) / math.max(high - low, syminfo.mintick)
+float cmf = ta.sma(mfm * volume, cmfLen) / ta.sma(volume, cmfLen)
+float mfi = ta.mfi(hlc3, mfiLen)
+float obv = ta.obv
+float obvSl = ta.linreg(obv, obvLen, 0) - ta.linreg(obv, obvLen, 1)
+float obvNorm = showObv ? (obv - ta.lowest(obv, 100)) / math.max(ta.highest(obv, 100) - ta.lowest(obv, 100), 1) * 100 : na
+
+bool acc = cmf > 0.05 and obvSl > 0
+bool dist = cmf < -0.05 and obvSl < 0
+bool mfiBuy = mfi > 50 and mfi < 80
+bool mfiSell = mfi < 50 and mfi > 20
+
+float flowScore = math.max(0.0, math.min(100.0, (cmf + 0.2) * 125.0 + (obvSl > 0 ? 15.0 : obvSl < 0 ? -15.0 : 0.0) + (mfi - 50.0) * 0.5))
+
+plot(cmf * 100, "CMF×100", color=cmf > 0 ? color.teal : color.red, linewidth=2)
+plot(mfi, "MFI", color=color.orange, linewidth=1)
+plot(obvNorm, "OBV norm", color=color.aqua, linewidth=1, display=showObv ? display.all : display.none)
+hline(0, "CMF 0", color=color.gray)
+hline(50, "MFI 50", color=color.new(color.gray, 60))
+
+bgcolor(acc ? color.new(color.teal, 92) : dist ? color.new(color.red, 92) : na)
+
+var table t = table.new(position.top_right, 2, 5, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 4)
+    table.cell(t, 0, 0, "Flows", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, acc ? "تراكم" : dist ? "تصريف" : "محايد", text_color=acc ? color.lime : dist ? color.red : color.gray, text_size=size.small)
+    table.cell(t, 0, 1, "Score", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 1, str.tostring(flowScore, "#"), text_size=size.tiny)
+    table.cell(t, 0, 2, "CMF/MFI", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 2, str.tostring(cmf, "#.###") + " / " + str.tostring(mfi, "#"), text_size=size.tiny)
+
+plot(flowScore, "EGVF_FlowScore", display=display.all)
+plot(acc ? 1 : 0, "EGVF_Acc", display=display.all)
+plot(dist ? 1 : 0, "EGVF_Dist", display=display.all)

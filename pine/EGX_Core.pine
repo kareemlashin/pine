@@ -1,0 +1,222 @@
+//@version=6
+library("EGX_Core", overlay=true)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// EGX_Core v4 — + nearLimitComposite · regimeOk · microLongOk · signalTier · gap/2-day
+// انشر على TradingView ثم import username/EGX_Core/4
+// README.md · docs/EGX_MICROSTRUCTURE.md · docs/EGX_الخلاصة.md
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export type EgxLimits
+    float dayPct
+    bool nearLimitUp
+    bool nearLimitDn
+    bool liqOk
+
+export type EgxBoardRules
+    float haltPct
+    float luldPct
+    bool canShort
+    bool canIntraday
+
+export f_dayPct(string tickerId) =>
+    float c = request.security(tickerId, timeframe.period, close, barmerge.gaps_off, barmerge.lookahead_off)
+    float dPrev = request.security(tickerId, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+    dPrev > 0 ? (c - dPrev) / dPrev * 100.0 : 0.0
+
+export f_nearLimitUp(string tickerId, float limitPct) =>
+    f_dayPct(tickerId) >= limitPct
+
+export f_nearLimitDn(string tickerId, float limitPct) =>
+    f_dayPct(tickerId) <= -limitPct
+
+export f_liqOk(int volMaLen, float minVol) =>
+    ta.sma(volume, volMaLen) >= minVol
+
+export f_egxLimits(string tickerId, int volMaLen, float minVol, float limitPct) =>
+    float dp = f_dayPct(tickerId)
+    EgxLimits lim = EgxLimits.new(dp, dp >= limitPct, dp <= -limitPct, f_liqOk(volMaLen, minVol))
+    lim
+
+export f_boardRules(string board) =>
+    float h = 10.0
+    float l = 20.0
+    bool sh = false
+    bool intra = true
+    if board == "SME تميّز" or board == "SME نايل"
+        h := 5.0
+        l := 10.0
+    else if board == "غير نشط"
+        h := 5.0
+        l := 5.0
+        intra := false
+    else if str.contains(board, "EGX30")
+        sh := true
+    EgxBoardRules.new(h, l, sh, intra)
+
+export f_boardHaltPct(string board) =>
+    board == "SME تميّز" or board == "SME نايل" or board == "غير نشط" ? 5.0 : 10.0
+
+export f_boardLuldPct(string board) =>
+    board == "غير نشط" ? 5.0 : board == "SME تميّز" or board == "SME نايل" ? 10.0 : 20.0
+
+export f_boardCanShort(string board) =>
+    str.contains(board, "EGX30")
+
+export f_haltWarnPct(float haltPct, float limitBuyPct) =>
+    math.min(limitBuyPct, math.max(haltPct - 1.0, haltPct * 0.9))
+
+export f_nearHaltUp(float dayPct, float haltPct, float warnPct) =>
+    dayPct >= math.min(warnPct, haltPct - 0.25)
+
+export f_atLuldUp(float dayPct, float luldPct) =>
+    dayPct >= luldPct - 0.25
+
+export f_egxSessId(string tz) =>
+    int id = 0
+    if not na(time(timeframe.period, "0830-1000:23456", tz))
+        id := 1
+    if not na(time(timeframe.period, "1000-1415:23456", tz))
+        id := 2
+    if not na(time(timeframe.period, "1415-1425:23456", tz))
+        id := 3
+    if not na(time(timeframe.period, "1425-1430:23456", tz))
+        id := 4
+    id
+
+export f_egxSessName(int id) =>
+    id == 1 ? "مزاد افتتاح" : id == 2 ? "مستمر" : id == 3 ? "مزاد إغلاق" : id == 4 ? "TAL" : "خارج الجلسة"
+
+export f_sessionEntryOk(bool useFilter, string tz) =>
+    not useFilter or not timeframe.isintraday or f_egxSessId(tz) == 2
+
+export f_sundaySkip(bool skipOn) =>
+    skipOn and dayofweek == dayofweek.sunday
+
+export f_egx100Halt(string mkt100) =>
+    float dp = request.security(mkt100, "D", close[1] > 0 ? (close - close[1]) / close[1] * 100.0 : 0.0, barmerge.gaps_off, barmerge.lookahead_off)
+    dp <= -10.0
+
+export f_qtyPctRisk(float riskPctEq, float entryPx, float stopPx, float volMa, float partCapPct, float equity) =>
+    float stopDist = math.max(entryPx - stopPx, syminfo.mintick)
+    float fromRisk = math.min(15.0, riskPctEq * entryPx / stopDist)
+    float maxAdvVal = volMa * entryPx * (partCapPct / 100.0)
+    float fromAdv = equity > 0 ? math.min(20.0, maxAdvVal / equity * 100.0) : fromRisk
+    math.max(0.5, math.min(fromRisk, fromAdv))
+
+export f_hurdleOk(bool gateOn, bool usdEarner, float t1Px, float closePx, float tBillAfterTax, int holdDays) =>
+    float t1Pct = closePx > 0 ? (t1Px - closePx) / closePx * 100.0 : 0.0
+    float need = tBillAfterTax * holdDays / 365.0
+    not gateOn or usdEarner or t1Pct >= need
+
+export f_earningsOk(bool blockOn, int barsToEarn) =>
+    not blockOn or barsToEarn <= 0 or barsToEarn > 5
+
+export f_brokerTpOk(bool blockOn, float brokerTp, float closePx) =>
+    not blockOn or brokerTp <= 0 or closePx < brokerTp * 0.98
+
+export f_buyShareBar(int off) =>
+    float rng = math.max(high[off] - low[off], syminfo.mintick)
+    volume[off] > 0 ? (close[off] - low[off]) / rng : 0.5
+
+export f_buyVolBar(int off) =>
+    volume[off] * f_buyShareBar(off)
+
+export f_b1Zone(int zoneLook, int bins, float atrPad) =>
+    int n = math.min(zoneLook, bar_index)
+    float hi = ta.highest(high, n)
+    float lo = ta.lowest(low, n)
+    float step = (hi - lo) / math.max(bins, 1)
+    step := step <= syminfo.mintick ? syminfo.mintick : step
+    array<float> buyB = array.new_float(bins, 0.0)
+    float tB = 0.0
+    float tS = 0.0
+    for i = 0 to n - 1
+        float bV = f_buyVolBar(i)
+        float sV = volume[i] - bV
+        tB += bV
+        tS += sV
+        int bi = int(math.floor((close[i] - lo) / step))
+        bi := math.max(0, math.min(bins - 1, bi))
+        array.set(buyB, bi, array.get(buyB, bi) + bV)
+    float maxB = 0.0
+    int b1i = 0
+    for b = 0 to bins - 1
+        if array.get(buyB, b) > maxB
+            maxB := array.get(buyB, b)
+            b1i := b
+    float p = ta.atr(14) * atrPad
+    float bLo = lo + b1i * step - p
+    float bHi = lo + (b1i + 1) * step + p
+    float bMid = lo + (b1i + 0.5) * step
+    float netP = tB + tS > 0 ? tB / (tB + tS) * 100.0 : 50.0
+    [bLo, bHi, bMid, netP]
+
+export f_mktHeavySell(string mktSym) =>
+    f_tr() =>
+        int sc = 0
+        float e20 = ta.ema(close, 20)
+        float e50 = ta.ema(close, 50)
+        sc += close > e20 ? 1 : -1
+        sc += e20 > e50 ? 1 : -1
+        sc
+    f_mom() =>
+        close[20] > 0 ? (close / close[20] - 1.0) * 100.0 : 0.0
+    int tr = request.security(mktSym, timeframe.period, f_tr(), barmerge.gaps_off, barmerge.lookahead_off)
+    float mom = request.security(mktSym, timeframe.period, f_mom(), barmerge.gaps_off, barmerge.lookahead_off)
+    mom < -4.0 and tr <= -1
+
+export f_accDistLite() =>
+    float mfm = ((close - low) - (high - close)) / math.max(high - low, syminfo.mintick)
+    float cmf = ta.sma(mfm * volume, 14) / ta.sma(volume, 14)
+    float obv = ta.obv
+    float obvSlope = ta.linreg(obv, 10, 0) - ta.linreg(obv, 10, 1)
+    bool acc = cmf > 0 and obvSlope > 0
+    bool dist = cmf < 0 and obvSlope < 0
+    float accSc = math.min(100.0, (acc ? 15.0 : 0.0) + (cmf > 0.05 ? 10.0 : 0.0) + (obvSlope > 0 ? 10.0 : 0.0))
+    float distSc = math.min(100.0, (dist ? 15.0 : 0.0) + (cmf < -0.05 ? 10.0 : 0.0) + (obvSlope < 0 ? 10.0 : 0.0))
+    [accSc, distSc, acc]
+
+export f_rsSpread(string benchSym, int len) =>
+    float benchRoc = request.security(benchSym, timeframe.period, ta.roc(close, len), barmerge.gaps_off, barmerge.lookahead_off)
+    ta.roc(close, len) - benchRoc
+
+export f_execPad(string execProfile) =>
+    execProfile == "EGX رقيق" ? 2.0 : execProfile == "EGX سائل" ? 0.5 : 1.0
+
+export f_nearLimitUpComposite(bool blockLimit, float dayPct, float dayPctPrev, float openPx, float dPrevClose, string board, float limitBuyPct, float execPad, bool use2Day, bool useGap) =>
+    float haltPct = f_boardHaltPct(board)
+    float luldPct = f_boardLuldPct(board)
+    float warn = f_haltWarnPct(haltPct, limitBuyPct)
+    float haltThr = math.min(warn, haltPct - execPad)
+    bool nearHalt = blockLimit and dayPct >= haltThr
+    bool twoDay = use2Day and blockLimit and dayPctPrev >= haltThr and dayPct > 0
+    bool luld = blockLimit and dayPct >= luldPct - 0.25
+    bool gapUp = useGap and blockLimit and dPrevClose > 0 and openPx > dPrevClose * (1.0 + haltPct / 100.0 * 0.92)
+    nearHalt or twoDay or luld or gapUp
+
+export f_regimeOk(bool blockBear, bool heavySell, bool mktHalt100, bool reqSector, bool sectorLead3d, bool reqRs, bool rsTop70) =>
+    bool mkt = (not blockBear or not heavySell) and not mktHalt100
+    bool sec = not reqSector or sectorLead3d
+    bool rs = not reqRs or rsTop70
+    mkt and sec and rs
+
+export f_microLongOk(bool blockLimit, float dayPct, float dayPctPrev, float openPx, float dPrevClose, string board, float limitBuyPct, float execPad, bool skipSunday, bool mktHalt100, bool sessionEntryOk, bool hurdleOk, bool earningsOk, bool brokerTpOk, bool use2DayLimit, bool useGapTrap) =>
+    bool lim = f_nearLimitUpComposite(blockLimit, dayPct, dayPctPrev, openPx, dPrevClose, board, limitBuyPct, execPad, use2DayLimit, useGapTrap)
+    bool sun = f_sundaySkip(skipSunday)
+    not lim and not sun and not mktHalt100 and sessionEntryOk and hurdleOk and earningsOk and brokerTpOk
+
+export f_signalTier(int setupHits, float opportunity, float rank, int gatesPass, int gatesMin) =>
+    int t = 0
+    if gatesMin > 0 and gatesPass >= gatesMin and setupHits >= 7 and opportunity >= 68 and rank >= 65
+        t := 4
+    else if setupHits >= 7 and opportunity >= 62 and rank >= 60
+        t := 3
+    else if setupHits >= 5 and opportunity >= 55
+        t := 2
+    else if setupHits >= 3
+        t := 1
+    t
+
+export f_confluenceVotes(bool oppPro, bool qBuy, bool toolsPro, bool volPro) =>
+    (oppPro ? 1 : 0) + (qBuy ? 1 : 0) + (toolsPro ? 1 : 0) + (volPro ? 1 : 0)

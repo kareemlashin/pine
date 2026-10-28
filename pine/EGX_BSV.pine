@@ -1,0 +1,499 @@
+//@version=6
+indicator("EGX Buy/Sell Volume Analyzer Pro", shorttitle="EGX BSV", overlay=false, max_labels_count=500)
+
+// ============ Inputs ============
+lookbackDays = input.int(365, "Lookback Days (مدة التاريخ)", minval=5, maxval=3650, group="Data", tooltip="كل الإحصائيات والجداول والرسم بتتحسب على آخر X يوم بس. 365 = سنة.")
+thrMode   = input.string("x Average", "Threshold Mode", options=["x Average", "Fixed"], group="Threshold", tooltip="x Average = حد ديناميكي: مضاعف متوسط الشراء في الفترة. Fixed = رقم ثابت.")
+mult      = input.float(3.0, "Multiplier (x Average)", minval=0.5, step=0.5, group="Threshold")
+thr       = input.float(10000, "Fixed Threshold (shares)", minval=0, group="Threshold")
+ltf       = input.timeframe("15", "Intrabar Timeframe (أصغر من فريم الشارت)", group="Data")
+clipX     = input.float(0, "Clip display at X × avg (0 = off)", minval=0, group="Display", tooltip="بيقص الأعمدة الضخمة في الرسم بس. الأرقام في الجداول واللابلز حقيقية.")
+showLbl   = input.bool(true,  "Big Buy Labels", group="Display")
+showSLbl  = input.bool(false, "Big Sell Labels", group="Display")
+showStats = input.bool(true,  "Summary Table", group="Tables")
+showPrice = input.bool(true,  "Price Averages Table", group="Tables")
+showTop   = input.bool(true,  "Biggest Trades Table", group="Tables")
+showTopD  = input.bool(true,  "Top 5 Days Table", group="Tables")
+showHist  = input.bool(true,  "Recent Days Table", group="Tables")
+showWd    = input.bool(true,  "Weekday Table", group="Tables")
+histN     = input.int(7, "Recent Days Count", minval=3, maxval=10, group="Tables")
+lang      = input.string("AR", "Table Language", options=["AR", "EN"], group="Tables")
+
+// ============ Palette ============
+color cHdr  = color.rgb(30, 58, 95)
+color cBody = color.rgb(11, 16, 22)
+color cBrd  = color.rgb(42, 51, 64)
+color cKey  = color.rgb(154, 164, 178)
+color cBuy  = color.rgb(38, 214, 140)
+color cSell = color.rgb(255, 82, 82)
+color cAvg  = color.rgb(255, 167, 38)
+color cSp   = color.rgb(11, 16, 22)
+
+// ============ Helpers ============
+fmtT(int x) => na(x) or x == 0 ? "-" : str.format_time(x, "yyyy-MM-dd EEE", syminfo.timezone)
+fmtD(int x) => na(x) or x == 0 ? "-" : str.format_time(x, "yyyy-MM-dd", syminfo.timezone)
+fmtV(float x) => na(x) ? "-" : str.tostring(x, format.volume)
+fmtP(float x) => na(x) ? "-" : str.tostring(x, "0.00")
+fmtPct(float x) => na(x) ? "-" : (x >= 0 ? "+" : "") + str.tostring(x, "0.0") + "%"
+tr(string en, string ar) => lang == "AR" ? ar : en
+
+insertTop(array<float> vals, array<int> times, float v, int t) =>
+    int sz = array.size(vals)
+    if v > array.get(vals, sz - 1)
+        int pos = sz - 1
+        while pos > 0 and v > array.get(vals, pos - 1)
+            array.set(vals, pos, array.get(vals, pos - 1))
+            array.set(times, pos, array.get(times, pos - 1))
+            pos -= 1
+        array.set(vals, pos, v)
+        array.set(times, pos, t)
+    true
+
+insertTopP(array<float> vals, array<int> times, array<float> prices, float v, int t, float p) =>
+    int sz = array.size(vals)
+    if v > array.get(vals, sz - 1)
+        int pos = sz - 1
+        while pos > 0 and v > array.get(vals, pos - 1)
+            array.set(vals, pos, array.get(vals, pos - 1))
+            array.set(times, pos, array.get(times, pos - 1))
+            array.set(prices, pos, array.get(prices, pos - 1))
+            pos -= 1
+        array.set(vals, pos, v)
+        array.set(times, pos, t)
+        array.set(prices, pos, p)
+    true
+
+hdrCell(table tb, int c, int r, string txt) =>
+    table.cell(tb, c, r, txt, text_color=color.white, text_size=size.small, bgcolor=cHdr, text_halign=text.align_center)
+    true
+
+addRow(table tb, int r, string k, string v, color c) =>
+    table.cell(tb, 0, r, k, text_color=cKey, text_size=size.tiny, bgcolor=cBody)
+    table.cell(tb, 1, r, v, text_color=c, text_size=size.tiny, bgcolor=cBody)
+    true
+
+tradeRow(table tb, int r, int idx, float vv, int tt, float px, bool isBuy) =>
+    color clr = isBuy ? cBuy : cSell
+    table.cell(tb, 0, r, str.tostring(idx), text_color=cKey, text_size=size.tiny, bgcolor=cBody)
+    table.cell(tb, 1, r, vv > 0 ? fmtT(tt) : "-", text_color=cKey, text_size=size.tiny, bgcolor=cBody)
+    table.cell(tb, 2, r, vv > 0 ? fmtV(vv) : "-", text_color=clr, text_size=size.tiny, bgcolor=cBody)
+    table.cell(tb, 3, r, vv > 0 ? fmtP(px) : "-", text_color=color.white, text_size=size.tiny, bgcolor=cBody)
+    table.cell(tb, 4, r, vv > 0 ? fmtV(vv * px) : "-", text_color=cAvg, text_size=size.tiny, bgcolor=cBody)
+    float chg = vv > 0 and px > 0 ? (close / px - 1.0) * 100.0 : na
+    table.cell(tb, 5, r, fmtPct(chg), text_color=na(chg) ? cKey : (chg >= 0 ? cBuy : cSell), text_size=size.tiny, bgcolor=cBody)
+    true
+
+spanRow(table tb, int r, int lastCol, string txt, color bg) =>
+    table.cell(tb, 0, r, txt, text_color=color.white, text_size=size.small, bgcolor=bg, text_halign=text.align_center)
+    table.merge_cells(tb, 0, r, lastCol, r)
+    true
+
+// ============ Lookback window ============
+int  winMs = lookbackDays * 86400000
+bool inWin = time >= last_bar_time - winMs
+
+// ============ Buy/Sell split (intrabar) ============
+[ibO, ibC, ibV, ibP] = request.security_lower_tf(syminfo.tickerid, ltf, [open, close, volume, hlc3])
+
+float buyV   = 0.0
+float sellV  = 0.0
+float buyPV  = 0.0
+float sellPV = 0.0
+bool  usedFallback = false
+int   nIb = array.size(ibV)
+if nIb > 0
+    for i = 0 to nIb - 1
+        float o = array.get(ibO, i)
+        float c = array.get(ibC, i)
+        float v = array.get(ibV, i)
+        float p = array.get(ibP, i)
+        if c > o
+            buyV  += v
+            buyPV += v * p
+        else if c < o
+            sellV  += v
+            sellPV += v * p
+        else
+            buyV   += v / 2.0
+            sellV  += v / 2.0
+            buyPV  += v / 2.0 * p
+            sellPV += v / 2.0 * p
+else
+    usedFallback := true
+    float rng = high - low
+    float share = rng > 0 ? (close - low) / rng : 0.5
+    buyV   := volume * share
+    sellV  := volume * (1.0 - share)
+    buyPV  := buyV  * hlc3
+    sellPV := sellV * hlc3
+
+float barBuyPx  = buyV  > 0 ? buyPV  / buyV  : na
+float barSellPx = sellV > 0 ? sellPV / sellV : na
+
+float delta  = buyV - sellV
+float total  = buyV + sellV
+float buyPct = total > 0 ? buyV / total * 100.0 : 0.0
+
+// ============ Stats (داخل الفترة بس) ============
+var float sumBuy    = 0.0
+var float sumSell   = 0.0
+var float sumBuyPV  = 0.0
+var float sumSellPV = 0.0
+var float sumBigPV  = 0.0
+var int   cnt       = 0
+var int   fbCnt     = 0
+var float cumDelta  = 0.0
+var float maxBuy    = 0.0
+var int   maxBuyT   = na
+var float maxSell   = 0.0
+var int   maxSellT  = na
+var int   bigCnt    = 0
+var int   bigSCnt   = 0
+var float sumBig    = 0.0
+var int   winStart  = na
+
+var array<float> topV   = array.new_float(10, 0.0)
+var array<int>   topT   = array.new_int(10, 0)
+var array<float> topP   = array.new_float(10, 0.0)
+var array<float> topSV  = array.new_float(5, 0.0)
+var array<int>   topST  = array.new_int(5, 0)
+var array<float> topSP  = array.new_float(5, 0.0)
+var array<float> topDV  = array.new_float(5, 0.0)
+var array<int>   topDT  = array.new_int(5, 0)
+
+var float dBuy     = 0.0
+var float dSell    = 0.0
+var int   dT       = na
+var float maxDBuy  = 0.0
+var int   maxDBuyT = na
+var float sumDBuy  = 0.0
+var float sumDSell = 0.0
+var int   dCnt     = 0
+
+var array<float> wdBuy  = array.new_float(8, 0.0)
+var array<float> wdSell = array.new_float(8, 0.0)
+var array<int>   wdCnt  = array.new_int(8, 0)
+var array<int>   wdBig  = array.new_int(8, 0)
+
+var array<float> hB = array.new_float(0)
+var array<float> hS = array.new_float(0)
+var array<int>   hT = array.new_int(0)
+
+float avgBuyPrev  = cnt > 0 ? sumBuy  / cnt : 0.0
+float avgSellPrev = cnt > 0 ? sumSell / cnt : 0.0
+float thrBuy  = thrMode == "Fixed" ? thr : avgBuyPrev  * mult
+float thrSell = thrMode == "Fixed" ? thr : avgSellPrev * mult
+
+bool bigBuy  = false
+bool bigSell = false
+bool newDay = timeframe.change("D")
+
+if inWin
+    if na(winStart)
+        winStart := time
+
+    sumBuy    += buyV
+    sumSell   += sellV
+    sumBuyPV  += buyPV
+    sumSellPV += sellPV
+    cumDelta  += delta
+    cnt       += 1
+    if usedFallback
+        fbCnt += 1
+
+    if buyV > maxBuy
+        maxBuy  := buyV
+        maxBuyT := time
+    if sellV > maxSell
+        maxSell  := sellV
+        maxSellT := time
+
+    bigBuy  := cnt > 1 and buyV  > thrBuy
+    bigSell := cnt > 1 and sellV > thrSell
+    if bigBuy
+        bigCnt   += 1
+        sumBig   += buyV
+        sumBigPV += buyPV
+        int wdb = dayofweek(time, syminfo.timezone)
+        array.set(wdBig, wdb, array.get(wdBig, wdb) + 1)
+    if bigSell
+        bigSCnt += 1
+
+    insertTopP(topV,  topT,  topP,  buyV,  time, nz(barBuyPx))
+    insertTopP(topSV, topST, topSP, sellV, time, nz(barSellPx))
+
+    if newDay and not na(dT)
+        sumDBuy  += dBuy
+        sumDSell += dSell
+        dCnt     += 1
+        if dBuy > maxDBuy
+            maxDBuy  := dBuy
+            maxDBuyT := dT
+        insertTop(topDV, topDT, dBuy, dT)
+        int wd = dayofweek(dT, syminfo.timezone)
+        array.set(wdBuy,  wd, array.get(wdBuy,  wd) + dBuy)
+        array.set(wdSell, wd, array.get(wdSell, wd) + dSell)
+        array.set(wdCnt,  wd, array.get(wdCnt,  wd) + 1)
+        array.push(hB, dBuy)
+        array.push(hS, dSell)
+        array.push(hT, dT)
+        while array.size(hB) > histN
+            array.shift(hB)
+            array.shift(hS)
+            array.shift(hT)
+        dBuy  := 0.0
+        dSell := 0.0
+
+    dBuy  += buyV
+    dSell += sellV
+    dT    := time
+
+float avgBuy  = cnt > 0 ? sumBuy  / cnt : na
+float avgSell = cnt > 0 ? sumSell / cnt : na
+float avgBig  = bigCnt > 0 ? sumBig / bigCnt : 0.0
+
+float vwapAll    = (sumBuy + sumSell) > 0 ? (sumBuyPV + sumSellPV) / (sumBuy + sumSell) : na
+float avgBuyPx   = sumBuy  > 0 ? sumBuyPV  / sumBuy  : na
+float avgSellPx  = sumSell > 0 ? sumSellPV / sumSell : na
+float avgBigPx   = sumBig  > 0 ? sumBigPV  / sumBig  : na
+float vsAvgBuy   = avgBuyPx > 0 ? (close / avgBuyPx - 1.0) * 100.0 : na
+
+float maxDBuyShow  = math.max(maxDBuy, dBuy)
+int   maxDBuyTShow = dBuy > maxDBuy ? dT : maxDBuyT
+int   dCntShow     = dCnt + (dBuy + dSell > 0 ? 1 : 0)
+float avgDBuyShow  = dCntShow > 0 ? (sumDBuy + dBuy) / dCntShow : 0.0
+float avgDSellShow = dCntShow > 0 ? (sumDSell + dSell) / dCntShow : 0.0
+
+// ============ Plot ============
+float capB = clipX > 0 and avgBuyPrev  > 0 ? clipX * avgBuyPrev  : na
+float capS = clipX > 0 and avgSellPrev > 0 ? clipX * avgSellPrev : na
+float buyP   = na(capB) ? buyV  : math.min(buyV, capB)
+float sellP  = na(capS) ? sellV : math.min(sellV, capS)
+float deltaP = na(capB) ? delta : math.max(math.min(delta, capB), -capB)
+
+plot(inWin ? buyP : na,    "Buy Volume",  color=bigBuy  ? cBuy  : color.new(cBuy, 60),  style=plot.style_columns)
+plot(inWin ? -sellP : na,  "Sell Volume", color=bigSell ? cSell : color.new(cSell, 60), style=plot.style_columns)
+plot(inWin ? deltaP : na,  "Delta",       color=color.new(color.yellow, 10), linewidth=1)
+plot(inWin ? avgBuy : na,  "Avg Buy",     color=cAvg, linewidth=2)
+plot(inWin ? -avgSell : na,"Avg Sell",    color=color.new(cAvg, 50), linewidth=1)
+plot(inWin ? thrBuy : na,  "Big Threshold",  color=color.new(color.gray, 40), linewidth=1, style=plot.style_stepline)
+plot(inWin ? -thrSell : na,"Big Threshold (Sell)", color=color.new(color.gray, 40), linewidth=1, style=plot.style_stepline)
+
+if showLbl and bigBuy
+    label.new(bar_index, buyP, fmtV(buyV), style=label.style_label_down,
+         color=color.new(color.black, 100), textcolor=cBuy, size=size.tiny,
+         tooltip=fmtT(time) + "\nBuy: " + fmtV(buyV) + "  (" + str.tostring(buyPct, "0.0") + "%)\nAvg Buy Price: " + fmtP(barBuyPx) + "\nSell: " + fmtV(sellV))
+if showSLbl and bigSell
+    label.new(bar_index, -sellP, fmtV(sellV), style=label.style_label_up,
+         color=color.new(color.black, 100), textcolor=cSell, size=size.tiny,
+         tooltip=fmtT(time) + "\nSell: " + fmtV(sellV) + "\nAvg Sell Price: " + fmtP(barSellPx) + "\nBuy: " + fmtV(buyV))
+
+alertcondition(bigBuy,  "Big Buy",  "Big buy volume on {{ticker}}")
+alertcondition(bigSell, "Big Sell", "Big sell volume on {{ticker}}")
+
+// لوحتان فقط عشان مفيش تداخل: يسار = صفقات+أيام+أيام الأسبوع | يمين = ملخص+أسعار+أيام أخيرة
+int leftRows  = 36
+int rightRows = 20 + histN
+var table tbL = table.new(position.top_left,  6, leftRows,  bgcolor=cBody, border_width=1, border_color=cBrd, frame_color=cBrd, frame_width=2)
+var table tbR = table.new(position.top_right, 6, rightRows, bgcolor=cBody, border_width=1, border_color=cBrd, frame_color=cBrd, frame_width=2)
+
+if barstate.islast
+    table.clear(tbL, 0, 0, 5, leftRows - 1)
+    table.clear(tbR, 0, 0, 5, rightRows - 1)
+
+    // ---- يمين: الملخص ثم متوسطات السعر ثم الأيام الأخيرة ----
+    int rR = 0
+    if showStats
+        hdrCell(tbR, 0, rR, syminfo.ticker + "  |  Buy/Sell Volume")
+        table.merge_cells(tbR, 0, rR, 2, rR)
+        hdrCell(tbR, 3, rR, "LTF " + ltf + "  |  " + (thrMode == "Fixed" ? "Fixed " + fmtV(thr) : str.tostring(mult, "0.0") + "x Avg"))
+        table.merge_cells(tbR, 3, rR, 5, rR)
+        rR += 1
+        addRow(tbR, rR, tr("Period", "الفترة"), fmtD(winStart) + "  →  " + fmtD(time) + "  (" + str.tostring(lookbackDays) + "d)", color.white)
+        table.merge_cells(tbR, 1, rR, 5, rR)
+        rR += 1
+        addRow(tbR, rR, tr("Max Buy Bar", "أكبر شراء (شمعة)"), fmtV(maxBuy) + "  |  " + fmtT(maxBuyT), cBuy)
+        table.merge_cells(tbR, 1, rR, 5, rR)
+        rR += 1
+        addRow(tbR, rR, tr("Max Sell Bar", "أكبر بيع (شمعة)"), fmtV(maxSell) + "  |  " + fmtT(maxSellT), cSell)
+        table.merge_cells(tbR, 1, rR, 5, rR)
+        rR += 1
+        addRow(tbR, rR, tr("Avg Buy / Sell", "متوسط شراء / بيع"), fmtV(avgBuy) + "  /  " + fmtV(avgSell), cAvg)
+        table.merge_cells(tbR, 1, rR, 5, rR)
+        rR += 1
+        addRow(tbR, rR, tr("Avg Big Buy", "متوسط الشراء الكبير"), fmtV(avgBig), cBuy)
+        table.merge_cells(tbR, 1, rR, 5, rR)
+        rR += 1
+        addRow(tbR, rR, tr("Big Buy Bars", "شمعات شراء كبير"), str.tostring(bigCnt) + " / " + str.tostring(cnt) + "  (" + str.tostring(cnt > 0 ? bigCnt / cnt * 100.0 : 0.0, "0.0") + "%)", color.white)
+        table.merge_cells(tbR, 1, rR, 5, rR)
+        rR += 1
+        addRow(tbR, rR, tr("Big Sell Bars", "شمعات بيع كبير"), str.tostring(bigSCnt) + " / " + str.tostring(cnt) + "  (" + str.tostring(cnt > 0 ? bigSCnt / cnt * 100.0 : 0.0, "0.0") + "%)", color.white)
+        table.merge_cells(tbR, 1, rR, 5, rR)
+        rR += 1
+        addRow(tbR, rR, tr("Max Buy Day", "أكبر شراء يومي"), fmtV(maxDBuyShow) + "  |  " + fmtT(maxDBuyTShow), cBuy)
+        table.merge_cells(tbR, 1, rR, 5, rR)
+        rR += 1
+        addRow(tbR, rR, tr("Avg Daily Buy / Sell", "متوسط يومي شراء / بيع"), fmtV(avgDBuyShow) + "  /  " + fmtV(avgDSellShow), color.white)
+        table.merge_cells(tbR, 1, rR, 5, rR)
+        rR += 1
+        addRow(tbR, rR, tr("Cumulative Delta", "صافي الدلتا التراكمي"), fmtV(cumDelta), cumDelta > 0 ? cBuy : cSell)
+        table.merge_cells(tbR, 1, rR, 5, rR)
+        rR += 1
+        addRow(tbR, rR, tr("Today Buy / Sell", "اليوم شراء / بيع"), fmtV(dBuy) + "  /  " + fmtV(dSell), dBuy > dSell ? cBuy : cSell)
+        table.merge_cells(tbR, 1, rR, 5, rR)
+        rR += 1
+        addRow(tbR, rR, tr("Last Bar Buy %", "آخر شمعة شراء %"), str.tostring(buyPct, "0.0") + "%", buyPct > 50 ? cBuy : cSell)
+        table.merge_cells(tbR, 1, rR, 5, rR)
+        rR += 1
+        addRow(tbR, rR, tr("Estimated Bars", "شموع تقديرية (بدون داتا صغيرة)"), str.tostring(fbCnt) + " / " + str.tostring(cnt) + "  (" + str.tostring(cnt > 0 ? fbCnt * 100.0 / cnt : 0.0, "0") + "%)", (cnt > 0 and fbCnt * 2 > cnt) ? cAvg : cKey)
+        table.merge_cells(tbR, 1, rR, 5, rR)
+        rR += 1
+
+    if showStats and (showPrice or showHist)
+        spanRow(tbR, rR, 5, "", cSp)
+        rR += 1
+
+    if showPrice
+        hdrCell(tbR, 0, rR, tr("Price Averages (Vol-Weighted)", "متوسطات الأسعار (مرجّحة بالفوليوم)"))
+        table.merge_cells(tbR, 0, rR, 3, rR)
+        hdrCell(tbR, 4, rR, tr("Price", "السعر"))
+        table.merge_cells(tbR, 4, rR, 5, rR)
+        rR += 1
+        addRow(tbR, rR, tr("Avg Trade Price (VWAP)", "متوسط سعر الصفقة (VWAP)"), fmtP(vwapAll), color.white)
+        table.merge_cells(tbR, 1, rR, 5, rR)
+        rR += 1
+        addRow(tbR, rR, tr("Avg Buy Price", "متوسط سعر الشراء"), fmtP(avgBuyPx), cBuy)
+        table.merge_cells(tbR, 1, rR, 5, rR)
+        rR += 1
+        addRow(tbR, rR, tr("Avg Sell Price", "متوسط سعر البيع"), fmtP(avgSellPx), cSell)
+        table.merge_cells(tbR, 1, rR, 5, rR)
+        rR += 1
+        addRow(tbR, rR, tr("Avg Big Buy Price", "متوسط سعر الشراء الكبير"), fmtP(avgBigPx), cBuy)
+        table.merge_cells(tbR, 1, rR, 5, rR)
+        rR += 1
+        addRow(tbR, rR, tr("Last Price", "السعر الحالي"), fmtP(close), cAvg)
+        table.merge_cells(tbR, 1, rR, 5, rR)
+        rR += 1
+        addRow(tbR, rR, tr("Price vs Avg Buy", "السعر الحالي مقابل متوسط الشراء"), fmtPct(vsAvgBuy), na(vsAvgBuy) ? cKey : (vsAvgBuy >= 0 ? cBuy : cSell))
+        table.merge_cells(tbR, 1, rR, 5, rR)
+        rR += 1
+
+    if showPrice and showHist
+        spanRow(tbR, rR, 5, "", cSp)
+        rR += 1
+
+    if showHist
+        hdrCell(tbR, 0, rR, tr("Day", "اليوم"))
+        hdrCell(tbR, 1, rR, tr("Buy", "شراء"))
+        hdrCell(tbR, 2, rR, tr("Sell", "بيع"))
+        hdrCell(tbR, 3, rR, tr("Delta", "دلتا"))
+        hdrCell(tbR, 4, rR, tr("Buy %", "شراء %"))
+        hdrCell(tbR, 5, rR, "")
+        rR += 1
+        array<float> hBshow = array.copy(hB)
+        array<float> hSshow = array.copy(hS)
+        array<int>   hTshow = array.copy(hT)
+        if not na(dT) and dBuy + dSell > 0
+            array.push(hBshow, dBuy)
+            array.push(hSshow, dSell)
+            array.push(hTshow, dT)
+            while array.size(hBshow) > histN
+                array.shift(hBshow)
+                array.shift(hSshow)
+                array.shift(hTshow)
+        int hs = array.size(hBshow)
+        if hs > 0
+            for i = 0 to hs - 1
+                int idx = hs - 1 - i
+                float hb  = array.get(hBshow, idx)
+                float hsl = array.get(hSshow, idx)
+                float hd  = hb - hsl
+                float hp  = (hb + hsl) > 0 ? hb / (hb + hsl) * 100.0 : 0.0
+                table.cell(tbR, 0, rR, fmtT(array.get(hTshow, idx)), text_color=cKey, text_size=size.tiny, bgcolor=cBody)
+                table.cell(tbR, 1, rR, fmtV(hb),  text_color=cBuy,  text_size=size.tiny, bgcolor=cBody)
+                table.cell(tbR, 2, rR, fmtV(hsl), text_color=cSell, text_size=size.tiny, bgcolor=cBody)
+                table.cell(tbR, 3, rR, fmtV(hd),  text_color=hd > 0 ? cBuy : cSell, text_size=size.tiny, bgcolor=cBody)
+                table.cell(tbR, 4, rR, str.tostring(hp, "0.0") + "%", text_color=hp > 50 ? cBuy : cSell, text_size=size.tiny, bgcolor=cBody)
+                table.cell(tbR, 5, rR, "", bgcolor=cBody)
+                rR += 1
+
+    // ---- يسار: أكبر الصفقات ثم أكبر الأيام ثم أيام الأسبوع ----
+    int rL = 0
+    if showTop
+        hdrCell(tbL, 0, rL, "#")
+        hdrCell(tbL, 1, rL, tr("Biggest Buys", "أكبر صفقات الشراء"))
+        hdrCell(tbL, 2, rL, tr("Qty", "الكمية"))
+        hdrCell(tbL, 3, rL, tr("Avg Price", "متوسط السعر"))
+        hdrCell(tbL, 4, rL, tr("Value", "القيمة"))
+        hdrCell(tbL, 5, rL, tr("Now vs", "الآن مقابل"))
+        rL += 1
+        for k = 0 to 9
+            tradeRow(tbL, rL, k + 1, array.get(topV, k), array.get(topT, k), array.get(topP, k), true)
+            rL += 1
+        hdrCell(tbL, 0, rL, "#")
+        hdrCell(tbL, 1, rL, tr("Biggest Sells", "أكبر صفقات البيع"))
+        hdrCell(tbL, 2, rL, tr("Qty", "الكمية"))
+        hdrCell(tbL, 3, rL, tr("Avg Price", "متوسط السعر"))
+        hdrCell(tbL, 4, rL, tr("Value", "القيمة"))
+        hdrCell(tbL, 5, rL, tr("Now vs", "الآن مقابل"))
+        rL += 1
+        for k = 0 to 4
+            tradeRow(tbL, rL, k + 1, array.get(topSV, k), array.get(topST, k), array.get(topSP, k), false)
+            rL += 1
+
+    if showTop and (showTopD or showWd)
+        spanRow(tbL, rL, 5, "", cSp)
+        rL += 1
+
+    if showTopD
+        hdrCell(tbL, 0, rL, "#")
+        hdrCell(tbL, 1, rL, tr("Top 5 Buy Days", "أكبر 5 أيام شراء"))
+        table.merge_cells(tbL, 1, rL, 3, rL)
+        hdrCell(tbL, 4, rL, tr("Buy", "شراء"))
+        table.merge_cells(tbL, 4, rL, 5, rL)
+        rL += 1
+        array<float> topDVs = array.copy(topDV)
+        array<int>   topDTs = array.copy(topDT)
+        if not na(dT)
+            insertTop(topDVs, topDTs, dBuy, dT)
+        for k = 0 to 4
+            float dv = array.get(topDVs, k)
+            table.cell(tbL, 0, rL, str.tostring(k + 1), text_color=cKey, text_size=size.tiny, bgcolor=cBody)
+            table.cell(tbL, 1, rL, dv > 0 ? fmtT(array.get(topDTs, k)) : "-", text_color=cKey, text_size=size.tiny, bgcolor=cBody)
+            table.merge_cells(tbL, 1, rL, 3, rL)
+            table.cell(tbL, 4, rL, dv > 0 ? fmtV(dv) : "-", text_color=cBuy, text_size=size.tiny, bgcolor=cBody)
+            table.merge_cells(tbL, 4, rL, 5, rL)
+            rL += 1
+
+    if showTopD and showWd
+        spanRow(tbL, rL, 5, "", cSp)
+        rL += 1
+
+    if showWd
+        hdrCell(tbL, 0, rL, tr("Weekday", "اليوم"))
+        hdrCell(tbL, 1, rL, tr("Avg Buy", "متوسط شراء"))
+        hdrCell(tbL, 2, rL, tr("Avg Sell", "متوسط بيع"))
+        hdrCell(tbL, 3, rL, tr("Avg Delta", "متوسط دلتا"))
+        hdrCell(tbL, 4, rL, tr("Big Buys", "شراء كبير"))
+        hdrCell(tbL, 5, rL, "")
+        rL += 1
+        array<string> names = lang == "AR" ? array.from("", "الأحد", "الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت") : array.from("", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
+        array<float> wdBuyD  = array.copy(wdBuy)
+        array<float> wdSellD = array.copy(wdSell)
+        array<int>   wdCntD  = array.copy(wdCnt)
+        if not na(dT) and dBuy + dSell > 0
+            int wdNow = dayofweek(dT, syminfo.timezone)
+            array.set(wdBuyD,  wdNow, array.get(wdBuyD,  wdNow) + dBuy)
+            array.set(wdSellD, wdNow, array.get(wdSellD, wdNow) + dSell)
+            array.set(wdCntD,  wdNow, array.get(wdCntD,  wdNow) + 1)
+        for d = 1 to 5
+            int cc = array.get(wdCntD, d)
+            float avB = cc > 0 ? array.get(wdBuyD, d)  / cc : 0.0
+            float avS = cc > 0 ? array.get(wdSellD, d) / cc : 0.0
+            table.cell(tbL, 0, rL, array.get(names, d), text_color=cKey, text_size=size.tiny, bgcolor=cBody)
+            table.cell(tbL, 1, rL, cc > 0 ? fmtV(avB) : "-", text_color=cBuy,  text_size=size.tiny, bgcolor=cBody)
+            table.cell(tbL, 2, rL, cc > 0 ? fmtV(avS) : "-", text_color=cSell, text_size=size.tiny, bgcolor=cBody)
+            table.cell(tbL, 3, rL, cc > 0 ? fmtV(avB - avS) : "-", text_color=avB > avS ? cBuy : cSell, text_size=size.tiny, bgcolor=cBody)
+            table.cell(tbL, 4, rL, str.tostring(array.get(wdBig, d)), text_color=color.white, text_size=size.tiny, bgcolor=cBody)
+            table.cell(tbL, 5, rL, "", bgcolor=cBody)
+            rL += 1

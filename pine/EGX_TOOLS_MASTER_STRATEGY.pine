@@ -1,0 +1,613 @@
+//@version=6
+strategy("EGX TOOLS MASTER — اختبار", shorttitle="EGX T-MASTER ST", overlay=true, pyramiding=0, calc_bars_count=5000, commission_type=strategy.commission.percent, commission_value=0.125, slippage=3, default_qty_type=strategy.percent_of_equity, default_qty_value=10, initial_capital=100000, currency=currency.EGP)
+
+// مرآة EGX_TOOLS_MASTER.pine · عمولة 0.125% · slippage 3 (متوسط/رقيق EGX)
+// ⚠️ تعليمي — مش نصيحة استثمارية
+
+string G_PROF = "EGX"
+string profile = input.string("EGX يومي", "ملف", options=["EGX يومي", "مضاربة", "استثمار", "مخصص"], group=G_PROF)
+string mktSym = input.symbol("EGX:EGX30", "مؤشر RS", group=G_PROF)
+bool confirmClose = input.bool(true, "إشارة عند الإغلاق", group=G_PROF)
+bool blockBearMkt = input.bool(true, "منع شراء ضغط EGX30", group=G_PROF)
+bool blockLimitUp = input.bool(true, "منع قرب halt اليومي", group=G_PROF)
+float limitPct = input.float(9.0, "تحذير halt %", minval=3, maxval=10, step=0.5, group=G_PROF)
+string egxBoard = input.string("نشط (EGX100)", "لوحة", options=["نشط (EGX100)", "EGX30 (بيع مكشوف)", "SME تميّز", "SME نايل", "غير نشط"], group=G_PROF)
+bool skipSundayBuy = input.bool(false, "لا دخول يوم الأحد", group=G_PROF)
+bool useMktHalt100 = input.bool(true, "منع شراء إذا EGX100 ≤ −10%", group=G_PROF)
+bool useEgxSession = input.bool(false, "جلسة القاهرة (مستمر فقط)", group=G_PROF)
+bool useHtfBuy = input.bool(false, "شراء A يتطلب W>EMA50", group=G_PROF)
+bool useRiskQty = input.bool(true, "حجم = مخاطرة % + سقف ADV", group=G_PROF)
+
+string G_SIG = "قرار"
+float sigMinIn = input.float(20.0, "حد السكور %", minval=5, maxval=80, group=G_SIG)
+float minRRIn = input.float(1.5, "حد R/R", minval=1.0, step=0.1, group=G_SIG)
+float minVolIn = input.float(1500.0, "حد متوسط حجم", minval=0, group=G_SIG)
+float atrMult = input.float(2.0, "وقف × ATR", minval=0.5, step=0.25, group=G_SIG)
+float capital = input.float(100000.0, "رأس المال ج", minval=1000, group=G_SIG)
+float riskPct = input.float(1.0, "مخاطرة %", minval=0.1, maxval=5, step=0.1, group=G_SIG)
+
+string G_EX = "خروج"
+bool usePartial = input.bool(true, "جزئي 50% عند منتصف T1", group=G_EX)
+bool useTrail = input.bool(true, "وقف متحرك بعد جزئي", group=G_EX)
+float trailMult = input.float(1.2, "متحرك × ATR", minval=0.5, step=0.1, group=G_EX)
+
+string G_W = "أوزان"
+float wA = input.float(0.20, "أ زخم", minval=0, step=0.05, group=G_W)
+float wB = input.float(0.20, "ب اتجاه", minval=0, step=0.05, group=G_W)
+float wC = input.float(0.20, "ج حجم", minval=0, step=0.05, group=G_W)
+float wD = input.float(0.10, "د تقلب", minval=0, step=0.05, group=G_W)
+float wE = input.float(0.10, "ه SMC", minval=0, step=0.05, group=G_W)
+float wF = input.float(0.08, "و موجات", minval=0, step=0.05, group=G_W)
+float wG = input.float(0.08, "ز أنظمة", minval=0, step=0.05, group=G_W)
+float wH = input.float(0.04, "ح بروفايل", minval=0, step=0.05, group=G_W)
+
+bool profCustom = profile == "مخصص"
+float sigMin = profCustom ? sigMinIn : profile == "مضاربة" ? 18.0 : profile == "استثمار" ? 25.0 : 20.0
+float minRR = profCustom ? minRRIn : 1.5
+float minVol = profCustom ? minVolIn : profile == "مضاربة" ? 3000.0 : profile == "استثمار" ? 800.0 : 1500.0
+bool sigOk = not confirmClose or barstate.isconfirmed
+
+// SYNC:GATES:START
+f_egxSessId() =>
+    int id = 0
+    if not na(time(timeframe.period, "1000-1415:23456", "Africa/Cairo"))
+        id := 2
+    id
+bool sessionOk = not useEgxSession or not timeframe.isintraday or f_egxSessId() == 2
+// SYNC:GATES:END
+
+// ─── مشترك ───
+float ema13 = ta.ema(close, 13)
+float ema20 = ta.ema(close, 20)
+float ema50 = ta.ema(close, 50)
+float ema200 = ta.ema(close, 200)
+float htfClose = request.security(syminfo.tickerid, "W", close, barmerge.gaps_off, barmerge.lookahead_off)
+float htfEma50 = request.security(syminfo.tickerid, "W", ta.ema(close, 50), barmerge.gaps_off, barmerge.lookahead_off)
+bool htfBull = htfClose > htfEma50
+float atr = ta.atr(14)
+float rsi = ta.rsi(close, 14)
+[macdL, macdS, macdH] = ta.macd(close, 12, 26, 9)
+float volMa = ta.sma(volume, 20)
+float rvol = volume / math.max(volMa, 1.0)
+bool liqOk = volMa >= minVol
+float rng = math.max(high - low, syminfo.mintick)
+float buyShare = (close - low) / rng
+float buyV = volume * buyShare
+float sellV = volume - buyV
+float mfm = ((close - low) - (high - close)) / rng
+float cmf = ta.sma(mfm * volume, 20) / ta.sma(volume, 20)
+float ad = ta.accdist
+float adEma = ta.ema(ad, 20)
+float obv = ta.obv
+float obvSl = ta.linreg(obv, 10, 0) - ta.linreg(obv, 10, 1)
+[diP, diM, adx] = ta.dmi(14, 14)
+[bbMid, bbUp, bbLo] = ta.bb(close, 20, 2.0)
+[kcMid, kcUp, kcLo] = ta.kc(close, 20, 1.5)
+[stLine, stDir] = ta.supertrend(3.0, 10)
+float hi52 = ta.highest(high, 250)
+float lo52 = ta.lowest(low, 250)
+int pivLen = 8
+float ph = ta.pivothigh(high, pivLen, pivLen)
+float pl = ta.pivotlow(low, pivLen, pivLen)
+var float lastH = na
+var float lastL = na
+var float h1 = na
+var float h2 = na
+var float l1 = na
+var float l2 = na
+if not na(ph)
+    h2 := h1
+    h1 := ph
+    lastH := ph
+if not na(pl)
+    l2 := l1
+    l1 := pl
+    lastL := pl
+bool hhhl = not na(h1) and not na(h2) and not na(l1) and not na(l2) and h1 > h2 and l1 > l2
+bool lhll = not na(h1) and not na(h2) and not na(l1) and not na(l2) and h1 < h2 and l1 < l2
+bool bosUp = not na(lastH) and close > lastH and close[1] <= lastH
+bool bosDn = not na(lastL) and close < lastL and close[1] >= lastL
+bool sweepLo = not na(lastL) and low < lastL and close > lastL
+bool sweepHi = not na(lastH) and high > lastH and close < lastH
+
+float lookHi = ta.highest(high, 80)
+float lookLo = ta.lowest(low, 80)
+float eq = (lookHi + lookLo) / 2.0
+float fibRg = lookHi - lookLo
+float f382 = lookHi - 0.382 * fibRg
+float f618 = lookHi - 0.618 * fibRg
+
+float dPrev = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+float dayPct = dPrev > 0 ? (close - dPrev) / dPrev * 100.0 : 0.0
+float haltPct = egxBoard == "SME تميّز" or egxBoard == "SME نايل" or egxBoard == "غير نشط" ? 5.0 : 10.0
+float luldPct = egxBoard == "غير نشط" ? 5.0 : (egxBoard == "SME تميّز" or egxBoard == "SME نايل" ? 10.0 : 20.0)
+bool nearLimit = blockLimitUp and dPrev > 0 and (dayPct >= math.min(limitPct, haltPct - 1.0) or dayPct >= luldPct - 0.25)
+float dayPct100 = useMktHalt100 ? request.security("EGX:EGX100EWI", "D", close[1] > 0 ? (close - close[1]) / close[1] * 100.0 : 0.0, barmerge.gaps_off, barmerge.lookahead_off) : 0.0
+bool mktHalt100 = useMktHalt100 and dayPct100 <= -10.0
+bool sundaySkip = skipSundayBuy and dayofweek == dayofweek.sunday
+
+f_mktTr() =>
+    int sc = 0
+    float e20m = ta.ema(close, 20)
+    float e50m = ta.ema(close, 50)
+    sc += close > e20m ? 1 : -1
+    sc += e20m > e50m ? 1 : -1
+    sc
+f_mktMom() =>
+    close[20] > 0 ? (close / close[20] - 1.0) * 100.0 : 0.0
+int tr30 = request.security(mktSym, timeframe.period, f_mktTr(), barmerge.gaps_off, barmerge.lookahead_off)
+float mom30 = request.security(mktSym, timeframe.period, f_mktMom(), barmerge.gaps_off, barmerge.lookahead_off)
+float benchRoc = request.security(mktSym, timeframe.period, ta.roc(close, 20), barmerge.gaps_off, barmerge.lookahead_off)
+bool rsLeader = ta.roc(close, 20) - benchRoc > 0
+bool heavySell = mom30 < -4.0 and tr30 <= -1
+bool bearBlock = blockBearMkt and heavySell
+
+// ─── أ زخم 1–20 ───
+int v01 = rsi >= 55 and rsi <= 70 ? 1 : rsi <= 45 and rsi >= 30 ? -1 : rsi < 30 ? 1 : rsi > 70 ? -1 : 0
+float streak = 0.0
+streak := close > close[1] ? (nz(streak[1]) > 0 ? nz(streak[1]) + 1.0 : 1.0) : close < close[1] ? (nz(streak[1]) < 0 ? nz(streak[1]) - 1.0 : -1.0) : 0.0
+float crsi = (ta.rsi(close, 3) + ta.rsi(streak, 2) + ta.percentrank(ta.roc(close, 1), 100)) / 3.0
+int v02 = crsi < 15 ? 1 : crsi > 85 ? -1 : 0
+float stK = ta.sma(ta.stoch(close, high, low, 14), 3)
+float stD = ta.sma(stK, 3)
+int v03 = stK > stD and stK < 80 ? 1 : stK < stD and stK > 20 ? -1 : 0
+float srK = ta.sma(ta.stoch(rsi, rsi, rsi, 14), 3)
+float srD = ta.sma(srK, 3)
+int v04 = ta.crossover(srK, srD) and srK < 30 ? 1 : srK > srD and srK < 80 ? 1 : srK < srD and srK > 20 ? -1 : 0
+int v05 = macdH > 0 and macdL > macdS ? 1 : macdH < 0 and macdL < macdS ? -1 : 0
+float cci = ta.cci(close, 20)
+int v06 = cci > 0 and cci < 200 ? 1 : cci < 0 and cci > -200 ? -1 : cci <= -200 ? 1 : cci >= 200 ? -1 : 0
+float wpr = ta.wpr(14)
+int v07 = wpr > -20 ? -1 : wpr < -80 ? 1 : wpr > -50 ? 1 : -1
+float roc = ta.roc(close, 12)
+int v08 = roc > 1 ? 1 : roc < -1 ? -1 : 0
+float mfi = ta.mfi(hlc3, 14)
+int v09 = mfi >= 55 and mfi <= 80 ? 1 : mfi <= 45 and mfi >= 20 ? -1 : mfi < 20 ? 1 : mfi > 80 ? -1 : 0
+float bp = close - math.min(low, close[1])
+float trR = math.max(high, close[1]) - math.min(low, close[1])
+float a7 = math.sum(bp, 7) / math.max(math.sum(trR, 7), syminfo.mintick)
+float a14 = math.sum(bp, 14) / math.max(math.sum(trR, 14), syminfo.mintick)
+float a28 = math.sum(bp, 28) / math.max(math.sum(trR, 28), syminfo.mintick)
+float uo = 100.0 * (4.0 * a7 + 2.0 * a14 + a28) / 7.0
+int v10 = uo > 55 ? 1 : uo < 45 ? -1 : 0
+float tsi = ta.tsi(close, 13, 25)
+float tsiSig = ta.ema(tsi, 13)
+int v11 = tsi > tsiSig and tsi > 0 ? 1 : tsi < tsiSig and tsi < 0 ? -1 : 0
+float fhh = ta.highest(hl2, 10)
+float fll = ta.lowest(hl2, 10)
+float fv = 0.0
+fv := 0.66 * ((hl2 - fll) / math.max(fhh - fll, syminfo.mintick) - 0.5) + 0.67 * nz(fv[1])
+fv := math.max(math.min(fv, 0.999), -0.999)
+float fish = 0.0
+fish := 0.5 * math.log((1.0 + fv) / (1.0 - fv)) + 0.5 * nz(fish[1])
+int v12 = fish > fish[1] and fish > 0 ? 1 : fish < fish[1] and fish < 0 ? -1 : 0
+float chg = ta.change(close)
+float su = math.sum(math.max(chg, 0.0), 14)
+float sd = math.sum(math.max(-chg, 0.0), 14)
+float cmo = 100.0 * (su - sd) / math.max(su + sd, syminfo.mintick)
+int v13 = cmo > 20 ? 1 : cmo < -20 ? -1 : 0
+float ppoFast = ta.ema(close, 12)
+float ppoSlow = ta.ema(close, 26)
+float ppo = ppoSlow > 0 ? 100.0 * (ppoFast - ppoSlow) / ppoSlow : 0.0
+float ppoSig = ta.ema(ppo, 9)
+int v14 = ppo > ppoSig and ppo > 0 ? 1 : ppo < ppoSig and ppo < 0 ? -1 : 0
+float ao = ta.sma(hl2, 5) - ta.sma(hl2, 34)
+int v15 = ao > 0 and ao > ao[1] ? 1 : ao < 0 and ao < ao[1] ? -1 : 0
+float trix = 10000.0 * ta.change(ta.ema(ta.ema(ta.ema(math.log(math.max(close, syminfo.mintick)), 15), 15), 15))
+float trixSig = ta.sma(trix, 9)
+int v16 = trix > trixSig and trix > 0 ? 1 : trix < trixSig and trix < 0 ? -1 : 0
+float kst = ta.sma(ta.roc(close, 10), 10) + 2.0 * ta.sma(ta.roc(close, 15), 10) + 3.0 * ta.sma(ta.roc(close, 20), 10) + 4.0 * ta.sma(ta.roc(close, 30), 15)
+float kstSig = ta.sma(kst, 9)
+int v17 = kst > kstSig and kst > 0 ? 1 : kst < kstSig and kst < 0 ? -1 : 0
+float cop = ta.wma(ta.roc(close, 14) + ta.roc(close, 11), 10)
+int v18 = cop > 0 and cop > cop[1] ? 1 : cop < 0 and cop < cop[1] ? -1 : 0
+int dpoK = int(21 / 2) + 1
+float dpo = close[dpoK] - ta.sma(close, 21)
+int v19 = dpo > 0 ? 1 : dpo < 0 ? -1 : 0
+float esa = ta.ema(hlc3, 10)
+float de = ta.ema(math.abs(hlc3 - esa), 10)
+float ci = (hlc3 - esa) / (0.015 * math.max(de, syminfo.mintick))
+float wt1 = ta.ema(ci, 21)
+float wt2 = ta.sma(wt1, 4)
+int v20 = wt1 > wt2 and wt1 < 60 ? 1 : wt1 < wt2 and wt1 > -60 ? -1 : 0
+
+// ─── ب اتجاه 21–35 ───
+int v21 = adx > 20 and diP > diM ? 1 : adx > 20 and diM > diP ? -1 : 0
+[arDn, arUp] = ta.aroon(14)
+int v22 = arUp > arDn and arUp > 70 ? 1 : arDn > arUp and arDn > 70 ? -1 : 0
+float vmP = math.sum(math.abs(high - low[1]), 14)
+float vmM = math.sum(math.abs(low - high[1]), 14)
+float trSum = math.max(math.sum(ta.tr, 14), syminfo.mintick)
+int v23 = vmP / trSum > vmM / trSum ? 1 : -1
+float sar = ta.sar(0.02, 0.02, 0.2)
+int v24 = close > sar ? 1 : -1
+float tenkan = (ta.highest(high, 9) + ta.lowest(low, 9)) / 2.0
+float kijun = (ta.highest(high, 26) + ta.lowest(low, 26)) / 2.0
+float spanA = (tenkan + kijun) / 2.0
+float spanB = (ta.highest(high, 52) + ta.lowest(low, 52)) / 2.0
+float cloudTop = math.max(spanA[26], spanB[26])
+float cloudBot = math.min(spanA[26], spanB[26])
+int v25 = close > cloudTop and tenkan > kijun ? 1 : close < cloudBot and tenkan < kijun ? -1 : 0
+float hma = ta.hma(close, 21)
+int v26 = close > hma and hma > hma[1] ? 1 : close < hma and hma < hma[1] ? -1 : 0
+float kChange = math.abs(close - close[10])
+float kVolat = math.sum(math.abs(close - close[1]), 10)
+float er = kVolat > 0 ? kChange / kVolat : 0.0
+float scK = math.pow(er * (2.0 / 3.0 - 2.0 / 31.0) + 2.0 / 31.0, 2.0)
+var float kama = na
+kama := na(kama[1]) ? close : nz(kama[1]) + scK * (close - nz(kama[1]))
+int v27 = close > kama and kama > kama[1] ? 1 : close < kama and kama < kama[1] ? -1 : 0
+var float mg = na
+float mgPrev = nz(mg[1], close)
+mg := mgPrev + (close - mgPrev) / (14.0 * math.pow(close / math.max(mgPrev, syminfo.mintick), 4.0))
+int v28 = close > mg and mg > mg[1] ? 1 : close < mg and mg < mg[1] ? -1 : 0
+float gS = (ta.ema(close, 3) + ta.ema(close, 5) + ta.ema(close, 8) + ta.ema(close, 10) + ta.ema(close, 12) + ta.ema(close, 15)) / 6.0
+float gL = (ta.ema(close, 30) + ta.ema(close, 35) + ta.ema(close, 40) + ta.ema(close, 45) + ta.ema(close, 50) + ta.ema(close, 60)) / 6.0
+int v29 = gS > gL and close > gS ? 1 : gS < gL and close < gS ? -1 : 0
+float dcHi = ta.highest(high, 20)
+float dcLo = ta.lowest(low, 20)
+int v30 = close > dcHi[1] ? 1 : close < dcLo[1] ? -1 : close > (dcHi + dcLo) / 2.0 ? 1 : -1
+int v31 = close > ema20 and ema20 > ema50 and ema50 > ema200 ? 1 : close < ema20 and ema20 < ema50 and ema50 < ema200 ? -1 : 0
+float bullP = high - ema13
+float bearP = low - ema13
+int v32 = ema13 > ema13[1] and bearP < 0 and bearP > bearP[1] ? 1 : ema13 < ema13[1] and bullP > 0 and bullP < bullP[1] ? -1 : ema13 > ema13[1] ? 1 : -1
+int v33 = ema13 > ema13[1] and macdH > macdH[1] ? 1 : ema13 < ema13[1] and macdH < macdH[1] ? -1 : 0
+float stcMacd = ta.ema(close, 23) - ta.ema(close, 50)
+float stcLo = ta.lowest(stcMacd, 10)
+float stcHi = ta.highest(stcMacd, 10)
+float stoch1 = stcHi - stcLo > 0 ? 100.0 * (stcMacd - stcLo) / (stcHi - stcLo) : 50.0
+float pf = ta.ema(stoch1, 3)
+float lo2 = ta.lowest(pf, 10)
+float hi2 = ta.highest(pf, 10)
+float stoch2 = hi2 - lo2 > 0 ? 100.0 * (pf - lo2) / (hi2 - lo2) : 50.0
+float stc = ta.ema(stoch2, 3)
+int v34 = stc > 25 and stc > stc[1] ? 1 : stc < 75 and stc < stc[1] ? -1 : 0
+int v35 = stDir < 0 ? 1 : -1
+
+// ─── ج حجم 36–50 ───
+int v36 = obvSl > 0 and obv > obv[10] ? 1 : obvSl < 0 and obv < obv[10] ? -1 : 0
+int v37 = ad > adEma and ad > ad[10] ? 1 : ad < adEma and ad < ad[10] ? -1 : 0
+int v38 = cmf > 0.05 ? 1 : cmf < -0.05 ? -1 : 0
+float cho = ta.ema(ad, 3) - ta.ema(ad, 10)
+int v39 = cho > 0 ? 1 : -1
+float efi = ta.ema(ta.change(close) * volume, 13)
+int v40 = efi > 0 ? 1 : -1
+float eomRaw = rng > 0 and volume > 0 ? (hl2 - hl2[1]) / (volume / 1000000.0 / rng) : 0.0
+float eom = ta.sma(eomRaw, 14)
+int v41 = eom > 0 ? 1 : -1
+float kTrend = hlc3 > hlc3[1] ? 1.0 : -1.0
+float kDm = high - low
+var float kCm = 0.0
+kCm := nz(kCm[1]) + kDm
+float kVf = volume * kTrend * 100.0 * math.abs(2.0 * kDm / math.max(kCm, syminfo.mintick) - 1.0)
+float kvo = ta.ema(kVf, 34) - ta.ema(kVf, 55)
+float kvoSig = ta.ema(kvo, 13)
+int v42 = kvo > kvoSig ? 1 : -1
+float pvt = ta.pvt
+int v43 = pvt > ta.ema(pvt, 20) ? 1 : -1
+var float nvi = 1000.0
+nvi := volume < volume[1] ? nz(nvi[1]) * (1.0 + ta.change(close) / math.max(close[1], syminfo.mintick)) : nz(nvi[1], 1000.0)
+int v44 = nvi > ta.ema(nvi, 255) ? 1 : -1
+float vwap = ta.vwap(hlc3)
+int v45 = close > vwap ? 1 : -1
+int loB = bar_index + ta.lowestbars(low, 120)
+var float avNum = 0.0
+var float avDen = 0.0
+if bar_index == loB
+    avNum := hlc3 * volume
+    avDen := volume
+else
+    avNum := nz(avNum[1]) + hlc3 * volume
+    avDen := nz(avDen[1]) + volume
+float avwap = avDen > 0 ? avNum / avDen : close
+int v46 = close > avwap ? 1 : -1
+var float weis = 0.0
+var int weisDir = 1
+if close > close[5] and weisDir <= 0
+    weisDir := 1
+    weis := volume
+else if close < close[5] and weisDir >= 0
+    weisDir := -1
+    weis := volume
+else
+    weis += volume
+int v47 = weisDir > 0 ? 1 : -1
+var float cvd = 0.0
+cvd += buyV - sellV
+float cvdSl = ta.linreg(cvd, 10, 0) - ta.linreg(cvd, 10, 1)
+int v48 = cvdSl > 0 ? 1 : -1
+int v49 = rvol >= 1.3 and close > open ? 1 : rvol >= 1.3 and close < open ? -1 : 0
+int v50 = buyShare >= 0.60 ? 1 : buyShare <= 0.40 ? -1 : 0
+
+// ─── د تقلب 51–60 ───
+float pctB = (bbUp - bbLo) > 0 ? (close - bbLo) / (bbUp - bbLo) : 0.5
+int v51 = pctB > 0.8 ? -1 : pctB < 0.2 ? 1 : pctB > 0.5 ? 1 : -1
+float bbw = bbMid > 0 ? (bbUp - bbLo) / bbMid : 0.0
+float bbwP20 = ta.percentile_linear_interpolation(bbw, 100, 20)
+int v52 = bbw < bbwP20 and close > bbMid ? 1 : bbw < bbwP20 and close < bbMid ? -1 : 0
+bool squeeze = bbUp < kcUp and bbLo > kcLo
+float sqMom = ta.linreg(close - (ta.highest(high, 20) + ta.lowest(low, 20)) / 2.0, 20, 0)
+int v53 = not squeeze and sqMom > 0 and sqMom > sqMom[1] ? 1 : not squeeze and sqMom < 0 and sqMom < sqMom[1] ? -1 : 0
+int v54 = close > kcUp ? 1 : close < kcLo ? -1 : close > kcMid ? 1 : -1
+float atrp = atr / close * 100.0
+float atrMed = ta.sma(atrp, 50)
+int v55 = atrp < atrMed * 0.85 ? 0 : atrp > atrMed * 1.6 ? (close > open ? -1 : 1) : close > ema20 ? 1 : -1
+float maxC = ta.highest(close, 14)
+float dd = 100.0 * (close - maxC) / math.max(maxC, syminfo.mintick)
+float ulcer = math.sqrt(ta.sma(dd * dd, 14))
+int v56 = ulcer < 5 ? 1 : ulcer > 12 ? -1 : 0
+float starcMid = ta.sma(close, 15)
+float starcB = ta.atr(15) * 1.33
+int v57 = close > starcMid and close < starcMid + starcB ? 1 : close < starcMid and close > starcMid - starcB ? -1 : close >= starcMid + starcB ? -1 : 1
+float lr = math.log(close / math.max(close[1], syminfo.mintick))
+float hv = ta.stdev(lr, 20) * math.sqrt(252.0) * 100.0
+int v58 = hv < ta.sma(hv, 50) ? 1 : -1
+float chL = ta.highest(high, 22) - 3.0 * atr
+float chS = ta.lowest(low, 22) + 3.0 * atr
+var int chDir = 1
+if close > chS[1]
+    chDir := 1
+else if close < chL[1]
+    chDir := -1
+int v59 = chDir
+float chop = 100.0 * math.log10(math.sum(ta.tr, 14) / math.max(ta.highest(high, 14) - ta.lowest(low, 14), syminfo.mintick)) / math.log10(14)
+int v60 = chop < 38.2 ? (close > ema50 ? 1 : -1) : 0
+
+// ─── ه SMC 61–70 ───
+var int v61 = 0
+if bosUp
+    v61 := 1
+if bosDn
+    v61 := -1
+bool bullFvg = low > high[2]
+bool bearFvg = high < low[2]
+int v62 = bullFvg ? 1 : bearFvg ? -1 : 0
+var float demHi = na
+var float demLo = na
+var float supHi = na
+var float supLo = na
+if not na(pl)
+    demLo := low[pivLen]
+    demHi := high[pivLen]
+if not na(ph)
+    supLo := low[pivLen]
+    supHi := high[pivLen]
+bool inDem = not na(demLo) and low <= demHi and close >= demLo
+bool inSup = not na(supHi) and high >= supLo and close <= supHi
+int v63 = inDem ? 1 : inSup ? -1 : 0
+int v64 = low < lookLo * 1.003 and low > lookLo * 0.997 ? 1 : high > lookHi * 0.997 and high < lookHi * 1.003 ? -1 : 0
+int v65 = sweepLo ? 1 : sweepHi ? -1 : 0
+bool distUp = close > lookHi[1] and close > open and rvol > 1.0
+bool distDn = close < lookLo[1] and close < open
+int v66 = distUp ? 1 : distDn ? -1 : close > eq ? 1 : -1
+bool upImp = close > close[20]
+float oteLo = upImp ? lookLo + 0.62 * fibRg : lookHi - 0.79 * fibRg
+float oteHi = upImp ? lookLo + 0.79 * fibRg : lookHi - 0.62 * fibRg
+bool inOte = close >= math.min(oteLo, oteHi) and close <= math.max(oteLo, oteHi)
+int v67 = inOte and upImp ? 1 : inOte and not upImp ? -1 : 0
+var float brkHi = na
+var float brkLo = na
+var int brkSide = 0
+if not na(pl) and close < low[pivLen]
+    brkLo := low[pivLen]
+    brkHi := high[pivLen]
+    brkSide := -1
+if not na(ph) and close > high[pivLen]
+    brkLo := low[pivLen]
+    brkHi := high[pivLen]
+    brkSide := 1
+bool retestBull = brkSide == 1 and not na(brkHi) and low <= brkHi and close > brkLo
+bool retestBear = brkSide == -1 and not na(brkLo) and high >= brkLo and close < brkHi
+int v68 = retestBull ? 1 : retestBear ? -1 : brkSide
+int v69 = close < eq ? 1 : -1
+int v70 = hhhl ? 1 : lhll ? -1 : 0
+
+// ─── و موجات 71–82 ───
+bool inFibZ = close >= math.min(lookLo + 0.382 * fibRg, f618) and close <= math.max(lookLo + 0.618 * fibRg, f382)
+int v71 = inFibZ ? (upImp ? 1 : -1) : close > lookHi - 0.236 * fibRg ? 1 : close < lookLo + 0.236 * fibRg ? -1 : 0
+int v72 = hhhl ? 1 : lhll ? -1 : 0
+float gannMid = (ta.highest(high, 120) + ta.lowest(low, 120)) / 2.0
+int v73 = close > gannMid ? 1 : -1
+float murHi = ta.highest(high, 64)
+float murLo = ta.lowest(low, 64)
+int v74 = close > murLo + 4.0 * (murHi - murLo) / 8.0 ? 1 : -1
+int v75 = math.abs((lookHi - close) / math.max(fibRg, syminfo.mintick) - 1.0) < 0.12 ? -1 : math.abs((close - lookLo) / math.max(fibRg, syminfo.mintick) - 1.0) < 0.12 ? 1 : 0
+float dHi = request.security(syminfo.tickerid, "D", high[1], barmerge.gaps_off, barmerge.lookahead_off)
+float dLo = request.security(syminfo.tickerid, "D", low[1], barmerge.gaps_off, barmerge.lookahead_off)
+float dCl = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+float pp = (dHi + dLo + dCl) / 3.0
+float r1 = 2.0 * pp - dLo
+float s1 = 2.0 * pp - dHi
+int v76 = close > pp ? 1 : -1
+int v77 = hhhl ? 1 : lhll ? -1 : 0
+int gannBars = bar_index - (bar_index + ta.lowestbars(low, 120))
+bool gannHit = gannBars == 30 or gannBars == 45 or gannBars == 60 or gannBars == 90 or gannBars == 120
+int v78 = gannHit ? 0 : close > ema50 ? 1 : -1
+bool fibHit = gannBars == 8 or gannBars == 13 or gannBars == 21 or gannBars == 34 or gannBars == 55
+int v79 = fibHit ? 0 : close > ema50 ? 1 : -1
+float nt = not na(l1) and not na(h1) ? h1 + (h1 - nz(l2, l1)) : na
+int v80 = not na(nt) and close < nt and close > nz(l1, close) ? 1 : not na(nt) and close > nt ? -1 : 0
+float root = math.sqrt(math.max(close, 0.0))
+float sqUp = math.pow(root + 1.0, 2.0)
+float sqDn = math.pow(math.max(root - 1.0, 0.0), 2.0)
+int v81 = close > (sqUp + sqDn) / 2.0 ? 1 : -1
+int v82 = hhhl ? 1 : lhll ? -1 : 0
+
+// ─── ز أنظمة 83–94 ───
+bool sc = rvol >= 1.8 and close > open and rng > ta.sma(rng, 20) and close > (high + low) / 2.0 and close < close[5]
+bool bc = rvol >= 1.8 and close < open and rng > ta.sma(rng, 20) and close > close[5]
+int v83 = sc or cmf > 0.05 ? 1 : bc or cmf < -0.05 ? -1 : 0
+float spMa = ta.sma(rng, 20)
+bool easyUp = volume < volMa * 0.8 and rng > spMa and close > open
+int v84 = easyUp or (close > open and volume > volMa and rng > spMa) ? 1 : close < open and volume > volMa ? -1 : 0
+float r1c = ta.highest(high, 15) - ta.lowest(low, 15)
+float r2c = ta.highest(high, 10) - ta.lowest(low, 10)
+float r3c = ta.highest(high, 5) - ta.lowest(low, 5)
+bool contract = r1c > r2c and r2c > r3c
+bool dry = ta.sma(volume, 5) < volMa * 0.85
+float vcpPivot = ta.highest(high, 15)
+bool vcpFire = contract and dry and close > vcpPivot[1] and volume > volMa * 1.4
+int v85 = vcpFire ? 1 : contract and dry ? 0 : close > ema50 ? 1 : -1
+float rsRank = ta.percentrank(ta.roc(close, 63), 252)
+int distDays = 0
+for i = 0 to 24
+    if close[i] < open[i] and volume[i] > ta.sma(volume, 50)[i]
+        distDays += 1
+int v86 = rsRank >= 70 and rvol > 1.4 and close > open and distDays < 5 and close > ta.sma(close, 50) ? 1 : distDays >= 5 ? -1 : rsRank < 40 ? -1 : 0
+float ma30w = ta.sma(close, 150)
+float ma30sl = ta.linreg(ma30w, 10, 0) - ta.linreg(ma30w, 10, 1)
+int v87 = close > ma30w and ma30sl > 0 ? 1 : close < ma30w and ma30sl < 0 ? -1 : 0
+float tHi = ta.highest(high[1], 20)
+float tLo = ta.lowest(low[1], 20)
+bool soup = low < tLo and close > tLo
+int v88 = close > tHi ? 1 : soup ? 1 : close < tLo ? -1 : 0
+var float livPiv = na
+if not na(ph)
+    livPiv := ph
+int v89 = not na(livPiv) and close > livPiv ? 1 : not na(livPiv) and close < livPiv ? -1 : 0
+float ema10 = ta.ema(close, 10)
+bool qFlag = ta.roc(close, 20) > 15 and ta.stdev(close, 5) < ta.stdev(close, 20) * 0.6 and close > ema10
+bool qFire = qFlag and close > ta.highest(high[1], 5) and rvol > 1.0
+int v90 = qFire ? 1 : qFlag ? 0 : close > ema10 ? 1 : -1
+float dvH = ta.highest(high, 20)
+float dvLow4 = ta.lowest(low, 4)
+bool dvNew = dvH[3] > dvH[4] and dvH == dvH[3]
+var float dvTop = na
+var float dvBot = na
+var int dvState = 0
+if dvNew
+    dvTop := dvH
+    dvBot := dvLow4
+    dvState := 0
+if not na(dvTop)
+    if dvState <= 0 and close > dvTop
+        dvState := 1
+    else if dvState >= 0 and close < dvBot
+        dvState := -1
+int v91 = dvState
+var int ai = 0
+bool spikeUp = close > open and rng > atr * 1.2 and close > ema20
+bool spikeDn = close < open and rng > atr * 1.2 and close < ema20
+if spikeUp
+    ai := 1
+if spikeDn
+    ai := -1
+int v92 = ai != 0 ? ai : close > ema20 ? 1 : -1
+float mu = ta.sma(close, 32)
+float zH = ta.cum(close - mu) - ta.sma(ta.cum(close - mu), 32)
+float rsH = ta.stdev(close, 32) > 0 ? (ta.highest(zH, 32) - ta.lowest(zH, 32)) / ta.stdev(close, 32) : 0.0
+int v93 = rsH > 1.2 and close > mu ? 1 : rsH > 1.2 and close < mu ? -1 : 0
+[mama, fama] = ta.mama(close, 0.5, 0.05)
+int v94 = mama > fama ? 1 : -1
+
+// ─── ح بروفايل 95–100 ───
+int v95 = close > vwap ? 1 : -1
+int v96 = close > (lookHi + lookLo) / 2.0 ? 1 : -1
+var int td = 0
+td := close > close[4] ? (nz(td[1]) > 0 ? nz(td[1]) + 1 : 1) : close < close[4] ? (nz(td[1]) < 0 ? nz(td[1]) - 1 : -1) : 0
+int v97 = td <= -9 ? 1 : td >= 9 ? -1 : td < 0 ? 1 : td > 0 ? -1 : 0
+int conf = 0
+conf += close > ema20 and ema20 > ema50 ? 1 : 0
+conf += rsi > 50 ? 1 : 0
+conf += macdH > 0 ? 1 : 0
+conf += cmf > 0 ? 1 : 0
+conf += rvol >= 1.0 and close > open ? 1 : 0
+int v98 = conf >= 4 ? 1 : conf <= 1 ? -1 : 0
+int v99 = rsLeader ? 1 : -1
+int v100 = adx > 22 and ema20 > ema50 ? 1 : adx > 22 and ema20 < ema50 ? -1 : 0
+
+// ─── تجميع ───
+int sumA = v01 + v02 + v03 + v04 + v05 + v06 + v07 + v08 + v09 + v10 + v11 + v12 + v13 + v14 + v15 + v16 + v17 + v18 + v19 + v20
+int sumB = v21 + v22 + v23 + v24 + v25 + v26 + v27 + v28 + v29 + v30 + v31 + v32 + v33 + v34 + v35
+int sumC = v36 + v37 + v38 + v39 + v40 + v41 + v42 + v43 + v44 + v45 + v46 + v47 + v48 + v49 + v50
+int sumD = v51 + v52 + v53 + v54 + v55 + v56 + v57 + v58 + v59 + v60
+int sumE = v61 + v62 + v63 + v64 + v65 + v66 + v67 + v68 + v69 + v70
+int sumF = v71 + v72 + v73 + v74 + v75 + v76 + v77 + v78 + v79 + v80 + v81 + v82
+int sumG = v83 + v84 + v85 + v86 + v87 + v88 + v89 + v90 + v91 + v92 + v93 + v94
+int sumH = v95 + v96 + v97 + v98 + v99 + v100
+float pctA = sumA / 20.0 * 100.0
+float pctB = sumB / 15.0 * 100.0
+float pctC = sumC / 15.0 * 100.0
+float pctD = sumD / 10.0 * 100.0
+float pctE = sumE / 10.0 * 100.0
+float pctF = sumF / 12.0 * 100.0
+float pctG = sumG / 12.0 * 100.0
+float pctH = sumH / 6.0 * 100.0
+float wSum = math.max(wA + wB + wC + wD + wE + wF + wG + wH, 0.0001)
+float totalPct = (pctA * wA + pctB * wB + pctC * wC + pctD * wD + pctE * wE + pctF * wF + pctG * wG + pctH * wH) / wSum
+int nGreen = (v01 == 1 ? 1 : 0) + (v02 == 1 ? 1 : 0) + (v03 == 1 ? 1 : 0) + (v04 == 1 ? 1 : 0) + (v05 == 1 ? 1 : 0) + (v06 == 1 ? 1 : 0) + (v07 == 1 ? 1 : 0) + (v08 == 1 ? 1 : 0) + (v09 == 1 ? 1 : 0) + (v10 == 1 ? 1 : 0) + (v11 == 1 ? 1 : 0) + (v12 == 1 ? 1 : 0) + (v13 == 1 ? 1 : 0) + (v14 == 1 ? 1 : 0) + (v15 == 1 ? 1 : 0) + (v16 == 1 ? 1 : 0) + (v17 == 1 ? 1 : 0) + (v18 == 1 ? 1 : 0) + (v19 == 1 ? 1 : 0) + (v20 == 1 ? 1 : 0) + (v21 == 1 ? 1 : 0) + (v22 == 1 ? 1 : 0) + (v23 == 1 ? 1 : 0) + (v24 == 1 ? 1 : 0) + (v25 == 1 ? 1 : 0) + (v26 == 1 ? 1 : 0) + (v27 == 1 ? 1 : 0) + (v28 == 1 ? 1 : 0) + (v29 == 1 ? 1 : 0) + (v30 == 1 ? 1 : 0) + (v31 == 1 ? 1 : 0) + (v32 == 1 ? 1 : 0) + (v33 == 1 ? 1 : 0) + (v34 == 1 ? 1 : 0) + (v35 == 1 ? 1 : 0) + (v36 == 1 ? 1 : 0) + (v37 == 1 ? 1 : 0) + (v38 == 1 ? 1 : 0) + (v39 == 1 ? 1 : 0) + (v40 == 1 ? 1 : 0) + (v41 == 1 ? 1 : 0) + (v42 == 1 ? 1 : 0) + (v43 == 1 ? 1 : 0) + (v44 == 1 ? 1 : 0) + (v45 == 1 ? 1 : 0) + (v46 == 1 ? 1 : 0) + (v47 == 1 ? 1 : 0) + (v48 == 1 ? 1 : 0) + (v49 == 1 ? 1 : 0) + (v50 == 1 ? 1 : 0) + (v51 == 1 ? 1 : 0) + (v52 == 1 ? 1 : 0) + (v53 == 1 ? 1 : 0) + (v54 == 1 ? 1 : 0) + (v55 == 1 ? 1 : 0) + (v56 == 1 ? 1 : 0) + (v57 == 1 ? 1 : 0) + (v58 == 1 ? 1 : 0) + (v59 == 1 ? 1 : 0) + (v60 == 1 ? 1 : 0) + (v61 == 1 ? 1 : 0) + (v62 == 1 ? 1 : 0) + (v63 == 1 ? 1 : 0) + (v64 == 1 ? 1 : 0) + (v65 == 1 ? 1 : 0) + (v66 == 1 ? 1 : 0) + (v67 == 1 ? 1 : 0) + (v68 == 1 ? 1 : 0) + (v69 == 1 ? 1 : 0) + (v70 == 1 ? 1 : 0) + (v71 == 1 ? 1 : 0) + (v72 == 1 ? 1 : 0) + (v73 == 1 ? 1 : 0) + (v74 == 1 ? 1 : 0) + (v75 == 1 ? 1 : 0) + (v76 == 1 ? 1 : 0) + (v77 == 1 ? 1 : 0) + (v78 == 1 ? 1 : 0) + (v79 == 1 ? 1 : 0) + (v80 == 1 ? 1 : 0) + (v81 == 1 ? 1 : 0) + (v82 == 1 ? 1 : 0) + (v83 == 1 ? 1 : 0) + (v84 == 1 ? 1 : 0) + (v85 == 1 ? 1 : 0) + (v86 == 1 ? 1 : 0) + (v87 == 1 ? 1 : 0) + (v88 == 1 ? 1 : 0) + (v89 == 1 ? 1 : 0) + (v90 == 1 ? 1 : 0) + (v91 == 1 ? 1 : 0) + (v92 == 1 ? 1 : 0) + (v93 == 1 ? 1 : 0) + (v94 == 1 ? 1 : 0) + (v95 == 1 ? 1 : 0) + (v96 == 1 ? 1 : 0) + (v97 == 1 ? 1 : 0) + (v98 == 1 ? 1 : 0) + (v99 == 1 ? 1 : 0) + (v100 == 1 ? 1 : 0)
+int nRed = (v01 == -1 ? 1 : 0) + (v02 == -1 ? 1 : 0) + (v03 == -1 ? 1 : 0) + (v04 == -1 ? 1 : 0) + (v05 == -1 ? 1 : 0) + (v06 == -1 ? 1 : 0) + (v07 == -1 ? 1 : 0) + (v08 == -1 ? 1 : 0) + (v09 == -1 ? 1 : 0) + (v10 == -1 ? 1 : 0) + (v11 == -1 ? 1 : 0) + (v12 == -1 ? 1 : 0) + (v13 == -1 ? 1 : 0) + (v14 == -1 ? 1 : 0) + (v15 == -1 ? 1 : 0) + (v16 == -1 ? 1 : 0) + (v17 == -1 ? 1 : 0) + (v18 == -1 ? 1 : 0) + (v19 == -1 ? 1 : 0) + (v20 == -1 ? 1 : 0) + (v21 == -1 ? 1 : 0) + (v22 == -1 ? 1 : 0) + (v23 == -1 ? 1 : 0) + (v24 == -1 ? 1 : 0) + (v25 == -1 ? 1 : 0) + (v26 == -1 ? 1 : 0) + (v27 == -1 ? 1 : 0) + (v28 == -1 ? 1 : 0) + (v29 == -1 ? 1 : 0) + (v30 == -1 ? 1 : 0) + (v31 == -1 ? 1 : 0) + (v32 == -1 ? 1 : 0) + (v33 == -1 ? 1 : 0) + (v34 == -1 ? 1 : 0) + (v35 == -1 ? 1 : 0) + (v36 == -1 ? 1 : 0) + (v37 == -1 ? 1 : 0) + (v38 == -1 ? 1 : 0) + (v39 == -1 ? 1 : 0) + (v40 == -1 ? 1 : 0) + (v41 == -1 ? 1 : 0) + (v42 == -1 ? 1 : 0) + (v43 == -1 ? 1 : 0) + (v44 == -1 ? 1 : 0) + (v45 == -1 ? 1 : 0) + (v46 == -1 ? 1 : 0) + (v47 == -1 ? 1 : 0) + (v48 == -1 ? 1 : 0) + (v49 == -1 ? 1 : 0) + (v50 == -1 ? 1 : 0) + (v51 == -1 ? 1 : 0) + (v52 == -1 ? 1 : 0) + (v53 == -1 ? 1 : 0) + (v54 == -1 ? 1 : 0) + (v55 == -1 ? 1 : 0) + (v56 == -1 ? 1 : 0) + (v57 == -1 ? 1 : 0) + (v58 == -1 ? 1 : 0) + (v59 == -1 ? 1 : 0) + (v60 == -1 ? 1 : 0) + (v61 == -1 ? 1 : 0) + (v62 == -1 ? 1 : 0) + (v63 == -1 ? 1 : 0) + (v64 == -1 ? 1 : 0) + (v65 == -1 ? 1 : 0) + (v66 == -1 ? 1 : 0) + (v67 == -1 ? 1 : 0) + (v68 == -1 ? 1 : 0) + (v69 == -1 ? 1 : 0) + (v70 == -1 ? 1 : 0) + (v71 == -1 ? 1 : 0) + (v72 == -1 ? 1 : 0) + (v73 == -1 ? 1 : 0) + (v74 == -1 ? 1 : 0) + (v75 == -1 ? 1 : 0) + (v76 == -1 ? 1 : 0) + (v77 == -1 ? 1 : 0) + (v78 == -1 ? 1 : 0) + (v79 == -1 ? 1 : 0) + (v80 == -1 ? 1 : 0) + (v81 == -1 ? 1 : 0) + (v82 == -1 ? 1 : 0) + (v83 == -1 ? 1 : 0) + (v84 == -1 ? 1 : 0) + (v85 == -1 ? 1 : 0) + (v86 == -1 ? 1 : 0) + (v87 == -1 ? 1 : 0) + (v88 == -1 ? 1 : 0) + (v89 == -1 ? 1 : 0) + (v90 == -1 ? 1 : 0) + (v91 == -1 ? 1 : 0) + (v92 == -1 ? 1 : 0) + (v93 == -1 ? 1 : 0) + (v94 == -1 ? 1 : 0) + (v95 == -1 ? 1 : 0) + (v96 == -1 ? 1 : 0) + (v97 == -1 ? 1 : 0) + (v98 == -1 ? 1 : 0) + (v99 == -1 ? 1 : 0) + (v100 == -1 ? 1 : 0)
+int nNet = nGreen - nRed
+int nYellow = 100 - nGreen - nRed
+
+// ─── خطة صفقة ───
+float stopUse = (not na(lastL) and lastL < close) ? math.max(lastL - 0.25 * atr, close - 3.5 * atr) : close - atr * atrMult
+stopUse := math.min(stopUse, close - 0.5 * atr)
+float riskPS = math.max(close - stopUse, syminfo.mintick)
+float t1 = close + 1.5 * riskPS
+float t2 = close + 3.0 * riskPS
+float rr = riskPS > 0 ? (t1 - close) / riskPS : na
+float shares = math.min(math.floor(capital * riskPct / 100.0 / riskPS), math.floor(capital / close))
+bool chase = hi52 > 0 and (close - hi52) / hi52 * 100.0 > -3 and rsi > 72
+bool rrOK = not na(rr) and rr >= minRR
+bool egxOK = liqOk and not nearLimit and not bearBlock and not chase and not mktHalt100 and not sundaySkip and sessionOk
+bool upTrend = v31 == 1 or (close > ema50 and ema50 > ema200)
+bool locOK = v71 == 1 or v91 == 1 or v69 == 1 or inDem or sweepLo
+bool momOK = pctA >= 20 or totalPct >= sigMin
+bool moneyOK = v37 == 1 and v38 != -1
+bool trigOK = close > open and (v04 == 1 or v03 == 1 or v62 == 1)
+bool volOK = rvol >= 0.9
+int hits = (upTrend ? 1 : 0) + (locOK ? 1 : 0) + (momOK ? 1 : 0) + (moneyOK ? 1 : 0) + (trigOK ? 1 : 0) + (volOK ? 1 : 0)
+bool scoreDn = ta.crossunder(totalPct, -sigMin)
+bool chFlip = chDir == -1 and chDir[1] == 1
+bool supportBreak = bosDn
+bool buyA = sigOk and egxOK and rrOK and locOK and moneyOK and hits >= 5 and totalPct >= sigMin and (not useHtfBuy or htfBull)
+bool buyB = sigOk and egxOK and rrOK and locOK and not buyA and hits >= 4 and totalPct >= sigMin * 0.5
+bool buySignal = buyA or buyB
+bool exitSig = sigOk and (chFlip or dvState == -1 or scoreDn or supportBreak or (v37 == -1 and close < open and rsi > 70))
+
+var bool tookHalf = false
+var float trailStop = na
+var float posStop = na
+var float posT1 = na
+var float posT2 = na
+float tHalf = close + 0.5 * (t1 - close)
+
+if strategy.position_size == 0
+    tookHalf := false
+    trailStop := na
+
+if buySignal and strategy.position_size == 0
+    float tQty = math.max(0.5, math.min(15.0, riskPct * close / math.max(close - stopUse, syminfo.mintick)))
+    if useRiskQty
+        strategy.entry("L", strategy.long, qty_percent=tQty)
+    else
+        strategy.entry("L", strategy.long)
+    tookHalf := false
+    posStop := stopUse
+    posT1 := t1
+    posT2 := t2
+    trailStop := stopUse
+
+if strategy.position_size > 0
+    float useStop = nz(posStop, stopUse)
+    float useT1 = nz(posT1, t1)
+    float useT2 = nz(posT2, t2)
+    float useHalf = nz(posStop, close) + (useT1 - nz(posStop, close)) * 0.5
+    if usePartial and not tookHalf and high >= useHalf
+        strategy.close("L", qty_percent=50, comment="50% T1")
+        tookHalf := true
+        trailStop := math.max(nz(trailStop, useStop), strategy.position_avg_price)
+    if useTrail and tookHalf
+        trailStop := math.max(nz(trailStop, useStop), close - atr * trailMult)
+    float exitLim = tookHalf ? useT2 : useT1
+    float exitStop = useTrail and tookHalf and not na(trailStop) ? trailStop : useStop
+    strategy.exit("LX", "L", stop=exitStop, limit=exitLim)
+
+if exitSig and strategy.position_size > 0
+    strategy.close("L", comment="Exit signal")
+
+plot(stopUse, "Stop", color=color.new(color.red, 50), display=display.none)
+plot(t1, "T1", color=color.new(color.aqua, 50), display=display.none)
+plot(buySignal ? 1 : 0, "EGXT_Buy", display=display.data_window)
+plot(totalPct, "EGXT_Score", display=display.data_window)

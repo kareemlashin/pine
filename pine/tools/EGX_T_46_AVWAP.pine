@@ -1,0 +1,34 @@
+//@version=6
+indicator("EGX Tool 46 AVWAP شانون — Anchored VWAP", shorttitle="EGX T-AVWAP", overlay=true, max_labels_count=80, max_lines_count=80, max_boxes_count=40, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة ج الحجم · #46/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+int look = input.int(120, "مرساة قاع/قمة")
+int loB = bar_index + ta.lowestbars(low, look)
+int hiB = bar_index + ta.highestbars(high, look)
+int anchor = loB
+var float num = 0.0
+var float den = 0.0
+if bar_index == anchor or na(num)
+    num := hlc3 * volume
+    den := volume
+else
+    num := num[1] + hlc3 * volume
+    den := den[1] + volume
+float avwap = den > 0 ? num / den : close
+int vote = close > avwap ? 1 : -1
+plot(avwap, "EGXT_AVWAP", color=color.fuchsia, linewidth=2)
+
+plot(vote, "EGXT_AVWAP_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_AVWAP_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_AVWAP_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "AVWAP", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-AVWAP صاعد", "EGX Tool AVWAP: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-AVWAP هابط", "EGX Tool AVWAP: vote هابط")

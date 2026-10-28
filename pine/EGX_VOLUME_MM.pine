@@ -1,0 +1,388 @@
+//@version=6
+indicator("EGX فوليوم وميكر — تراكم · تصريف · صفقات", shorttitle="EGX فوليوم", overlay=true, max_labels_count=400, max_lines_count=200, max_boxes_count=80, max_tables_count=8, calc_bars_count=5000)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// EGX فوليوم وميكر — تركيز: حجم · أكبر شموع · صفقات (حجم×سعر) · مناطق شراء
+// سلوك ميكر/مؤسسات = استنتاج من OHLCV فقط (لا delta ولا صفقات فردية)
+// EGX: رمز EGX:XXXX · يومي أولاً · ارفع «حد متوسط حجم» للأسهم الركيكة
+// للتحليل الكامل: pine/EGX_الاخير.pine · قرار مختصر: pine/EGX_الخلاصة.pine
+// ═══════════════════════════════════════════════════════════════════════════════
+
+string G_PROF = "═══ ملف EGX ═══"
+string profile = input.string("EGX يومي", "الملف", options=["EGX يومي", "مضاربة", "مخصص"], group=G_PROF)
+
+string G_VOL = "═══ الفوليوم ═══"
+int volMaLen = input.int(20, "متوسط حجم", minval=5, group=G_VOL)
+int volLookback = input.int(500, "نافذة ترتيب / مسح", minval=50, maxval=3000, group=G_VOL)
+float rvolSpike = input.float(2.0, "RVOL نشاط قوي", minval=1.2, step=0.1, group=G_VOL)
+float bigTradePct = input.float(95.0, "صفقة كبيرة — percentile حجم×سعر", minval=85, maxval=99.5, group=G_VOL)
+int topVolN = input.int(8, "أكبر N شمعة حجم", minval=3, maxval=12, group=G_VOL)
+int topDealN = input.int(5, "أكبر N صفقة (ح×س)", minval=2, maxval=8, group=G_VOL)
+int cmfLen = input.int(20, "CMF", group=G_VOL)
+bool useWyckoff = input.bool(true, "وايكوف SC/BC (ذروة بيع/شراء)", group=G_VOL)
+
+string G_MM = "═══ ميكر (محتمل) ═══"
+int accZoneBars = input.int(12, "تماسك تراكم (شموع)", minval=5, maxval=40, group=G_MM)
+float accRangeAtr = input.float(1.8, "عرض تماسك × ATR", minval=0.8, step=0.1, group=G_MM)
+float minCmfAcc = input.float(0.03, "CMF تراكم ≥", minval=0.0, step=0.01, group=G_MM)
+float maxCmfDist = input.float(-0.03, "CMF تصريف ≤", maxval=0.0, step=0.01, group=G_MM)
+int vpBars = input.int(80, "ملف حجم — نافذة", minval=20, maxval=200, group=G_MM)
+int vpBins = input.int(20, "ملف حجم — مستويات", minval=8, maxval=40, group=G_MM)
+
+string G_ZONE = "═══ مناطق شراء ═══"
+int pivotLen = input.int(5, "Pivot دعم", minval=2, maxval=15, group=G_ZONE)
+float zoneAtr = input.float(0.4, "عرض منطقة × ATR", minval=0.15, step=0.05, group=G_ZONE)
+int buyZoneLook = input.int(120, "مسح مناطق شراء (شموع)", minval=30, maxval=500, group=G_ZONE)
+int maxBuyBoxes = input.int(6, "أقصى صناديق شراء", minval=2, maxval=12, group=G_ZONE)
+
+string G_DATA = "═══ EGX / بيانات ═══"
+float minAvgVolIn = input.float(1000.0, "حد أدنى متوسط حجم", minval=0, group=G_DATA)
+bool confirmClose = input.bool(true, "علامات عند إغلاق الشمعة", group=G_DATA)
+
+string G_UI = "═══ عرض ═══"
+bool showVolPane = input.bool(true, "هيستограм فوليوم (لوحة سفلى)", group=G_UI)
+bool showTopVolTbl = input.bool(true, "جدول أكبر أحجام", group=G_UI)
+bool showDealTbl = input.bool(true, "جدول أكبر صفقات", group=G_UI)
+bool markTopVol = input.bool(true, "علامات V1–V3 على الشارت", group=G_UI)
+bool markBigDeals = input.bool(true, "علامات $ صفقة كبيرة", group=G_UI)
+bool showBuyBoxes = input.bool(true, "صناديق مناطق شراء (حجم+دعم)", group=G_UI)
+bool showAccBoxes = input.bool(true, "صناديق تراكم ميكر", group=G_UI)
+bool showDistBoxes = input.bool(true, "صناديق تصريف محتمل", group=G_UI)
+bool showPocVa = input.bool(true, "خط POC + VA70%", group=G_UI)
+bool showDash = input.bool(true, "لوحة تراكم/تصريف", group=G_UI)
+bool showMmBanner = input.bool(true, "بانر الميكر (أسفل يسار)", group=G_UI)
+bool bgAccDist = input.bool(true, "تلوين خلفية خفيف", group=G_UI)
+
+bool profCustom = profile == "مخصص"
+int effLook = profCustom ? volLookback : profile == "مضاربة" ? 250 : 500
+float effMinVol = profCustom ? minAvgVolIn : profile == "مضاربة" ? 500.0 : 1000.0
+float effRvol = profCustom ? rvolSpike : profile == "مضاربة" ? 1.7 : 2.0
+
+bool sigOk = not confirmClose or barstate.isconfirmed
+float atr = ta.atr(14)
+
+// ─── Volume & flow ───────────────────────────────────────────────────────────
+float volMa = ta.sma(volume, volMaLen)
+bool liqOk = volMa >= effMinVol
+float rvol = volume / math.max(volMa, 1.0)
+float volPct = ta.percentrank(volume, effLook)
+bool volClimax = rvol >= effRvol or volPct >= 92.0
+
+float dollarVol = volume * close
+float dvThresh = ta.percentile_nearest_rank(dollarVol, effLook, bigTradePct)
+bool bigDeal = dollarVol >= dvThresh and volume > 0
+
+float mfm = ((close - low) - (high - close)) / math.max(high - low, syminfo.mintick)
+float cmf = ta.sma(mfm * volume, cmfLen) / ta.sma(volume, cmfLen)
+float obv = ta.obv
+float obvSlope = ta.linreg(obv, 10, 0) - ta.linreg(obv, 10, 1)
+float ad = ta.cum(mfm * volume)
+float adSlope = ad - ad[cmfLen]
+
+float spread = high - low
+float closePos = spread > syminfo.mintick ? (close - low) / spread : 0.5
+bool ultraVol = volume > volMa * (effRvol + 0.4)
+bool wyckSC = useWyckoff and ultraVol and closePos > 0.55 and low <= ta.lowest(low, 10)
+bool wyckBC = useWyckoff and ultraVol and closePos < 0.45 and high >= ta.highest(high, 10)
+
+bool bullBar = close >= open
+bool buyPressure = closePos >= 0.6 and bullBar
+bool sellPressure = closePos <= 0.4 and not bullBar
+bool absorption = volClimax and spread <= ta.sma(spread, 10) * 0.85 and closePos >= 0.45 and closePos <= 0.65
+
+// ─── Accumulation / Distribution scores ──────────────────────────────────────
+float accScore = 0.0
+accScore += cmf > minCmfAcc and adSlope > 0 ? 20.0 : 0.0
+accScore += obvSlope > 0 ? 15.0 : 0.0
+accScore += wyckSC ? 15.0 : 0.0
+accScore += absorption and cmf > 0 ? 12.0 : 0.0
+accScore += volClimax and buyPressure ? 10.0 : 0.0
+accScore += ta.correlation(close, obv, 20) > 0.3 ? 8.0 : 0.0
+accScore := math.min(100.0, accScore)
+
+float distScore = 0.0
+distScore += cmf < maxCmfDist and adSlope < 0 ? 20.0 : 0.0
+distScore += obvSlope < 0 ? 15.0 : 0.0
+distScore += wyckBC ? 15.0 : 0.0
+distScore += volClimax and sellPressure ? 12.0 : 0.0
+distScore += volClimax and close < open and high >= ta.highest(high, 20) * 0.995 ? 10.0 : 0.0
+distScore += ta.correlation(close, obv, 20) < -0.2 ? 8.0 : 0.0
+distScore := math.min(100.0, distScore)
+
+string mmVerdict = distScore >= 55 and distScore > accScore + 8 ? "📤 تصريف" : accScore >= 55 and accScore > distScore + 8 ? "📥 تراكم" : distScore >= 45 and accScore >= 45 ? "⚔️ صراع" : "⚪ محايد"
+string mmAction = distScore >= 55 and distScore > accScore + 8 ? "بيع / خروج تدريجي" : accScore >= 55 and accScore > distScore + 8 ? "شراء / تراكم" : distScore >= 45 and accScore >= 45 ? "انتظر اتجاه أوضح" : "راقب — لا دليل قوي"
+
+color mmCol = str.contains(mmVerdict, "تراكم") ? color.teal : str.contains(mmVerdict, "تصريف") ? color.red : str.contains(mmVerdict, "صراع") ? color.orange : color.gray
+
+// ─── POC / Value Area (proxy) ────────────────────────────────────────────────
+f_vp() =>
+    int n = math.min(vpBars, bar_index)
+    float hi = ta.highest(high, n)
+    float lo = ta.lowest(low, n)
+    float step = (hi - lo) / math.max(vpBins, 1)
+    step := step <= syminfo.mintick ? syminfo.mintick : step
+    array<float> bins = array.new_float(vpBins, 0.0)
+    for i = 0 to n - 1
+        float px = hlc3[i]
+        int b = int(math.floor((px - lo) / step))
+        b := math.max(0, math.min(vpBins - 1, b))
+        array.set(bins, b, array.get(bins, b) + volume[i])
+    int pocIdx = 0
+    float maxV = array.get(bins, 0)
+    for b = 1 to vpBins - 1
+        float v = array.get(bins, b)
+        if v > maxV
+            maxV := v
+            pocIdx := b
+    float pocPx = lo + (pocIdx + 0.5) * step
+    float totalV = 0.0
+    for b = 0 to vpBins - 1
+        totalV += array.get(bins, b)
+    float target = totalV * 0.70
+    float accV = array.get(bins, pocIdx)
+    int loIdx = pocIdx
+    int hiIdx = pocIdx
+    while accV < target and (loIdx > 0 or hiIdx < vpBins - 1)
+        float vLo = loIdx > 0 ? array.get(bins, loIdx - 1) : 0.0
+        float vHi = hiIdx < vpBins - 1 ? array.get(bins, hiIdx + 1) : 0.0
+        if vLo >= vHi and loIdx > 0
+            loIdx -= 1
+            accV += vLo
+        else if hiIdx < vpBins - 1
+            hiIdx += 1
+            accV += vHi
+        else if loIdx > 0
+            loIdx -= 1
+            accV += array.get(bins, loIdx)
+        else
+            break
+    float vaLo = lo + loIdx * step
+    float vaHi = lo + (hiIdx + 1) * step
+    [pocPx, vaLo, vaHi]
+
+[pocLine, vaLoLine, vaHiLine] = f_vp()
+
+// ─── Swing support & buy zones ───────────────────────────────────────────────
+float pl = ta.pivotlow(low, pivotLen, pivotLen)
+var float swingLow = na
+if not na(pl)
+    swingLow := pl
+
+float zw = atr * zoneAtr
+float dPrevLim = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+float dayPctLim = dPrevLim > 0 ? (close - dPrevLim) / dPrevLim * 100.0 : 0.0
+float haltPctLim = egxBoardLim == "SME تميّز" or egxBoardLim == "SME نايل" or egxBoardLim == "غير نشط" ? 5.0 : 10.0
+float luldPctLim = egxBoardLim == "غير نشط" ? 5.0 : (egxBoardLim == "SME تميّز" or egxBoardLim == "SME نايل" ? 10.0 : 20.0)
+bool nearLimitLim = blockLimitLim and dPrevLim > 0 and (dayPctLim >= math.min(9.0, haltPctLim - 1.0) or dayPctLim >= luldPctLim - 0.25)
+
+bool buyZoneBar = sigOk and volClimax and (buyPressure or wyckSC or absorption) and cmf >= 0 and not nearLimitLim
+bool atSupport = not na(swingLow) and low <= swingLow + zw and low >= swingLow - zw * 1.5
+bool strongBuyZone = buyZoneBar and atSupport
+
+// ─── MM accumulation / distribution boxes ────────────────────────────────────
+float rangeN = ta.highest(high, accZoneBars) - ta.lowest(low, accZoneBars)
+bool tightRange = rangeN <= atr * accRangeAtr
+float volInRange = ta.sma(volume, accZoneBars)
+bool volElevated = volInRange > volMa * 0.95
+bool accPhase = tightRange and volElevated and cmf > minCmfAcc and obvSlope > 0
+bool distPhase = tightRange and volElevated and cmf < maxCmfDist and obvSlope < 0 and close < ta.sma(close, accZoneBars)
+
+var box accBox = na
+var box distBox = na
+if showAccBoxes and accPhase and sigOk
+    box.delete(accBox)
+    accBox := box.new(bar_index - accZoneBars, ta.highest(high, accZoneBars), bar_index, ta.lowest(low, accZoneBars), border_color=color.new(color.teal, 30), bgcolor=color.new(color.teal, 88), text="تراكم", text_size=size.tiny, text_color=color.teal)
+if showDistBoxes and distPhase and sigOk
+    box.delete(distBox)
+    distBox := box.new(bar_index - accZoneBars, ta.highest(high, accZoneBars), bar_index, ta.lowest(low, accZoneBars), border_color=color.new(color.red, 30), bgcolor=color.new(color.red, 88), text="تصريف", text_size=size.tiny, text_color=color.red)
+
+// ─── Historical buy zone boxes (top vol at support) ───────────────────────────
+var array<box> buyBoxes = array.new_box()
+if showBuyBoxes and barstate.islast
+    for b = 0 to array.size(buyBoxes) - 1
+        box.delete(array.get(buyBoxes, b))
+    array.clear(buyBoxes)
+    int scan = math.min(buyZoneLook, bar_index - 1)
+    int found = 0
+    for off = 1 to scan
+        if found >= maxBuyBoxes
+            break
+        float vAt = volume[off]
+        float rAt = volMa[off] > 0 ? vAt / volMa[off] : 0.0
+        float cpAt = spread[off] > syminfo.mintick ? (close[off] - low[off]) / spread[off] : 0.5
+        bool volOk = rAt >= effRvol * 0.85 or vAt >= ta.highest(volume, effLook)[off] * 0.98
+        bool pressOk = cpAt >= 0.55 or (useWyckoff and ultraVol[off] and cpAt > 0.5)
+        float slAt = swingLow[off]
+        bool supOk = not na(slAt) and low[off] <= slAt + zw[off] and low[off] >= slAt - zw[off] * 1.5
+        if volOk and pressOk and supOk
+            float top = high[off] + zw[off] * 0.3
+            float bot = low[off] - zw[off] * 0.5
+            array.push(buyBoxes, box.new(bar_index - off, top, bar_index - off + 3, bot, border_color=color.new(color.lime, 40), bgcolor=color.new(color.lime, 90), text="شراء", text_size=size.tiny))
+            found += 1
+
+// ─── Top volume / deals scan helpers ─────────────────────────────────────────
+f_pickTop(int n, bool byDollar) =>
+    array<int> picked = array.new_int()
+    int scanLen = math.min(effLook, bar_index - 1)
+    for rank = 0 to n - 1
+        float best = -1.0
+        int bestOff = -1
+        for off = 1 to scanLen
+            bool used = false
+            for u = 0 to array.size(picked) - 1
+                if array.get(picked, u) == off
+                    used := true
+            if used
+                continue
+            float metric = byDollar ? dollarVol[off] : volume[off]
+            if metric > best
+                best := metric
+                bestOff := off
+        if bestOff > 0
+            array.push(picked, bestOff)
+    picked
+
+f_barTag(int off) =>
+    string t = ""
+    if wyckSC[off]
+        t := "SC"
+    else if wyckBC[off]
+        t := "BC"
+    else if close[off] > open[off]
+        t := "↑"
+    else
+        t := "↓"
+    t
+
+// ─── Mark V1–V3 on chart ─────────────────────────────────────────────────────
+var label lblV1 = na
+var label lblV2 = na
+var label lblV3 = na
+if markTopVol and barstate.islast
+    label.delete(lblV1)
+    label.delete(lblV2)
+    label.delete(lblV3)
+    array<int> topV = f_pickTop(3, false)
+    for i = 0 to math.min(2, array.size(topV) - 1)
+        int off = array.get(topV, i)
+        float rAt = volMa[off] > 0 ? volume[off] / volMa[off] : na
+        string txt = "V" + str.tostring(i + 1) + "\n" + str.tostring(volume[off], "#") + "\nRVOL " + str.tostring(rAt, "#.##")
+        label lb = label.new(bar_index - off, high[off], txt, style=label.style_label_down, color=color.new(color.fuchsia, 15), textcolor=color.white, size=size.small)
+        if i == 0
+            lblV1 := lb
+        else if i == 1
+            lblV2 := lb
+        else
+            lblV3 := lb
+
+var label lblD1 = na
+var label lblD2 = na
+if markBigDeals and barstate.islast
+    label.delete(lblD1)
+    label.delete(lblD2)
+    array<int> topD = f_pickTop(2, true)
+    for i = 0 to math.min(1, array.size(topD) - 1)
+        int off = array.get(topD, i)
+        string txt = "$" + str.tostring(i + 1) + "\n" + str.tostring(dollarVol[off], "#")
+        label lb = label.new(bar_index - off, low[off], txt, style=label.style_label_up, color=color.new(color.orange, 20), textcolor=color.white, size=size.tiny)
+        if i == 0
+            lblD1 := lb
+        else
+            lblD2 := lb
+
+// ─── Volume pane ─────────────────────────────────────────────────────────────
+color volCol = buyPressure and volClimax ? color.new(color.lime, 25) : sellPressure and volClimax ? color.new(color.red, 25) : bullBar ? color.new(color.teal, 55) : color.new(color.red, 65)
+plot(showVolPane ? volume : na, title="Volume", style=plot.style_columns, color=volCol, display=display.pane)
+plot(showVolPane ? volMa : na, title="Vol MA", color=color.new(color.yellow, 30), linewidth=2, display=display.pane)
+
+// ─── POC / VA on chart ─────────────────────────────────────────────────────────
+plot(showPocVa ? pocLine : na, "POC", color=color.new(color.yellow, 0), linewidth=2, style=plot.style_linebr)
+plot(showPocVa ? vaLoLine : na, "VA Low", color=color.new(color.gray, 40), linewidth=1, style=plot.style_linebr)
+plot(showPocVa ? vaHiLine : na, "VA High", color=color.new(color.gray, 40), linewidth=1, style=plot.style_linebr)
+
+bgcolor(bgAccDist and accScore >= 55 and accScore > distScore + 5 ? color.new(color.teal, 94) : bgAccDist and distScore >= 55 and distScore > accScore + 5 ? color.new(color.red, 94) : na)
+
+plotshape(sigOk and wyckSC, title="SC", style=shape.triangleup, location=location.belowbar, color=color.lime, size=size.tiny, text="SC")
+plotshape(sigOk and wyckBC, title="BC", style=shape.triangledown, location=location.abovebar, color=color.red, size=size.tiny, text="BC")
+plotshape(sigOk and bigDeal and not wyckSC and not wyckBC, title="صفقة كبيرة", style=shape.circle, location=location.abovebar, color=color.new(color.orange, 0), size=size.tiny, text="$")
+
+// ─── Tables ──────────────────────────────────────────────────────────────────
+var table tblVol = table.new(position.bottom_center, 6, 12, border_width=1)
+var table tblDeal = table.new(position.bottom_right, 5, 8, border_width=1)
+var table tblDash = table.new(position.top_right, 2, 10, border_width=1)
+
+if showTopVolTbl and barstate.islast
+    table.clear(tblVol, 0, 0, 5, 11)
+    color hdr = color.new(color.black, 5)
+    table.cell(tblVol, 0, 0, "أعلى حجم", bgcolor=hdr, text_color=color.yellow, text_size=size.small)
+    table.cell(tblVol, 1, 0, "قبل", bgcolor=hdr, text_color=color.white, text_size=size.tiny)
+    table.cell(tblVol, 2, 0, "V", bgcolor=hdr, text_color=color.white, text_size=size.tiny)
+    table.cell(tblVol, 3, 0, "RVOL", bgcolor=hdr, text_color=color.white, text_size=size.tiny)
+    table.cell(tblVol, 4, 0, "نوع", bgcolor=hdr, text_color=color.white, text_size=size.tiny)
+    table.cell(tblVol, 5, 0, "سعر", bgcolor=hdr, text_color=color.white, text_size=size.tiny)
+    array<int> tops = f_pickTop(topVolN, false)
+    for r = 0 to array.size(tops) - 1
+        int off = array.get(tops, r)
+        int row = r + 1
+        float rAt = volMa[off] > 0 ? volume[off] / volMa[off] : na
+        table.cell(tblVol, 0, row, "#" + str.tostring(r + 1), text_size=size.tiny)
+        table.cell(tblVol, 1, row, str.tostring(off) + "ش", text_size=size.tiny, text_color=color.gray)
+        table.cell(tblVol, 2, row, str.tostring(volume[off], "#"), text_size=size.tiny, text_color=color.fuchsia)
+        table.cell(tblVol, 3, row, str.tostring(rAt, "#.##"), text_size=size.tiny, text_color=color.aqua)
+        table.cell(tblVol, 4, row, f_barTag(off), text_size=size.tiny)
+        table.cell(tblVol, 5, row, str.tostring(close[off], format.mintick), text_size=size.tiny)
+
+if showDealTbl and barstate.islast
+    table.clear(tblDeal, 0, 0, 4, 7)
+    color hdrD = color.new(color.black, 5)
+    table.cell(tblDeal, 0, 0, "أكبر صفقات", bgcolor=hdrD, text_color=color.orange, text_size=size.small)
+    table.cell(tblDeal, 1, 0, "قبل", bgcolor=hdrD, text_size=size.tiny)
+    table.cell(tblDeal, 2, 0, "ح×س", bgcolor=hdrD, text_size=size.tiny)
+    table.cell(tblDeal, 3, 0, "V", bgcolor=hdrD, text_size=size.tiny)
+    table.cell(tblDeal, 4, 0, "ضغط", bgcolor=hdrD, text_size=size.tiny)
+    array<int> deals = f_pickTop(topDealN, true)
+    for r = 0 to array.size(deals) - 1
+        int off = array.get(deals, r)
+        int row = r + 1
+        float cpAt = spread[off] > syminfo.mintick ? (close[off] - low[off]) / spread[off] : 0.5
+        string press = cpAt >= 0.6 ? "شراء" : cpAt <= 0.4 ? "بيع" : "محايد"
+        table.cell(tblDeal, 0, row, "#" + str.tostring(r + 1), text_size=size.tiny)
+        table.cell(tblDeal, 1, row, str.tostring(off) + "ش", text_size=size.tiny, text_color=color.gray)
+        table.cell(tblDeal, 2, row, str.tostring(dollarVol[off], "#"), text_size=size.tiny, text_color=color.orange)
+        table.cell(tblDeal, 3, row, str.tostring(volume[off], "#"), text_size=size.tiny)
+        table.cell(tblDeal, 4, row, press, text_size=size.tiny, text_color=press == "شراء" ? color.lime : press == "بيع" ? color.red : color.gray)
+
+if showDash and barstate.islast
+    table.clear(tblDash, 0, 0, 1, 9)
+    table.cell(tblDash, 0, 0, "EGX فوليوم", bgcolor=color.new(color.black, 0), text_color=color.white, text_size=size.small)
+    table.cell(tblDash, 1, 0, mmVerdict, bgcolor=color.new(mmCol, 70), text_color=color.white, text_size=size.small)
+    table.cell(tblDash, 0, 1, "تراكم", text_color=color.gray, text_size=size.tiny)
+    table.cell(tblDash, 1, 1, str.tostring(accScore, "#") + "/100", text_color=color.teal, text_size=size.tiny)
+    table.cell(tblDash, 0, 2, "تصريف", text_color=color.gray, text_size=size.tiny)
+    table.cell(tblDash, 1, 2, str.tostring(distScore, "#") + "/100", text_color=color.red, text_size=size.tiny)
+    table.cell(tblDash, 0, 3, "RVOL", text_color=color.gray, text_size=size.tiny)
+    table.cell(tblDash, 1, 3, str.tostring(rvol, "#.##"), text_size=size.tiny)
+    table.cell(tblDash, 0, 4, "CMF", text_color=color.gray, text_size=size.tiny)
+    table.cell(tblDash, 1, 4, str.tostring(cmf, "#.###"), text_color=cmf > 0 ? color.lime : color.red, text_size=size.tiny)
+    table.cell(tblDash, 0, 5, "OBV ميل", text_color=color.gray, text_size=size.tiny)
+    table.cell(tblDash, 1, 5, obvSlope > 0 ? "↑" : "↓", text_size=size.tiny)
+    table.cell(tblDash, 0, 6, "POC", text_color=color.gray, text_size=size.tiny)
+    table.cell(tblDash, 1, 6, str.tostring(pocLine, format.mintick), text_size=size.tiny)
+    table.cell(tblDash, 0, 7, "سيولة", text_color=color.gray, text_size=size.tiny)
+    table.cell(tblDash, 1, 7, liqOk ? "OK" : "ضعيف", text_color=liqOk ? color.lime : color.orange, text_size=size.tiny)
+    table.cell(tblDash, 0, 8, "الإجراء", text_color=color.gray, text_size=size.tiny)
+    table.cell(tblDash, 1, 8, mmAction, text_color=color.white, text_size=size.tiny)
+
+var label mmBanner = na
+if showMmBanner and barstate.islast
+    label.delete(mmBanner)
+    string btxt = mmVerdict + " · تجم " + str.tostring(accScore, "#") + " · تصريف " + str.tostring(distScore, "#") + "\n" + mmAction
+    mmBanner := label.new(bar_index, low, btxt, style=label.style_label_up, color=color.new(mmCol, 75), textcolor=color.white, size=size.small, yloc=yloc.price)
+
+alertcondition(accScore >= 55 and accScore > distScore + 10 and sigOk, title="EGX تراكم قوي", message="EGX فوليوم: تراكم محتمل")
+alertcondition(distScore >= 55 and distScore > accScore + 10 and sigOk, title="EGX تصريف قوي", message="EGX فوليوم: تصريف محتمل")
+alertcondition(wyckSC and sigOk, title="EGX SC", message="EGX: ذروة بيع (تجميع محتمل)")
+alertcondition(wyckBC and sigOk, title="EGX BC", message="EGX: ذروة شراء (تصريف محتمل)")
+alertcondition(bigDeal and sigOk, title="EGX صفقة كبيرة", message="EGX: شمعة حجم×سعر استثنائي")
+
+plot(nearLimitLim ? 1 : 0, "EGX_NearLimit", display=display.data_window)

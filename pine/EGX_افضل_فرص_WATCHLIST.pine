@@ -1,0 +1,237 @@
+//@version=6
+indicator("EGX أفضل فرص — محفظة 6–16", shorttitle="فرص WL", overlay=false, max_tables_count=1, calc_bars_count=5000)
+
+// مرآة EGXOpp_Score / Rank على 6–16 رمز — فوري · D · مرجع BOARD200/Screener
+// plots: EGXOppWL_* · مرجع: docs/EGX_افضل_فرص.md
+
+string G = "رموز"
+string s1 = input.symbol("EGX:COMI", "1", group=G)
+string s2 = input.symbol("EGX:SWDY", "2", group=G)
+string s3 = input.symbol("EGX:TMGH", "3", group=G)
+string s4 = input.symbol("EGX:ETEL", "4", group=G)
+string s5 = input.symbol("EGX:FWRY", "5", group=G)
+string s6 = input.symbol("EGX:HRHO", "6", group=G)
+string s7 = input.symbol("EGX:UNIP", "7", group=G)
+string s8 = input.symbol("EGX:CNIN", "8", group=G)
+string s9 = input.symbol("EGX:MFPC", "9", group=G)
+string s10 = input.symbol("EGX:ABUK", "10", group=G)
+string s11 = input.symbol("EGX:PHDC", "11", group=G)
+string s12 = input.symbol("EGX:ORAS", "12", group=G)
+string s13 = input.symbol("EGX:SKPC", "13", group=G)
+string s14 = input.symbol("EGX:ACGC", "14", group=G)
+string s15 = input.symbol("EGX:OCDI", "15", group=G)
+string s16 = input.symbol("EGX:EGAL", "16", group=G)
+int symN = input.int(6, "عدد الرموز", minval=6, maxval=16, group=G)
+bool showCopyRow = input.bool(true, "صف نسخ Top N", group=G)
+string bench = input.symbol("EGX:EGX30", "EGX30", group=G)
+float minVol = input.float(1500.0, "حد حجم", group=G)
+float minRankIn = input.float(65.0, "حد Rank", minval=40, maxval=90, group=G)
+float minOppHot = input.float(55.0, "حد «حار»", minval=40, maxval=80, group=G)
+float minProOpp = input.float(68.0, "حد Pro", minval=55, maxval=85, group=G)
+float minRR = input.float(1.5, "حد R/R", minval=1.0, step=0.1, group=G)
+int minSetupIn = input.int(7, "إعداد /11", minval=5, maxval=11, group=G)
+bool blockBear = input.bool(true, "منع ضغط EGX30", group=G)
+bool blockLimit = input.bool(true, "منع halt", group=G)
+bool blockChase = input.bool(true, "منع مطاردة", group=G)
+string egxBoard = input.string("نشط (EGX100)", "لوحة", options=["نشط (EGX100)", "EGX30 (بيع مكشوف)", "SME تميّز", "SME نايل", "غير نشط"], group=G)
+
+f_mktTr() =>
+    int sc = 0
+    float e20 = ta.ema(close, 20)
+    float e50 = ta.ema(close, 50)
+    sc += close > e20 ? 1 : -1
+    sc += e20 > e50 ? 1 : -1
+    sc
+
+float benchRoc = request.security(bench, "D", ta.roc(close, 20), barmerge.gaps_off, barmerge.lookahead_off)
+float mom30 = request.security(bench, "D", close[20] > 0 ? (close / close[20] - 1.0) * 100.0 : 0.0, barmerge.gaps_off, barmerge.lookahead_off)
+int tr30 = request.security(bench, "D", f_mktTr(), barmerge.gaps_off, barmerge.lookahead_off)
+bool heavySell = mom30 < -4.0 and tr30 <= -1
+bool regimeOk = not blockBear or not heavySell
+
+f_opp() =>
+    float ema9 = ta.ema(close, 9)
+    float ema21 = ta.ema(close, 21)
+    float ema50 = ta.ema(close, 50)
+    bool bullStack = ema9 > ema21 and ema21 > ema50
+    float wC = request.security(syminfo.tickerid, "W", close, barmerge.gaps_off, barmerge.lookahead_off)
+    float wE50 = request.security(syminfo.tickerid, "W", ta.ema(close, 50), barmerge.gaps_off, barmerge.lookahead_off)
+    bool htfBull = wC > wE50
+    [macdL, macdS, macdH] = ta.macd(close, 12, 26, 9)
+    bool macdBull = macdH > 0 and macdL > macdS
+    float volMa = ta.sma(volume, 20)
+    bool liq = volMa >= minVol
+    float rvol = volume / math.max(volMa, 1.0)
+    float cmf = ta.sma(((close - low) - (high - close)) / math.max(high - low, syminfo.mintick) * volume, 14) / ta.sma(volume, 14)
+    float obvSl = ta.linreg(ta.obv, 10, 0) - ta.linreg(ta.obv, 10, 1)
+    bool acc = cmf > 0 and obvSl > 0
+    float accSc = math.min(100.0, (acc ? 40.0 : 0.0) + (cmf > 0 ? 15.0 : 0.0) + (obvSl > 0 ? 15.0 : 0.0))
+    float distSc = math.min(100.0, (cmf < 0 and obvSl < 0 ? 40.0 : 0.0) + (cmf < 0 ? 15.0 : 0.0))
+    float atr = ta.atr(14)
+    float pl = ta.pivotlow(low, 8, 8)
+    var float sl = na
+    if not na(pl)
+        sl := pl
+    bool supBr = not na(sl) and close < sl and close[1] >= sl
+    float zw = atr * 0.35
+    bool atZ = low <= nz(sl, low) + zw and close >= nz(sl, low) - zw * 1.2
+    bool ret = not na(sl) and low <= sl * 1.006 and close > sl
+    float ph = ta.pivothigh(high, 8, 8)
+    var float sh = na
+    if not na(ph)
+        sh := ph
+    float t1 = na(sh) ? close + atr * 1.5 : sh
+    float entryPx = (nz(sl, low) + zw + nz(sl, low) - zw * 1.2) / 2.0
+    float stopPx = nz(sl, low) - zw * 1.2 - atr * 0.5
+    float rr = math.max(entryPx - stopPx, syminfo.mintick) > 0 ? (t1 - entryPx) / math.max(entryPx - stopPx, syminfo.mintick) : 0.0
+    float roc20 = ta.roc(close, 20)
+    float rsi = ta.rsi(close, 14)
+    float hi = ta.highest(high, 252)
+    bool chase = hi > 0 and (close - hi) / hi * 100.0 > -3 and rsi > 72
+    float dPrev = close[1]
+    float dayPct = dPrev > 0 ? (close - dPrev) / dPrev * 100.0 : 0.0
+    float haltPct = egxBoard == "SME تميّز" or egxBoard == "SME نايل" or egxBoard == "غير نشط" ? 5.0 : 10.0
+    float luldPct = egxBoard == "غير نشط" ? 5.0 : (egxBoard == "SME تميّز" or egxBoard == "SME نايل" ? 10.0 : 20.0)
+    bool nearLimit = dayPct >= math.min(9.0, haltPct - 1.0) or dayPct >= luldPct - 0.25
+    float score = 0.0
+    score += bullStack ? 20.0 : 0.0
+    score += htfBull ? 15.0 : -10.0
+    score += macdBull ? 10.0 : 0.0
+    score += acc ? 15.0 : 0.0
+    score += rvol >= 1.0 ? 10.0 : 0.0
+    score += rsi > 40 and rsi < 70 ? 8.0 : 0.0
+    score += accSc >= 55 ? 5.0 : 0.0
+    score += distSc >= 55 ? -8.0 : 0.0
+    score := math.max(0.0, math.min(100.0, score))
+    int setup = (bullStack ? 1 : 0) + (htfBull ? 1 : 0) + (macdBull ? 1 : 0) + (acc ? 1 : 0) + (atZ ? 1 : 0) + (rr >= 1.5 ? 1 : 0) + (rvol >= 1.0 ? 1 : 0) + (ret ? 1 : 0) + (accSc >= 50 ? 1 : 0) + (not chase ? 1 : 0) + (not nearLimit ? 1 : 0)
+    bool buy = liq and accSc >= 50 and distSc < 55 and (atZ or ret) and not supBr and not chase and not nearLimit and setup >= 7 and rr >= 1.5
+    [score, buy ? 1.0 : 0.0, setup, rvol, roc20, accSc, rr, dayPct]
+
+f_pack(string sym) =>
+    [sc, bu, st, rv, roc20, ac, rrv, dp] = request.security(sym, "D", f_opp(), barmerge.gaps_off, barmerge.lookahead_off)
+    float rs = roc20 - benchRoc
+    bool rsL = rs > 0
+    int st11 = int(st)
+    float rank = math.max(0.0, math.min(100.0, sc * 0.55 + st11 / 11.0 * 30.0 + (rsL ? 8.0 : 0.0) + (rv >= 1.2 ? 7.0 : 0.0)))
+    float opp = math.max(0.0, math.min(100.0, sc * 0.45 + st11 / 11.0 * 100.0 * 0.35 + math.min(100.0, rrv / 3.0 * 100.0) * 0.20))
+    bool buyOk = bu > 0 and regimeOk
+    bool passOk = buyOk and rank >= minRankIn and opp >= 58.0
+    bool pro = passOk and opp >= minProOpp and st11 >= 7 and ac >= 50
+    [sym, opp, rank, buyOk, passOk, pro, st11, rv, rs, rrv, dp]
+
+[s1t, o1, rk1, b1, pa1, p1, st1, rv1, rs1, rr1, d1] = f_pack(s1)
+[s2t, o2, rk2, b2, pa2, p2, st2, rv2, rs2, rr2, d2] = f_pack(s2)
+[s3t, o3, rk3, b3, pa3, p3, st3, rv3, rs3, rr3, d3] = f_pack(s3)
+[s4t, o4, rk4, b4, pa4, p4, st4, rv4, rs4, rr4, d4] = f_pack(s4)
+[s5t, o5, rk5, b5, pa5, p5, st5, rv5, rs5, rr5, d5] = f_pack(s5)
+[s6t, o6, rk6, b6, pa6, p6, st6, rv6, rs6, rr6, d6] = f_pack(s6)
+[s7t, o7, rk7, b7, pa7, p7, st7, rv7, rs7, rr7, d7] = f_pack(s7)
+[s8t, o8, rk8, b8, pa8, p8, st8, rv8, rs8, rr8, d8] = f_pack(s8)
+[s9t, o9, rk9, b9, pa9, p9, st9, rv9, rs9, rr9, d9] = f_pack(s9)
+[s10t, o10, rk10, b10, pa10, p10, st10, rv10, rs10, rr10, d10] = f_pack(s10)
+[s11t, o11, rk11, b11, pa11, p11, st11, rv11, rs11, rr11, d11] = f_pack(s11)
+[s12t, o12, rk12, b12, pa12, p12, st12, rv12, rs12, rr12, d12] = f_pack(s12)
+[s13t, o13, rk13, b13, pa13, p13, st13, rv13, rs13, rr13, d13] = f_pack(s13)
+[s14t, o14, rk14, b14, pa14, p14, st14, rv14, rs14, rr14, d14] = f_pack(s14)
+[s15t, o15, rk15, b15, pa15, p15, st15, rv15, rs15, rr15, d15] = f_pack(s15)
+[s16t, o16, rk16, b16, pa16, p16, st16, rv16, rs16, rr16, d16] = f_pack(s16)
+
+f_oppVal(int ix) =>
+    ix == 0 ? o1 : ix == 1 ? o2 : ix == 2 ? o3 : ix == 3 ? o4 : ix == 4 ? o5 : ix == 5 ? o6 : ix == 6 ? o7 : ix == 7 ? o8 : ix == 8 ? o9 : ix == 9 ? o10 : ix == 10 ? o11 : ix == 11 ? o12 : ix == 12 ? o13 : ix == 13 ? o14 : ix == 14 ? o15 : o16
+
+f_short(string full) =>
+    str.replace(full, "EGX:", "")
+
+int[] ord = array.new_int()
+for k = 0 to symN - 1
+    array.push(ord, k)
+for i = 0 to symN - 2
+    for j = 0 to symN - 2 - i
+        int ia = array.get(ord, j)
+        int ib = array.get(ord, j + 1)
+        if f_oppVal(ia) < f_oppVal(ib)
+            array.set(ord, j, ib)
+            array.set(ord, j + 1, ia)
+
+f_row(int ix) =>
+    switch ix
+        0 => [s1t, o1, rk1, b1, pa1, p1, st1, rv1, rs1, rr1, d1]
+        1 => [s2t, o2, rk2, b2, pa2, p2, st2, rv2, rs2, rr2, d2]
+        2 => [s3t, o3, rk3, b3, pa3, p3, st3, rv3, rs3, rr3, d3]
+        3 => [s4t, o4, rk4, b4, pa4, p4, st4, rv4, rs4, rr4, d4]
+        4 => [s5t, o5, rk5, b5, pa5, p5, st5, rv5, rs5, rr5, d5]
+        5 => [s6t, o6, rk6, b6, pa6, p6, st6, rv6, rs6, rr6, d6]
+        6 => [s7t, o7, rk7, b7, pa7, p7, st7, rv7, rs7, rr7, d7]
+        7 => [s8t, o8, rk8, b8, pa8, p8, st8, rv8, rs8, rr8, d8]
+        8 => [s9t, o9, rk9, b9, pa9, p9, st9, rv9, rs9, rr9, d9]
+        9 => [s10t, o10, rk10, b10, pa10, p10, st10, rv10, rs10, rr10, d10]
+        10 => [s11t, o11, rk11, b11, pa11, p11, st11, rv11, rs11, rr11, d11]
+        11 => [s12t, o12, rk12, b12, pa12, p12, st12, rv12, rs12, rr12, d12]
+        12 => [s13t, o13, rk13, b13, pa13, p13, st13, rv13, rs13, rr13, d13]
+        13 => [s14t, o14, rk14, b14, pa14, p14, st14, rv14, rs14, rr14, d14]
+        14 => [s15t, o15, rk15, b15, pa15, p15, st15, rv15, rs15, rr15, d15]
+        => [s16t, o16, rk16, b16, pa16, p16, st16, rv16, rs16, rr16, d16]
+
+int leaderIxP = array.get(ord, 0)
+[sLt, lOpp, lRk, lBuy, lPass, lPro, lSt, lRv, lRs, lRr, lDp] = f_row(leaderIxP)
+float leaderOpp = lOpp
+bool leaderBuy = lBuy
+bool leaderPro = lPro
+string leaderSym = sLt
+
+int proCnt = 0
+string copyLine = ""
+for ci = 0 to symN - 1
+    int cix = array.get(ord, ci)
+    [csym, _co, _cr, _cb, _cp, cpro, _st, _rv, _rs, _rr, _dp] = f_row(cix)
+    proCnt += cpro ? 1 : 0
+    copyLine := copyLine + (ci > 0 ? "," : "") + f_short(csym)
+
+var table wl = table.new(position.top_right, 6, 16, bgcolor=color.new(#0d1117, 5), border_width=1)
+if barstate.islast
+    int lastRow = symN + (showCopyRow ? 2 : 1)
+    table.clear(wl, 0, 0, 5, lastRow)
+    color hdr = color.new(#0d3b2e, 8)
+    table.cell(wl, 0, 0, "#", bgcolor=hdr, text_color=color.gray, text_size=size.tiny)
+    table.cell(wl, 1, 0, "رمز", bgcolor=hdr, text_color=color.gray, text_size=size.tiny)
+    table.cell(wl, 2, 0, "فرصة", bgcolor=hdr, text_color=color.white, text_size=size.tiny)
+    table.cell(wl, 3, 0, "رتبة", bgcolor=hdr, text_color=color.gray, text_size=size.tiny)
+    table.cell(wl, 4, 0, "R/R", bgcolor=hdr, text_color=color.gray, text_size=size.tiny)
+    table.cell(wl, 5, 0, "حالة", bgcolor=hdr, text_color=color.gray, text_size=size.tiny)
+    for row = 0 to symN - 1
+        int ix = array.get(ord, row)
+        [sym, op, rk, bu, passOk, pro, stx, rv, rs, rrv, dp] = f_row(ix)
+        string stTxt = pro ? "Pro" : bu ? "Buy" : passOk ? "Pass" : op >= minOppHot ? "Hot" : "—"
+        color oc = op >= minProOpp ? color.lime : op >= minOppHot ? color.yellow : color.gray
+        table.cell(wl, 0, row + 1, str.tostring(row + 1), text_size=size.tiny, text_color=row == 0 ? color.lime : color.gray)
+        table.cell(wl, 1, row + 1, f_short(sym), text_size=size.tiny, text_color=color.white)
+        table.cell(wl, 2, row + 1, str.tostring(op, "#"), text_size=size.tiny, text_color=oc)
+        table.cell(wl, 3, row + 1, str.tostring(rk, "#"), text_size=size.tiny)
+        table.cell(wl, 4, row + 1, str.tostring(rrv, "#.#"), text_size=size.tiny)
+        table.cell(wl, 5, row + 1, stTxt, text_size=size.tiny, text_color=pro ? color.aqua : bu ? color.lime : color.gray)
+    int fRow = symN + 1
+    table.cell(wl, 0, fRow, heavySell ? "سوق" : "★", text_color=heavySell ? color.orange : color.lime, text_size=size.tiny)
+    table.cell(wl, 1, fRow, f_short(leaderSym), text_color=color.white, text_size=size.tiny)
+    table.cell(wl, 2, fRow, str.tostring(leaderOpp, "#"), text_color=color.lime, text_size=size.tiny)
+    table.cell(wl, 3, fRow, "Rank " + str.tostring(lRk, "#"), text_color=color.white, text_size=size.tiny)
+    table.cell(wl, 4, fRow, regimeOk ? "OK" : "ضغط", text_color=regimeOk ? color.gray : color.orange, text_size=size.tiny)
+    table.cell(wl, 5, fRow, leaderPro ? "Pro" : leaderBuy ? "Buy" : "—", text_color=leaderBuy ? color.lime : color.gray, text_size=size.tiny)
+    if showCopyRow
+        table.cell(wl, 0, fRow + 1, "نسخ", text_color=color.aqua, text_size=size.tiny)
+        table.cell(wl, 1, fRow + 1, copyLine, text_color=color.white, text_size=size.tiny)
+        table.cell(wl, 4, fRow + 1, "Pro " + str.tostring(proCnt), text_color=proCnt >= 2 ? color.lime : color.gray, text_size=size.tiny)
+        table.merge_cells(wl, 1, fRow + 1, 3, fRow + 1)
+
+plot(leaderOpp, "EGXOppWL_LeaderScore", display=display.data_window)
+plot(leaderBuy ? 1 : 0, "EGXOppWL_LeaderBuy", display=display.data_window)
+plot(heavySell ? 1 : 0, "EGXOppWL_MktStress", display=display.data_window)
+plot(o1, "EGXOppWL_Opp1", display=display.data_window)
+plot(o2, "EGXOppWL_Opp2", display=display.data_window)
+plot(o3, "EGXOppWL_Opp3", display=display.data_window)
+plot(proCnt, "EGXOppWL_ProCount", display=display.data_window)
+plot(lRk, "EGXOppWL_LeaderRank", display=display.data_window)
+plot(1, "EGXOppWL", display=display.data_window)
+
+alertcondition(leaderBuy and regimeOk, "فرص WL — شراء الأول", "{{ticker}} OppWL leader buy")
+alertcondition(leaderOpp >= minProOpp and leaderBuy, "فرص WL — Pro الأول", "{{ticker}} OppWL Pro leader")
+alertcondition(proCnt >= 2 and regimeOk, "فرص WL — 2+ Pro", "{{ticker}} OppWL 2+ Pro")

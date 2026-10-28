@@ -1,0 +1,39 @@
+//@version=6
+indicator("EGX Tool 96 TPO — Market Profile TPO proxy", shorttitle="EGX T-TPO", overlay=true, max_labels_count=80, max_lines_count=80, max_boxes_count=40, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة ح بروفايل · #96/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+int look = input.int(40, "TPO bars")
+int bins = input.int(16, "Bins")
+int n = math.min(look, bar_index)
+float hi = ta.highest(high, n)
+float lo = ta.lowest(low, n)
+float step = math.max((hi - lo) / bins, syminfo.mintick)
+float best = 0.0
+int bi = 0
+for b = 0 to bins - 1
+    float acc = 0.0
+    for i = 0 to n - 1
+        int idx = int(math.floor((hlc3[i] - lo) / step))
+        if idx == b
+            acc += 1.0
+    if acc > best
+        best := acc
+        bi := b
+float tpo = lo + (bi + 0.5) * step
+int vote = close > tpo ? 1 : -1
+plot(tpo, "TPO-POC", color=color.orange, linewidth=2)
+
+plot(vote, "EGXT_TPO_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_TPO_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_TPO_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "TPO", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-TPO صاعد", "EGX Tool TPO: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-TPO هابط", "EGX Tool TPO: vote هابط")

@@ -1,0 +1,25 @@
+//@version=6
+indicator("EGX Tool 07 ويليامز %R — Williams %R", shorttitle="EGX T-WILLIAMSR", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة أ الزخم · #07/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+int len = input.int(14, "%R")
+float v = ta.wpr(len)
+int vote = v > -20 ? -1 : v < -80 ? 1 : v > -50 ? 1 : -1
+plot(v, "EGXT_WPR_Val", color=color.yellow, linewidth=2)
+hline(-20, "-20", color=color.red)
+hline(-80, "-80", color=color.lime)
+
+plot(vote, "EGXT_WILLIAMSR_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_WILLIAMSR_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_WILLIAMSR_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "WILLIAMSR", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-WILLIAMSR صاعد", "EGX Tool WILLIAMSR: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-WILLIAMSR هابط", "EGX Tool WILLIAMSR: vote هابط")

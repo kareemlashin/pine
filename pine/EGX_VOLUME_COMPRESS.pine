@@ -1,0 +1,37 @@
+//@version=6
+indicator("EGX Volume Compression — coil + V build", shorttitle="EGX VCmp", overlay=true, max_tables_count=2, calc_bars_count=5000)
+
+// ضغط سعري + حجم يرتفع · docs/EGX_VOLUME.md
+
+string G = "Coil"
+int rangeLen = input.int(15, "Range", minval=8, group=G)
+int volLen = input.int(5, "Vol trend", minval=3, group=G)
+float rangeMax = input.float(0.85, "Range/ATR max", group=G)
+float volSlopeMin = input.float(0.08, "Vol slope min", step=0.02, group=G)
+
+float rng = ta.highest(high, rangeLen) - ta.lowest(low, rangeLen)
+float atr = ta.atr(14)
+bool tight = rng / math.max(atr, syminfo.mintick) <= rangeMax
+
+float vNow = ta.sma(volume, volLen)
+float vPrev = ta.sma(volume[volLen], volLen)
+float vSlope = vPrev > 0 ? (vNow - vPrev) / vPrev : 0.0
+bool volBuild = vSlope >= volSlopeMin
+
+bool coil = tight and volBuild
+bool coilBreak = coil[1] and close > ta.highest(high, rangeLen)[1] and volume > ta.sma(volume, 20) * 1.2
+bool coilBreakDn = coil[1] and close < ta.lowest(low, rangeLen)[1] and volume > ta.sma(volume, 20) * 1.2
+
+bgcolor(coil ? color.new(color.blue, 92) : na)
+plotshape(coilBreak, "Coil↑", shape.triangleup, location.belowbar, color=color.lime, size=size.small, text="C↑")
+plotshape(coilBreakDn, "Coil↓", shape.triangledown, location.abovebar, color=color.red, size=size.small, text="C↓")
+
+var table t = table.new(position.top_left, 2, 3, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 2)
+    table.cell(t, 0, 0, "Compress", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, coil ? "COIL" : coilBreak ? "BRK↑" : "—", text_size=size.tiny)
+
+plot(coil ? 1 : 0, "EGVCmp_Coil", display=display.all)
+plot(coilBreak ? 1 : 0, "EGVCmp_BreakUp", display=display.all)
+plot(coilBreakDn ? 1 : 0, "EGVCmp_BreakDn", display=display.all)

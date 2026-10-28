@@ -1,0 +1,31 @@
+//@version=6
+indicator("EGX Volume Print — block bar", shorttitle="EGX VPr", overlay=true, max_labels_count=80, max_tables_count=2, calc_bars_count=5000)
+
+// «Print» = حجم الشمعة >> المتوسط · docs/EGX_VOLUME.md
+
+string G = "Print"
+float rvolMin = input.float(2.5, "RVOL min", group=G)
+float pctMin = input.float(92.0, "Rank % min", group=G)
+int rankLen = input.int(250, "Rank window", group=G)
+
+float vma = ta.sma(volume, 20)
+float rvol = volume / math.max(vma, 1.0)
+float pct = ta.percentrank(volume, rankLen)
+float dVol = volume * close
+
+bool print = rvol >= rvolMin or pct >= pctMin
+bool printUp = print and close >= open
+bool printDn = print and close < open
+
+plotshape(printUp, "Print+", shape.square, location.belowbar, color=color.orange, size=size.small, text="P")
+plotshape(printDn, "Print-", shape.square, location.abovebar, color=color.maroon, size=size.small, text="P")
+
+var table t = table.new(position.top_right, 2, 3, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 2)
+    table.cell(t, 0, 0, "Print", bgcolor=color.black, text_color=color.orange, text_size=size.small)
+    table.cell(t, 1, 0, print ? "YES" : "—", text_size=size.tiny)
+
+plot(print ? 1 : 0, "EGVPr_Any", display=display.all)
+plot(printUp ? 1 : 0, "EGVPr_Up", display=display.all)
+plot(dVol, "EGVPr_DollarV", display=display.all)

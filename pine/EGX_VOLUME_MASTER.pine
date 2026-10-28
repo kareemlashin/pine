@@ -1,0 +1,292 @@
+//@version=6
+indicator("EGX Volume MASTER — all-in-one", shorttitle="EGX V-MASTER", overlay=true, max_labels_count=400, max_lines_count=200, max_boxes_count=80, max_tables_count=10, calc_bars_count=5000)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// EGX Volume MASTER — فوليوم + مناطق B1/S1 + ميكر + خطة تداول + ماسح
+// بديل واحد: EGX_VOLUME · EGX_VOLUME_ZONES · EGX_VOLUME_MM (تفصيل أكثر)
+// Screener: EGVM_Pro · EGVM_B1 · EGVM_NetBuy · EGVM_GradeB1
+// Strategy: pine/EGX_VOLUME_MASTER_STRATEGY.pine · docs/EGX_VOLUME.md
+// ═══════════════════════════════════════════════════════════════════════════════
+
+string G_PROF = "═══ EGX ═══"
+string profile = input.string("EGX يومي", "ملف", options=["EGX يومي", "مضاربة", "مخصص"], group=G_PROF)
+
+string G_VOL = "═══ فوليوم ═══"
+int volMaLen = input.int(20, "MA حجم", minval=5, group=G_VOL)
+int rankLen = input.int(500, "نافذة رتبة", minval=50, group=G_VOL)
+float rvolClimax = input.float(2.0, "RVOL climax", minval=1.2, step=0.1, group=G_VOL)
+string mktSym = input.symbol("EGX:EGX30", "مؤشر RS vol", group=G_VOL)
+
+string G_ZONE = "═══ مناطق ═══"
+int zoneLook = input.int(400, "نافذة zones", minval=50, maxval=2000, group=G_ZONE)
+int vpBins = input.int(32, "bins", minval=12, maxval=50, group=G_ZONE)
+int showTopHvn = input.int(5, "HVN buy/sell", minval=2, maxval=8, group=G_ZONE)
+float zonePad = input.float(0.28, "× ATR pad", minval=0.05, step=0.05, group=G_ZONE)
+
+string G_MM = "═══ ميكر (proxy) ═══"
+int cmfLen = input.int(20, "CMF", group=G_MM)
+
+string G_TR = "═══ خطة تداول ═══"
+float slAtr = input.float(1.1, "وقف × ATR تحت B1", minval=0.5, step=0.1, group=G_TR)
+float rrMin = input.float(1.5, "حد R/R للعرض", minval=1.0, step=0.1, group=G_TR)
+float minAvgVol = input.float(1000.0, "حد متوسط حجم", minval=0, group=G_TR)
+bool blockHeavyDist = input.bool(true, "منع PRO عند تصريف", group=G_TR)
+bool showShortSig = input.bool(false, "إشارة PRO-S (S1) — يظهر فقط مع EGX30", group=G_TR)
+bool isEgx30Short = input.bool(false, "هذا السهم من EGX30 (بيع مكشوف مسموح)", group=G_TR)
+
+string G_UI = "═══ عرض ═══"
+bool uiCompact = input.bool(false, "وضع مختصر", group=G_UI)
+bool showVolPane = input.bool(true, "لوحة فوليوم", group=G_UI)
+bool showHvn = input.bool(true, "HVN + B1/S1", group=G_UI)
+bool showHeatLbl = input.bool(true, "تسمية حرارة السعر", group=G_UI)
+bool showTrade = input.bool(true, "خطوط دخول/وقف/هدف", group=G_UI)
+bool showTbl = input.bool(true, "لوحة master", group=G_UI)
+bool showMmBanner = input.bool(true, "بانر تراكم/تصريف", group=G_UI)
+bool showScreener = input.bool(true, "مخرجات ماسح", group=G_UI)
+bool showMagnet = input.bool(true, "خط Magnet (وسط B1–S1)", group=G_UI)
+bool confirmClose = input.bool(true, "إشارات @ إغلاق", group=G_UI)
+
+int effLook = profile == "مضاربة" ? 200 : profile == "مخصص" ? zoneLook : 400
+int effRank = profile == "مضاربة" ? 250 : rankLen
+float effRvol = profile == "مضاربة" ? 1.7 : rvolClimax
+
+bool sigOk = not confirmClose or barstate.isconfirmed
+float atr = ta.atr(14)
+float pad = atr * zonePad
+float volMa = ta.sma(volume, volMaLen)
+float rvol = volume / math.max(volMa, 1.0)
+float volPct = ta.percentrank(volume, effRank)
+bool isClimax = rvol >= effRvol or volPct >= 92.0
+bool bullBar = close >= open
+
+float rng = math.max(high - low, syminfo.mintick)
+float buyVol = volume * (close - low) / rng
+float sellVol = volume - buyVol
+float buyShare = buyVol / math.max(volume, 1.0)
+
+float mfm = ((close - low) - (high - close)) / rng
+float cmf = ta.sma(mfm * volume, cmfLen) / ta.sma(volume, cmfLen)
+float obv = ta.obv
+float obvSl = ta.linreg(obv, 10, 0) - ta.linreg(obv, 10, 1)
+bool accumulating = cmf > 0.03 and obvSl > 0
+bool distributing = cmf < -0.03 and obvSl < 0
+
+float accScore = math.min(100.0, (accumulating ? 35.0 : 0.0) + (cmf > 0.05 ? 25.0 : 0.0) + (obvSl > 0 ? 20.0 : 0.0) + (buyShare > 0.55 and isClimax ? 20.0 : 0.0))
+float distScore = math.min(100.0, (distributing ? 35.0 : 0.0) + (cmf < -0.05 ? 25.0 : 0.0) + (obvSl < 0 ? 20.0 : 0.0) + (buyShare < 0.45 and isClimax ? 20.0 : 0.0))
+string mmTxt = distScore > accScore + 12 ? "📤 تصريف" : accScore > distScore + 12 ? "📥 تراكم" : "⚪ محايد"
+
+float mktVolMa = request.security(mktSym, timeframe.period, ta.sma(volume, volMaLen), barmerge.gaps_off, barmerge.lookahead_off)
+float mktRvol = mktVolMa > 0 ? volume / mktVolMa : na
+float rsVol = not na(mktRvol) and mktRvol > 0 ? rvol / mktRvol : na
+
+f_buyVolOff(int off) =>
+    float r = math.max(high[off] - low[off], syminfo.mintick)
+    volume[off] * (close[off] - low[off]) / r
+
+f_pxBin(float px, float lo, float step) =>
+    int b = int(math.floor((px - lo) / step))
+    math.max(0, math.min(vpBins - 1, b))
+
+f_profile() =>
+    int n = math.min(effLook, bar_index)
+    float hi = ta.highest(high, n)
+    float lo = ta.lowest(low, n)
+    float step = (hi - lo) / math.max(vpBins, 1)
+    step := step <= syminfo.mintick ? syminfo.mintick : step
+    array<float> buyB = array.new_float(vpBins, 0.0)
+    array<float> sellB = array.new_float(vpBins, 0.0)
+    float tB = 0.0
+    float tS = 0.0
+    for i = 0 to n - 1
+        float bV = f_buyVolOff(i)
+        float sV = volume[i] - bV
+        tB += bV
+        tS += sV
+        int bi = f_pxBin(close[i], lo, step)
+        int si = f_pxBin(open[i], lo, step)
+        array.set(buyB, bi, array.get(buyB, bi) + bV)
+        array.set(sellB, si, array.get(sellB, si) + sV)
+    [buyB, sellB, lo, step, tB, tS]
+
+f_pickTop(array<float> bins, int k) =>
+    array<int> out = array.new_int()
+    for rank = 0 to k - 1
+        float best = -1.0
+        int bi = -1
+        for b = 0 to array.size(bins) - 1
+            bool used = false
+            for u = 0 to array.size(out) - 1
+                if array.get(out, u) == b
+                    used := true
+            if not used and array.get(bins, b) > best
+                best := array.get(bins, b)
+                bi := b
+        if bi >= 0
+            array.push(out, bi)
+    out
+
+f_mid(float lo, float step, int idx) =>
+    lo + (idx + 0.5) * step
+
+f_loHi(float lo, float step, int idx) =>
+    [lo + idx * step - pad, lo + (idx + 1) * step + pad]
+
+f_inZ(float zLo, float zHi) =>
+    low <= zHi and high >= zLo
+
+[buyBins, sellBins, vpLo, vpStep, totBuy, totSell] = f_profile()
+float netBuyPct = totBuy + totSell > 0 ? totBuy / (totBuy + totSell) * 100.0 : 50.0
+
+float maxB = 0.0
+float maxS = 0.0
+int b1i = 0
+int s1i = 0
+for b = 0 to vpBins - 1
+    if array.get(buyBins, b) > maxB
+        maxB := array.get(buyBins, b)
+        b1i := b
+    if array.get(sellBins, b) > maxS
+        maxS := array.get(sellBins, b)
+        s1i := b
+
+[b1Lo, b1Hi] = f_loHi(vpLo, vpStep, b1i)
+[s1Lo, s1Hi] = f_loHi(vpLo, vpStep, s1i)
+float b1Mid = f_mid(vpLo, vpStep, b1i)
+float s1Mid = f_mid(vpLo, vpStep, s1i)
+float magnetPx = (b1Mid + s1Mid) / 2.0
+bool inB1 = f_inZ(b1Lo, b1Hi)
+bool inS1 = f_inZ(s1Lo, s1Hi)
+
+int curBin = f_pxBin(close, vpLo, vpStep)
+float heatBuy = maxB > 0 ? array.get(buyBins, curBin) / maxB * 100.0 : 0.0
+float heatSell = maxS > 0 ? array.get(sellBins, curBin) / maxS * 100.0 : 0.0
+string heatTxt = heatBuy >= 65 ? "🔥طلب" : heatSell >= 65 ? "🔥عرض" : heatBuy > heatSell ? "طلب" : "عرض"
+
+float entryL = b1Mid
+float stopL = b1Lo - atr * slAtr
+float tgt1 = s1Mid
+float tgt2 = s1Hi + pad
+float riskL = math.max(entryL - stopL, syminfo.mintick)
+float rrL = riskL > 0 ? (tgt1 - entryL) / riskL : na
+bool rrOk = not na(rrL) and rrL >= rrMin
+
+bool b1Bounce = sigOk and inB1 and close > open and rvol >= 1.0 and close > b1Mid
+bool s1Reject = sigOk and inS1 and close < open and rvol >= 1.0 and close < s1Mid
+
+int touchesB1 = 0
+int wins5 = 0
+int nScan = math.min(effLook, bar_index)
+for i = 5 to nScan - 1
+    if low[i] <= b1Hi and high[i] >= b1Lo
+        touchesB1 += 1
+        if close[i - 5] > close[i]
+            wins5 += 1
+float hit5 = touchesB1 > 0 ? wins5 / touchesB1 * 100.0 : na
+
+int gradeB1 = 1
+if totBuy > 0 and maxB / totBuy * 100.0 >= 70 and touchesB1 >= 2
+    gradeB1 := 2
+if totBuy > 0 and maxB / totBuy * 100.0 >= 85 and touchesB1 >= 3
+    gradeB1 := 3
+if netBuyPct >= 55 and accumulating
+    gradeB1 := math.min(3, gradeB1 + 1)
+
+bool liqOk = volMa >= minAvgVol
+bool proLong = sigOk and liqOk and b1Bounce and gradeB1 >= 2 and netBuyPct >= 52 and rrOk and (not blockHeavyDist or not distributing)
+bool proShort = showShortSig and isEgx30Short and sigOk and liqOk and s1Reject and netBuyPct <= 48 and distScore >= accScore + 10
+
+// ─── Draw zones (last bar) ───────────────────────────────────────────────────
+var array<box> boxes = array.new_box()
+var label heatLbl = na
+var label mmLbl = na
+int xL = bar_index - effLook
+int xR = bar_index + 15
+
+if barstate.islast and showHvn
+    for i = 0 to array.size(boxes) - 1
+        box.delete(array.get(boxes, i))
+    array.clear(boxes)
+    array<int> tb = f_pickTop(buyBins, showTopHvn)
+    array<int> ts = f_pickTop(sellBins, showTopHvn)
+    for i = 0 to array.size(tb) - 1
+        int idx = array.get(tb, i)
+        [zl, zh] = f_loHi(vpLo, vpStep, idx)
+        bool mega = i == 0
+        array.push(boxes, box.new(xL, zh, xR, zl, border_color=color.new(color.lime, mega ? 0 : 30), bgcolor=color.new(color.lime, 88), text=mega ? "B1" : "B" + str.tostring(i + 1), text_size=size.tiny))
+    for i = 0 to array.size(ts) - 1
+        int idx = array.get(ts, i)
+        [zl, zh] = f_loHi(vpLo, vpStep, idx)
+        bool mega = i == 0
+        array.push(boxes, box.new(xL, zh, xR, zl, border_color=color.new(color.red, mega ? 0 : 30), bgcolor=color.new(color.red, 88), text=mega ? "S1" : "S" + str.tostring(i + 1), text_size=size.tiny))
+
+if barstate.islast and showHeatLbl
+    label.delete(heatLbl)
+    heatLbl := label.new(bar_index, low, heatTxt + "\nB" + str.tostring(heatBuy, "#") + " S" + str.tostring(heatSell, "#"), style=label.style_label_up, color=color.new(color.black, 40), textcolor=color.white, size=size.tiny)
+
+if barstate.islast and showMmBanner and not uiCompact
+    label.delete(mmLbl)
+    mmLbl := label.new(bar_index - 1, high, mmTxt + " " + str.tostring(accScore, "#") + "/" + str.tostring(distScore, "#"), style=label.style_label_down, color=color.new(color.black, 50), textcolor=color.white, size=size.tiny)
+
+plot(showTrade ? entryL : na, "Entry B1", color=color.new(color.aqua, 0), linewidth=2, style=plot.style_linebr)
+plot(showTrade ? stopL : na, "Stop", color=color.new(color.red, 40), linewidth=1, style=plot.style_linebr)
+plot(showTrade ? tgt1 : na, "T1 S1", color=color.new(color.lime, 40), linewidth=1, style=plot.style_linebr)
+plot(showTrade ? tgt2 : na, "T2", color=color.new(color.lime, 60), linewidth=1, style=plot.style_linebr)
+plot(b1Mid, "B1 mid", color=color.new(color.teal, 50), linewidth=1)
+plot(s1Mid, "S1 mid", color=color.new(color.orange, 50), linewidth=1)
+plot(showMagnet ? magnetPx : na, "Magnet", color=color.new(color.gray, 30), linewidth=1, style=plot.style_cross)
+
+color vCol = isClimax ? (bullBar ? color.lime : color.red) : bullBar ? color.teal : color.maroon
+plot(showVolPane ? volume : na, "Vol", style=plot.style_columns, color=color.new(vCol, 40), display=display.pane)
+plot(showVolPane ? volMa : na, "Vol MA", color=color.new(color.yellow, 30), linewidth=2, display=display.pane)
+plot(showVolPane ? rvol : na, "RVOL", color=color.white, linewidth=1, display=display.pane, scale=scale.right)
+
+bgcolor(inB1 ? color.new(color.lime, 93) : inS1 ? color.new(color.red, 93) : na)
+plotshape(b1Bounce, title="B1↑", style=shape.triangleup, location=location.belowbar, color=color.lime, size=size.small, text="B1↑")
+plotshape(s1Reject, title="S1↓", style=shape.triangledown, location=location.abovebar, color=color.red, size=size.small, text="S1↓")
+plotshape(proLong, title="PRO", style=shape.circle, location=location.belowbar, color=color.aqua, size=size.tiny, text="P")
+plotshape(showShortSig and proShort, title="PRO-S", style=shape.circle, location=location.abovebar, color=color.orange, size=size.tiny, text="Ps")
+
+var table m = table.new(uiCompact ? position.bottom_right : position.top_left, 2, uiCompact ? 6 : 14, border_width=1)
+if showTbl and barstate.islast
+    table.clear(m, 0, 0, 1, uiCompact ? 5 : 13)
+    table.cell(m, 0, 0, "V-MASTER", bgcolor=color.black, text_color=color.yellow, text_size=size.small)
+    table.cell(m, 1, 0, proLong ? "PRO ✓" : proShort ? "PRO-S" : liqOk ? "—" : "thin", text_color=proLong ? color.lime : proShort ? color.orange : liqOk ? color.gray : color.maroon, text_size=size.small)
+    table.cell(m, 0, 1, "RVOL / Net", text_color=color.gray, text_size=size.tiny)
+    table.cell(m, 1, 1, str.tostring(rvol, "#.##") + " · " + str.tostring(netBuyPct, "#") + "%", text_size=size.tiny)
+    table.cell(m, 0, 2, "B1 / S1", text_color=color.gray, text_size=size.tiny)
+    table.cell(m, 1, 2, str.tostring(b1Mid, format.mintick) + " / " + str.tostring(s1Mid, format.mintick), text_size=size.tiny)
+    if not uiCompact
+        table.cell(m, 0, 3, "Grade / MM", text_color=color.gray, text_size=size.tiny)
+        table.cell(m, 1, 3, str.tostring(gradeB1) + " · " + mmTxt, text_size=size.tiny)
+        table.cell(m, 0, 4, "Heat B/S", text_color=color.gray, text_size=size.tiny)
+        table.cell(m, 1, 4, str.tostring(heatBuy, "#") + " / " + str.tostring(heatSell, "#"), text_size=size.tiny)
+        table.cell(m, 0, 5, "RS vol", text_color=color.gray, text_size=size.tiny)
+        table.cell(m, 1, 5, str.tostring(rsVol, "#.##"), text_size=size.tiny)
+        table.cell(m, 0, 6, "Entry", text_color=color.gray, text_size=size.tiny)
+        table.cell(m, 1, 6, str.tostring(entryL, format.mintick), text_size=size.tiny)
+        table.cell(m, 0, 7, "Stop", text_color=color.gray, text_size=size.tiny)
+        table.cell(m, 1, 7, str.tostring(stopL, format.mintick), text_size=size.tiny)
+        table.cell(m, 0, 8, "T1 / T2", text_color=color.gray, text_size=size.tiny)
+        table.cell(m, 1, 8, str.tostring(tgt1, format.mintick) + " / " + str.tostring(tgt2, format.mintick), text_size=size.tiny)
+        table.cell(m, 0, 9, "R/R", text_color=color.gray, text_size=size.tiny)
+        table.cell(m, 1, 9, str.tostring(rrL, "#.##") + (rrOk ? " ✓" : ""), text_color=rrOk ? color.lime : color.orange, text_size=size.tiny)
+        table.cell(m, 0, 10, "B1 hit +5b", text_color=color.gray, text_size=size.tiny)
+        table.cell(m, 1, 10, str.tostring(hit5, "#") + "% n=" + str.tostring(touchesB1), text_size=size.tiny)
+        table.cell(m, 0, 11, "CMF / Acc", text_color=color.gray, text_size=size.tiny)
+        table.cell(m, 1, 11, str.tostring(cmf, "#.##") + " · " + str.tostring(accScore, "#"), text_size=size.tiny)
+
+plot(showScreener ? (proLong ? 1 : 0) : na, "EGVM_Pro", display=display.data_window)
+plot(showScreener ? (inB1 ? 1 : 0) : na, "EGVM_B1", display=display.data_window)
+plot(showScreener ? netBuyPct : na, "EGVM_NetBuy", display=display.data_window)
+plot(showScreener ? float(gradeB1) : na, "EGVM_GradeB1", display=display.data_window)
+plot(showScreener ? accScore : na, "EGVM_AccScore", display=display.data_window)
+plot(showScreener ? distScore : na, "EGVM_DistScore", display=display.data_window)
+plot(showScreener ? (b1Bounce ? 1 : 0) : na, "EGVM_B1Bounce", display=display.data_window)
+plot(showScreener ? (proShort ? 1 : 0) : na, "EGVM_ProShort", display=display.data_window)
+plot(showScreener ? (liqOk ? 1 : 0) : na, "EGVM_LiqOk", display=display.data_window)
+plot(showScreener ? rrL : na, "EGVM_RR", display=display.data_window)
+
+alertcondition(proLong, title="EGVM Pro long", message="EGX V-MASTER: PRO B1 setup")
+alertcondition(proShort, title="EGVM Pro short", message="EGX V-MASTER: PRO S1 setup")
+alertcondition(b1Bounce, title="EGVM B1 bounce", message="EGX V-MASTER: B1 bounce")
+alertcondition(s1Reject, title="EGVM S1 reject", message="EGX V-MASTER: S1 reject")

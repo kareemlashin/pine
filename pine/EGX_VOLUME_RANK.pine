@@ -1,0 +1,51 @@
+//@version=6
+indicator("EGX Volume Rank — composite /100", shorttitle="EGX VRank", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// رتبة مركبة واحدة للمسح · docs/EGX_VOLUME.md · Filter: EGVRank_Pass
+
+string G = "EGX"
+int pctLen = input.int(500, "Rank vol %", minval=50, group=G)
+float minPass = input.float(62.0, "حد Pass", minval=40, maxval=90, group=G)
+string bench = input.symbol("EGX:EGX30", "EGX30", group=G)
+
+float volMa = ta.sma(volume, 20)
+float rvol = volume / math.max(volMa, 1.0)
+float pct = ta.percentrank(volume, pctLen)
+float z = (volume - volMa) / math.max(ta.stdev(volume, 20), 1.0)
+
+float mfm = ((close - low) - (high - close)) / math.max(high - low, syminfo.mintick)
+float cmf = ta.sma(mfm * volume, 20) / ta.sma(volume, 20)
+float obvSl = ta.linreg(ta.obv, 10, 0) - ta.linreg(ta.obv, 10, 1)
+
+float bRvol = request.security(bench, timeframe.period, volume / math.max(ta.sma(volume, 20), 1.0), barmerge.gaps_off, barmerge.lookahead_off)
+float rsV = bRvol > 0 ? rvol / bRvol : 1.0
+
+float rng = math.max(high - low, syminfo.mintick)
+float buyPct = (close - low) / rng * 100.0
+
+float score = 0.0
+score += math.min(pct, 100.0) * 0.22
+score += math.min(rvol, 3.0) / 3.0 * 100.0 * 0.18
+score += math.min(math.max(z, 0), 4.0) / 4.0 * 100.0 * 0.12
+score += math.min(rsV, 2.0) / 2.0 * 100.0 * 0.15
+score += buyPct * 0.12
+score += cmf > 0 ? 10.0 : cmf < 0 ? -5.0 : 0.0
+score += obvSl > 0 ? 8.0 : -4.0
+score += volMa >= 1000 ? 5.0 : -10.0
+score := math.max(0.0, math.min(100.0, score))
+
+bool pass = score >= minPass and volMa >= 500
+
+var table t = table.new(position.middle_center, 2, 5, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 4)
+    table.cell(t, 0, 0, syminfo.ticker, text_color=color.white, text_size=size.normal)
+    table.cell(t, 1, 0, str.tostring(score, "#"), text_color=pass ? color.lime : color.gray, text_size=size.large)
+    table.cell(t, 0, 1, "RVOL/RS", text_color=color.gray, text_size=size.small)
+    table.cell(t, 1, 1, str.tostring(rvol, "#.##") + " / " + str.tostring(rsV, "#.##"), text_size=size.small)
+    table.cell(t, 0, 2, "Buy%", text_color=color.gray, text_size=size.small)
+    table.cell(t, 1, 2, str.tostring(buyPct, "#"), text_size=size.small)
+
+plot(score, "EGVRank_Score", display=display.all)
+plot(pass ? 1 : 0, "EGVRank_Pass", display=display.all)
+plot(rsV, "EGVRank_RSVol", display=display.all)

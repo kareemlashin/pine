@@ -1,0 +1,271 @@
+//@version=6
+indicator("EGX Alert Hub — تنبيهات موحّدة", shorttitle="EGX Alerts", overlay=false, calc_bars_count=5000)
+
+// hub واحد: Buy · Exit · Warn · Regime · Opp · Tools · Triple · Invest · Votes
+// Filter: EGXAlHub_Any=1 · EGXAlHub_Mega=1 · EGXAlHub_ToolsPro=1 · EGXAlHub_Veto=0 · EGX_RegimeOk=1
+// optional: import user/EGX_T_Core/1 as TC · docs/EGX_SCREENER_MATRIX.md
+
+string profile = input.string("EGX قياسي", "ملف", options=["EGX قياسي", "مضاربة 15د", "استثمار يومي"])
+bool onClose = input.bool(true, "إغلاق الشمعة")
+float minVol = input.float(1500.0, "حد حجم", minval=0)
+string mkt = input.symbol("EGX:EGX30", "EGX30")
+string mkt100 = input.symbol("EGX:EGX100EWI", "EGX100")
+string egxBoard = input.string("نشط (EGX100)", "لوحة", options=["نشط (EGX100)", "EGX30 (بيع مكشوف)", "SME تميّز", "SME نايل", "غير نشط"])
+bool useMktHalt100 = input.bool(true, "منع إذا EGX100 ≤ −10%", group="Regime")
+bool blockBear = input.bool(true, "منع ضغط EGX30", group="Regime")
+
+string Gopp = "أفضل فرص (D)"
+bool laneOpp = input.bool(true, "مسار Opp يومي", group=Gopp)
+string oppLane = input.string("Pro", "إشارة Opp", options=["Pro", "Buy"], group=Gopp)
+float oppMinVol = input.float(1500.0, "حد حجم Opp", minval=0, group=Gopp)
+
+string Gq = "قرar lite"
+bool laneQ = input.bool(true, "مسار Q-lite", group=Gq)
+float minQAcc = input.float(55.0, "حد تجم", group=Gq)
+
+bool sigOk = not onClose or barstate.isconfirmed
+float effVol = profile == "مضاربة 15د" ? 3000.0 : profile == "استثمار يومي" ? 800.0 : minVol
+
+float volMa = ta.sma(volume, 20)
+bool liqOk = volMa >= effVol
+float rvol = volume / math.max(volMa, 1.0)
+
+var float sl = na
+if not na(ta.pivotlow(low, 8, 8))
+    sl := ta.pivotlow(low, 8, 8)
+bool supBr = sigOk and not na(sl) and close < sl and close[1] >= sl
+
+float dPrev = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+float dPrev2 = request.security(syminfo.tickerid, "D", close[2], barmerge.gaps_off, barmerge.lookahead_off)
+float dayPctH = dPrev > 0 ? (close - dPrev) / dPrev * 100.0 : 0.0
+float dayPctH1 = dPrev2 > 0 ? (dPrev - dPrev2) / dPrev2 * 100.0 : 0.0
+float haltPctH = egxBoard == "SME تميّز" or egxBoard == "SME نايل" or egxBoard == "غير نشط" ? 5.0 : 10.0
+float luldPctH = egxBoard == "غير نشط" ? 5.0 : (egxBoard == "SME تميّز" or egxBoard == "SME نايل" ? 10.0 : 20.0)
+float haltThr = math.min(9.0, haltPctH - 1.0)
+bool nearLimitBase = dayPctH >= haltThr or dayPctH >= luldPctH - 0.25 or (dayPctH1 >= haltThr and dayPctH > 0)
+bool gapTrap = dPrev > 0 and open > dPrev * (1.0 + haltPctH / 100.0 * 0.92)
+bool nearLimit = nearLimitBase or gapTrap
+
+float hi = ta.highest(high, 252)
+bool chase = hi > 0 and (close - hi) / hi * 100.0 > -3 and ta.rsi(close, 14) > 72
+
+float cmf = ta.sma(((close - low) - (high - close)) / math.max(high - low, syminfo.mintick) * volume, 20) / ta.sma(volume, 20)
+float obvSl = ta.linreg(ta.obv, 10, 0) - ta.linreg(ta.obv, 10, 1)
+bool acc = cmf > 0 and obvSl > 0
+float accSc = math.min(100.0, (acc ? 40.0 : 0.0) + (cmf > 0 ? 15.0 : 0.0))
+float distSc = math.min(100.0, (cmf < 0 and obvSl < 0 ? 40.0 : 0.0))
+float atr = ta.atr(14)
+bool atZ = low <= nz(sl, low) + atr * 0.35 and close >= nz(sl, low) - atr * 0.42
+bool ret = sigOk and not na(sl) and low <= sl * 1.006 and close > sl
+
+f_tr() =>
+    int sc = 0
+    float e20 = ta.ema(close, 20)
+    float e50 = ta.ema(close, 50)
+    sc += close > e20 ? 1 : -1
+    sc += e20 > e50 ? 1 : -1
+    sc
+float mom30 = request.security(mkt, timeframe.period, close[20] > 0 ? (close / close[20] - 1) * 100 : 0.0, barmerge.gaps_off, barmerge.lookahead_off)
+int tr30 = request.security(mkt, timeframe.period, f_tr(), barmerge.gaps_off, barmerge.lookahead_off)
+bool bearMkt = blockBear and mom30 < -4 and tr30 <= -1
+float dayPct100 = useMktHalt100 ? request.security(mkt100, "D", close[1] > 0 ? (close - close[1]) / close[1] * 100.0 : 0.0, barmerge.gaps_off, barmerge.lookahead_off) : 0.0
+bool mktHalt100 = useMktHalt100 and dayPct100 <= -10.0
+bool regimeOk = not bearMkt and not mktHalt100
+
+bool volSpike = rvol >= 2.0 and close > open
+float rng = math.max(high - low, syminfo.mintick)
+float netPct = (close - low) / rng * 100.0
+bool volPro = rvol >= 1.0 and netPct >= 52 and close >= open
+
+float ema50t = ta.ema(close, 50)
+[macdLt, macdSt, macdHt] = ta.macd(close, 12, 26, 9)
+bool bosUpT = close > ta.highest(high, 20)[1]
+float lh = ta.highest(high, 80)
+float ll = ta.lowest(low, 80)
+bool inDemT = close <= lh - 0.618 * (lh - ll) and close >= ll
+int tSc = 0
+tSc += ta.rsi(close, 14) > 50 and ta.rsi(close, 14) < 70 ? 1 : -1
+tSc += macdHt > 0 ? 1 : -1
+tSc += close > ema50t ? 1 : -1
+tSc += cmf > 0 and obvSl > 0 ? 1 : -1
+tSc += bosUpT or inDemT ? 1 : 0
+float toolScore = tSc / 5.0 * 100.0
+bool toolsHub = sigOk and liqOk and regimeOk and not nearLimit and not chase and toolScore >= 40 and (inDemT or bosUpT) and cmf > 0
+
+float sigMinT = 20.0
+f_toolsProD() =>
+    float ema20 = ta.ema(close, 20)
+    float ema50 = ta.ema(close, 50)
+    float ema200 = ta.ema(close, 200)
+    float rsi = ta.rsi(close, 14)
+    [mL, mS, mH] = ta.macd(close, 12, 26, 9)
+    float vma = ta.sma(volume, 20)
+    bool liqT = vma >= oppMinVol
+    float rv = volume / math.max(vma, 1.0)
+    float cm = ta.sma(((close - low) - (high - close)) / math.max(high - low, syminfo.mintick) * volume, 20) / ta.sma(volume, 20)
+    float ob = ta.linreg(ta.obv, 10, 0) - ta.linreg(ta.obv, 10, 1)
+    [diP, diM, adx] = ta.dmi(14, 14)
+    [_, stDir] = ta.supertrend(3.0, 10)
+    float lHi = ta.highest(high, 80)
+    float lLo = ta.lowest(low, 80)
+    bool inDem = close <= lHi - 0.618 * (lHi - lLo) and close >= lLo
+    bool bosUp = close > ta.highest(high, 20)[1]
+    float hiT = ta.highest(high, 252)
+    bool chT = hiT > 0 and (close - hiT) / hiT * 100.0 > -3 and rsi > 72
+    float dp = close[1] > 0 ? (close - close[1]) / close[1] * 100.0 : 0.0
+    float hP = egxBoard == "SME تميّز" or egxBoard == "SME نايل" or egxBoard == "غير نشط" ? 5.0 : 10.0
+    float lP = egxBoard == "غير نشط" ? 5.0 : (egxBoard == "SME تميّز" or egxBoard == "SME نايل" ? 10.0 : 20.0)
+    bool lim = dp >= math.min(9.0, hP - 1.0) or dp >= lP - 0.25
+    int v01 = rsi > 52 and rsi < 68 ? 1 : rsi >= 68 ? 0 : -1
+    int v02 = mH > 0 and mL > mS ? 1 : mH < 0 ? -1 : 0
+    int v03 = ta.stoch(close, high, low, 14) > 50 ? 1 : -1
+    int v04 = ta.roc(close, 10) > 0 ? 1 : -1
+    int v05 = ta.mfi(hlc3, 14) > 50 ? 1 : -1
+    int v06 = adx > 22 and diP > diM ? 1 : adx > 22 and diM > diP ? -1 : 0
+    int v07 = close > ema20 and ema20 > ema50 and ema50 > ema200 ? 1 : close < ema20 and ema20 < ema50 ? -1 : 0
+    int v08 = stDir < 0 ? 1 : -1
+    int v10 = cm > 0.05 ? 1 : cm < -0.05 ? -1 : 0
+    int v11 = ob > 0 ? 1 : ob < 0 ? -1 : 0
+    int v12 = ta.accdist > ta.ema(ta.accdist, 20) ? 1 : -1
+    int v15 = bosUp ? 1 : close < ta.lowest(low, 20)[1] ? -1 : 0
+    int v16 = inDem ? 1 : close > lHi * 0.98 ? -1 : 0
+    float score = (v01 + v02 + v03 + v04 + v05 + v06 + v07 + v08 + v10 + v11 + v12 + v15 + v16) / 13.0 * 100.0
+    int nG = (v01 == 1 ? 1 : 0) + (v02 == 1 ? 1 : 0) + (v03 == 1 ? 1 : 0) + (v04 == 1 ? 1 : 0) + (v05 == 1 ? 1 : 0) + (v06 == 1 ? 1 : 0) + (v07 == 1 ? 1 : 0) + (v08 == 1 ? 1 : 0) + (v10 == 1 ? 1 : 0) + (v11 == 1 ? 1 : 0) + (v12 == 1 ? 1 : 0) + (v15 == 1 ? 1 : 0) + (v16 == 1 ? 1 : 0)
+    bool locOK = inDem or bosUp or v16 == 1
+    bool moneyOK = v10 == 1 and v11 != -1 and v12 == 1
+    bool upTrend = v07 == 1 or v08 == 1
+    bool momOK = score >= sigMinT * 0.5
+    bool trigOK = close > open and (v03 == 1 or v04 == 1)
+    bool volOK = rv >= 0.9
+    int hits = (upTrend ? 1 : 0) + (locOK ? 1 : 0) + (momOK ? 1 : 0) + (moneyOK ? 1 : 0) + (trigOK ? 1 : 0) + (volOK ? 1 : 0)
+    float wC = request.security(syminfo.tickerid, "W", close, barmerge.gaps_off, barmerge.lookahead_off)
+    float wE = request.security(syminfo.tickerid, "W", ta.ema(close, 50), barmerge.gaps_off, barmerge.lookahead_off)
+    bool htf = wC > wE
+    float rank = math.max(0.0, math.min(100.0, score * 0.55 + hits / 6.0 * 100.0 * 0.30 + nG / 13.0 * 100.0 * 0.15))
+    bool egxT = liqT and not chT and not lim
+    bool buyA = egxT and locOK and moneyOK and hits >= 5 and score >= sigMinT
+    bool pro = buyA and rank >= 55 and hits >= 5 and nG >= 10 and htf
+    pro ? 1.0 : 0.0
+
+[toolsProD] = request.security(syminfo.tickerid, "D", f_toolsProD(), barmerge.gaps_off, barmerge.lookahead_off)
+bool toolsProHub = sigOk and toolsProD > 0 and regimeOk and not nearLimit and not chase
+
+int vetoMask = (chase ? 1 : 0) + (nearLimit ? 2 : 0) + (bearMkt ? 4 : 0) + (mktHalt100 ? 8 : 0)
+bool vetoHub = vetoMask > 0
+
+bool qBuy = laneQ and sigOk and liqOk and accSc >= minQAcc and distSc < 50 and (atZ or ret) and not supBr and not nearLimit and not chase
+
+bool buyHub = sigOk and liqOk and acc and (atZ or ret) and not supBr and not nearLimit and not chase and regimeOk
+bool exitHub = supBr or (cmf < 0 and obvSl < 0 and rvol >= 1.5 and close < open)
+bool warnHub = chase or nearLimit or bearMkt or mktHalt100
+
+f_oppD() =>
+    float e9 = ta.ema(close, 9)
+    float e21 = ta.ema(close, 21)
+    float e50 = ta.ema(close, 50)
+    bool bSt = e9 > e21 and e21 > e50
+    float wC = request.security(syminfo.tickerid, "W", close, barmerge.gaps_off, barmerge.lookahead_off)
+    float wE = request.security(syminfo.tickerid, "W", ta.ema(close, 50), barmerge.gaps_off, barmerge.lookahead_off)
+    bool htf = wC > wE
+    [_, _, mh] = ta.macd(close, 12, 26, 9)
+    bool macdB = mh > 0
+    float vma = ta.sma(volume, 20)
+    bool liq = vma >= oppMinVol
+    float rv = volume / math.max(vma, 1.0)
+    float cm = ta.sma(((close - low) - (high - close)) / math.max(high - low, syminfo.mintick) * volume, 14) / ta.sma(volume, 14)
+    float ob = ta.linreg(ta.obv, 10, 0) - ta.linreg(ta.obv, 10, 1)
+    bool ac = cm > 0 and ob > 0
+    float acS = math.min(100.0, (ac ? 40.0 : 0.0) + (cm > 0 ? 15.0 : 0.0))
+    float ds = math.min(100.0, (cm < 0 and ob < 0 ? 40.0 : 0.0))
+    float at = ta.atr(14)
+    float piv = ta.pivotlow(low, 8, 8)
+    var float slO = na
+    if not na(piv)
+        slO := piv
+    bool sBr = not na(slO) and close < slO and close[1] >= slO
+    float zw = at * 0.35
+    bool atZo = low <= nz(slO, low) + zw and close >= nz(slO, low) - zw * 1.2
+    bool reto = not na(slO) and low <= slO * 1.006 and close > slO
+    float hiO = ta.highest(high, 252)
+    bool ch = hiO > 0 and (close - hiO) / hiO * 100.0 > -3 and ta.rsi(close, 14) > 72
+    float dp = close[1] > 0 ? (close - close[1]) / close[1] * 100.0 : 0.0
+    float hP = egxBoard == "SME تميّز" or egxBoard == "SME نايل" or egxBoard == "غير نشط" ? 5.0 : 10.0
+    float lP = egxBoard == "غير نشط" ? 5.0 : (egxBoard == "SME تميّز" or egxBoard == "SME نايل" ? 10.0 : 20.0)
+    bool lim = dp >= math.min(9.0, hP - 1.0) or dp >= lP - 0.25
+    int st = (bSt ? 1 : 0) + (htf ? 1 : 0) + (macdB ? 1 : 0) + (ac ? 1 : 0) + (atZo ? 1 : 0) + (rv >= 1.0 ? 1 : 0) + (reto ? 1 : 0) + (acS >= 50 ? 1 : 0) + (not ch ? 1 : 0) + (not lim ? 1 : 0)
+    float sc = (bSt ? 20.0 : 0.0) + (htf ? 15.0 : -10.0) + (ac ? 15.0 : 0.0) + (rv >= 1.0 ? 10.0 : 0.0)
+    sc := math.max(0.0, math.min(100.0, sc))
+    float opp = math.max(0.0, math.min(100.0, sc * 0.45 + st / 11.0 * 100.0 * 0.35))
+    bool bu = liq and acS >= 50 and ds < 55 and (atZo or reto) and not sBr and not ch and not lim and st >= 7
+    float rk = math.max(0.0, math.min(100.0, sc * 0.55 + st / 11.0 * 30.0))
+    bool pa = bu and rk >= 65.0 and opp >= 58.0
+    bool pr = pa and opp >= 68 and st >= 7 and acS >= 50 and ds < 50
+    [bu ? 1.0 : 0.0, pr ? 1.0 : 0.0, opp, pa ? 1.0 : 0.0, rk]
+
+[oppBu, oppPr, oppSc, oppPa, oppRk] = request.security(syminfo.tickerid, "D", f_oppD(), barmerge.gaps_off, barmerge.lookahead_off)
+bool oppBuyHub = laneOpp and sigOk and oppBu > 0 and regimeOk
+bool oppProHub = laneOpp and sigOk and oppPr > 0 and regimeOk
+bool oppPassHub = laneOpp and sigOk and oppPa > 0 and regimeOk
+bool oppSigHub = oppLane == "Pro" ? oppProHub : oppBuyHub
+bool oppSpikeProHub = laneOpp and sigOk and oppProHub and volSpike and regimeOk
+
+bool investHub = buyHub and oppProHub and toolsProHub and accSc >= 58 and distSc < 45
+bool megaHub = oppProHub and toolsProHub and volPro and regimeOk and not vetoHub
+bool tripleHub = oppProHub and toolsHub and volPro and qBuy and regimeOk
+int hubVotes = (oppProHub ? 1 : 0) + (qBuy ? 1 : 0) + (toolsProHub ? 1 : 0) + (volPro ? 1 : 0)
+
+bool anyHub = buyHub or exitHub or volSpike or toolsHub or toolsProHub or megaHub or oppSigHub
+
+var table t = table.new(position.middle_center, 2, 6, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 5)
+    table.cell(t, 0, 0, syminfo.ticker, text_color=color.white, text_size=size.normal)
+    table.cell(t, 1, 0, megaHub ? "MEGA" : tripleHub ? "TRIPLE" : buyHub ? "BUY" : exitHub ? "EXIT" : warnHub ? "WARN" : "—", text_color=megaHub or tripleHub ? color.lime : buyHub ? color.green : exitHub ? color.red : color.orange, text_size=size.normal)
+    table.cell(t, 0, 1, "RVOL / Opp", text_color=color.gray, text_size=size.small)
+    table.cell(t, 1, 1, str.tostring(rvol, "#.##") + " · " + str.tostring(oppSc, "#"), text_size=size.small)
+    table.cell(t, 0, 2, "Votes / Regime", text_color=color.gray, text_size=size.small)
+    table.cell(t, 1, 2, str.tostring(hubVotes) + "/4 · " + (regimeOk ? "OK" : "NO"), text_size=size.small)
+    table.cell(t, 0, 3, "Flags", text_color=color.gray, text_size=size.small)
+    table.cell(t, 1, 3, (volSpike ? "Spike " : "") + (mktHalt100 ? "H100 " : "") + (toolsHub ? "Tools " : "") + (oppProHub ? "OppPro " : ""), text_size=size.small)
+
+plot(toolsHub ? 1 : 0, "EGXAlHub_Tools", display=display.all)
+plot(toolsProHub ? 1 : 0, "EGXAlHub_ToolsPro", display=display.all)
+plot(megaHub ? 1 : 0, "EGXAlHub_Mega", display=display.all)
+plot(vetoMask, "EGXAlHub_Veto", display=display.all)
+plot(buyHub ? 1 : 0, "EGXAlHub_Buy", display=display.all)
+plot(exitHub ? 1 : 0, "EGXAlHub_Exit", display=display.all)
+plot(chase ? 1 : 0, "EGXAlHub_Chase", display=display.all)
+plot(nearLimit ? 1 : 0, "EGXAlHub_Limit", display=display.all)
+plot(volSpike ? 1 : 0, "EGXAlHub_VolSpike", display=display.all)
+plot(warnHub ? 1 : 0, "EGXAlHub_Warn", display=display.all)
+plot(regimeOk ? 1 : 0, "EGX_RegimeOk", display=display.all)
+plot(mktHalt100 ? 1 : 0, "EGXAlHub_MktHalt100", display=display.all)
+plot(qBuy ? 1 : 0, "EGXAlHub_QBuy", display=display.all)
+plot(volPro ? 1 : 0, "EGXAlHub_VolPro", display=display.all)
+plot(investHub ? 1 : 0, "EGXAlHub_Invest", display=display.all)
+plot(tripleHub ? 1 : 0, "EGXAlHub_Triple", display=display.all)
+plot(hubVotes, "EGXAlHub_Votes", display=display.all)
+plot(anyHub ? 1 : 0, "EGXAlHub_Any", display=display.all)
+plot(oppBuyHub ? 1 : 0, "EGXAlHub_OppBuy", display=display.all)
+plot(oppProHub ? 1 : 0, "EGXAlHub_OppPro", display=display.all)
+plot(oppSc, "EGXAlHub_OppScore", display=display.data_window)
+plot(oppRk, "EGXAlHub_OppRank", display=display.data_window)
+plot(oppPassHub ? 1 : 0, "EGXAlHub_OppPass", display=display.all)
+plot(oppSpikeProHub ? 1 : 0, "EGXAlHub_OppSpikePro", display=display.all)
+plot(1, "EGXAlHub", display=display.all)
+
+alertcondition(buyHub, "EGX Hub — شراء", "{{ticker}} EGXAlHub Buy")
+alertcondition(exitHub, "EGX Hub — خروج", "{{ticker}} EGXAlHub Exit")
+alertcondition(warnHub, "EGX Hub — تحذير", "{{ticker}} EGXAlHub Warn")
+alertcondition(toolsHub, "EGX Hub — Tools", "{{ticker}} EGXAlHub Tools")
+alertcondition(anyHub, "EGX Hub — أي", "{{ticker}} EGXAlHub Any")
+alertcondition(oppProHub, "EGX Hub — Opp Pro", "{{ticker}} EGXAlHub OppPro")
+alertcondition(oppBuyHub, "EGX Hub — Opp Buy", "{{ticker}} EGXAlHub OppBuy")
+alertcondition(oppPassHub, "EGX Hub — Opp Pass", "{{ticker}} EGXAlHub OppPass")
+alertcondition(oppSpikeProHub, "EGX Hub — Opp Pro+Spike", "{{ticker}} EGXAlHub OppSpikePro")
+alertcondition(toolsProHub, "EGX Hub — Tools Pro", "{{ticker}} EGXAlHub ToolsPro")
+alertcondition(megaHub, "EGX Hub — Mega", "{{ticker}} EGXAlHub Mega")
+alertcondition(vetoHub, "EGX Hub — Veto active", "{{ticker}} EGXAlHub Veto")
+alertcondition(tripleHub, "EGX Hub — Triple", "{{ticker}} EGXAlHub Triple")
+alertcondition(investHub, "EGX Hub — Invest", "{{ticker}} EGXAlHub Invest")
+alertcondition(mktHalt100, "EGX Hub — EGX100 halt", "{{ticker}} EGXAlHub MktHalt100")

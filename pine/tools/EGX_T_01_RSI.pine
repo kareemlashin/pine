@@ -1,0 +1,26 @@
+//@version=6
+indicator("EGX Tool 01 RSI — RSI", shorttitle="EGX T-RSI", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة أ الزخم · #01/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+int len = input.int(14, "RSI")
+float v = ta.rsi(close, len)
+int vote = v >= 55 and v <= 70 ? 1 : v <= 45 and v >= 30 ? -1 : v < 30 ? 1 : v > 70 ? -1 : 0
+plot(v, "EGXT_RSI_Val", color=color.teal, linewidth=2)
+hline(70, "70", color=color.red)
+hline(30, "30", color=color.lime)
+hline(50, "50", color=color.gray)
+
+plot(vote, "EGXT_RSI_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_RSI_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_RSI_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "RSI", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-RSI صاعد", "EGX Tool RSI: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-RSI هابط", "EGX Tool RSI: vote هابط")

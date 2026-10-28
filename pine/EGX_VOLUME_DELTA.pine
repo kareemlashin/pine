@@ -1,0 +1,57 @@
+//@version=6
+indicator("EGX Volume Delta — buy−sell proxy", shorttitle="EGX VΔ", overlay=false, max_tables_count=3, calc_bars_count=5000)
+
+// دلتا تقريبية من OHLCV · تراكم · RSI دلتا · docs/EGX_VOLUME.md
+
+string G = "إعداد"
+int maLen = input.int(20, "MA حجم", minval=5, group=G)
+int deltaMa = input.int(14, "MA دلتا", minval=3, group=G)
+int rsiLen = input.int(14, "RSI دلتا", minval=5, group=G)
+bool showVol = input.bool(true, "أعمدة حجم خلفية", group=G)
+bool showDiv = input.bool(true, "تباعد سعر/دلتا", group=G)
+
+float rng = math.max(high - low, syminfo.mintick)
+float buyV = volume * (close - low) / rng
+float sellV = volume - buyV
+float delta = buyV - sellV
+float deltaPct = volume > 0 ? delta / volume * 100.0 : 0.0
+
+var float cumDelta = 0.0
+cumDelta += delta
+float cumMa = ta.sma(cumDelta, deltaMa)
+float deltaMaLine = ta.sma(delta, deltaMa)
+
+float volMa = ta.sma(volume, maLen)
+float rvol = volume / math.max(volMa, 1.0)
+
+float deltaRsi = ta.rsi(delta, rsiLen)
+bool bullDiv = showDiv and low < low[5] and cumDelta > cumDelta[5] and close > open
+bool bearDiv = showDiv and high > high[5] and cumDelta < cumDelta[5] and close < open
+
+color dCol = delta >= 0 ? color.new(color.teal, 35) : color.new(color.red, 35)
+plot(showVol ? volume : na, "Volume", style=plot.style_columns, color=color.new(color.gray, 75))
+plot(delta, "Bar delta", style=plot.style_columns, color=dCol)
+plot(deltaMaLine, "Delta MA", color=color.yellow, linewidth=2)
+plot(cumDelta, "Cum delta", color=cumDelta >= cumMa ? color.lime : color.red, linewidth=2)
+plot(cumMa, "Cum MA", color=color.new(color.white, 50), linewidth=1)
+
+hline(0, "Zero", color=color.gray)
+
+plotshape(bullDiv, "Bull div", shape.triangleup, location=location.bottom, color=color.lime, size=size.tiny)
+plotshape(bearDiv, "Bear div", shape.triangledown, location=location.top, color=color.red, size=size.tiny)
+
+var table t = table.new(position.top_right, 2, 5, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 4)
+    table.cell(t, 0, 0, "Delta", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, delta >= 0 ? "Buy+" : "Sell+", text_color=delta >= 0 ? color.lime : color.red, text_size=size.small)
+    table.cell(t, 0, 1, "Bar Δ%", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 1, str.tostring(deltaPct, "#"), text_size=size.tiny)
+    table.cell(t, 0, 2, "Cum Δ", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 2, str.tostring(cumDelta, "#"), text_size=size.tiny)
+    table.cell(t, 0, 3, "RSI Δ", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 3, str.tostring(deltaRsi, "#"), text_size=size.tiny)
+
+plot(deltaPct, "EGVD_DeltaPct", display=display.data_window)
+plot(cumDelta, "EGVD_CumDelta", display=display.data_window)
+plot(bullDiv ? 1 : 0, "EGVD_BullDiv", display=display.data_window)

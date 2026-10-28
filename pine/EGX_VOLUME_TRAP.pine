@@ -1,0 +1,27 @@
+//@version=6
+indicator("EGX Volume Trap — bull/bear", shorttitle="EGX VTrp", overlay=true, max_tables_count=2, calc_bars_count=5000)
+
+// فخ: كسر وهمي + حجم + إغلاق عكس · docs/EGX_VOLUME.md
+
+string G = "Trap"
+int boxLen = input.int(15, "Range", group=G)
+float minRvol = input.float(1.25, "RVOL", group=G)
+
+float hi = ta.highest(high, boxLen)[1]
+float lo = ta.lowest(low, boxLen)[1]
+float rvol = volume / math.max(ta.sma(volume, 20), 1.0)
+
+bool bullTrap = high > hi and close < hi and close < open and rvol >= minRvol
+bool bearTrap = low < lo and close > lo and close > open and rvol >= minRvol
+
+plotshape(bullTrap, "Bull trap", shape.xcross, location.abovebar, color=color.red, size=size.small, text="BT")
+plotshape(bearTrap, "Bear trap", shape.xcross, location.belowbar, color=color.lime, size=size.small, text="BR")
+
+var table t = table.new(position.bottom_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "Trap", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, bullTrap ? "BullT" : bearTrap ? "BearT" : "—", text_size=size.tiny)
+
+plot(bullTrap ? 1 : 0, "EGVTrp_BullTrap", display=display.all)
+plot(bearTrap ? 1 : 0, "EGVTrp_BearTrap", display=display.all)

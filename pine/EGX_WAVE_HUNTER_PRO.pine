@@ -1,0 +1,1132 @@
+//@version=6
+indicator("صياد موجات EGX PRO — اتجاه مبكر وحجم", shorttitle="صياد EGX", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=100, max_tables_count=14, calc_bars_count=5000)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ⚠ LEGACY — استخدم EGX_الاخير · docs/legacy/README.md
+// EGX WAVE HUNTER PRO — Pine Script v6
+// نظام انتقائي: مراحل دورة | موجة كبيرة محتملة | حجم | Elliott | زمن | MTF | /100
+//
+// إعداد موصى به على الشارت: إطار يومي (D) لاكتشاف القاعد/الاختراق؛ 60د بعد تأكيد يومي.
+// إعداد EGX في المدخلات (مجموعة 10). رموز اختبار: EGX:COMI, SWDY, TMGH, EAST, FWRY
+// ═══════════════════════════════════════════════════════════════════════════════
+
+string GRP_CORE   = "01 — عام"
+string GRP_MTF    = "02 — الأطر الزمنية"
+string GRP_STRUCT = "03 — البنية والمراحل"
+string GRP_VOL    = "04 — الحجم"
+string GRP_WAVE   = "05 — موجات إليوت"
+string GRP_MODE   = "13 — مضاربة / استثمار"
+string GRP_TIME   = "06 — التحليل الزمني"
+string GRP_ZONE   = "07 — مناطق وأهداف"
+string GRP_RANK   = "08 — ترتيب الفرصة /100"
+string GRP_VIS    = "09 — العرض"
+string GRP_EGX    = "10 — EGX / بيانات"
+string GRP_ALT    = "11 — تنبيهات"
+string GRP_ACT    = "12 — قرار سريع"
+
+bool   i_confirmOnly   = input.bool(true, "إشارات مؤكدة عند إغلاق الشمعة", group=GRP_CORE)
+bool   i_showDash      = input.bool(true, "لوحة صياد الموجات", group=GRP_CORE)
+
+// واجهة عربية بالكامل — المعامل الثاني في f_txt للتوافق الداخلي فقط
+f_txt(string ar, string en) =>
+    ar
+
+bool   i_useMTF15 = input.bool(false, "15 دقيقة (مضاربة)", group=GRP_MTF)
+bool   i_useMTF60 = input.bool(true, "60 دقيقة", group=GRP_MTF)
+bool   i_useMTFD  = input.bool(true, "يومي", group=GRP_MTF)
+bool   i_useMTFW  = input.bool(true, "أسبوعي", group=GRP_MTF)
+bool   i_useMTFM  = input.bool(true, "شهري", group=GRP_MTF)
+string i_tf15     = input.timeframe("15", "إطار 15 د", group=GRP_MTF)
+string i_tf60     = input.timeframe("60", "إطار 60 د", group=GRP_MTF)
+string i_tfD      = input.timeframe("D", "إطار يومي", group=GRP_MTF)
+string i_tfW      = input.timeframe("W", "إطار أسبوعي", group=GRP_MTF)
+string i_tfM      = input.timeframe("M", "إطار شهري", group=GRP_MTF)
+
+int    i_pivotLen   = input.int(5, "Pivot يسار/يمين", minval=2, maxval=20, group=GRP_STRUCT, tooltip="EGX: 5 يومي — زيادة = إشارات أقل")
+int    i_srLookback = input.int(252, "نافذة S/R تاريخي", minval=30, group=GRP_STRUCT, tooltip="252 ≈ سنة تداول EGX")
+int    i_baseMinBars = input.int(15, "حد أدنى شموع قاعدة", minval=5, group=GRP_STRUCT)
+float  i_compressAtr = input.float(0.85, "انكماش ATR (نسبة للمتوسط)", minval=0.5, maxval=1.0, step=0.05, group=GRP_STRUCT)
+float  i_nearResPct  = input.float(1.5, "قرب مقاومة (% من السعر)", minval=0.3, step=0.1, group=GRP_STRUCT)
+float  i_nearSupAtr  = input.float(0.55, "قرب الدعم (×ATR)", minval=0.2, step=0.05, group=GRP_STRUCT)
+float  i_bottomDropPct = input.float(12.0, "قاع: هبوط من القمة %", minval=5.0, step=1.0, group=GRP_STRUCT)
+int    i_bottomBars  = input.int(8, "قاع: نافذة بعد محور", minval=3, maxval=30, group=GRP_STRUCT)
+
+int    i_volAvgLen  = input.int(20, "متوسط الحجم", group=GRP_VOL)
+int    i_volWinTop  = input.int(500, "نافذة ترتيب الحجم", minval=50, maxval=5000, group=GRP_VOL)
+int    i_rvol20     = input.int(20, "حجم نسبي 20 جلسة", group=GRP_VOL)
+int    i_rvol60     = input.int(60, "حجم نسبي 60", group=GRP_VOL)
+int    i_rvol120    = input.int(120, "حجم نسبي 120", group=GRP_VOL)
+int    i_rvol252    = input.int(252, "حجم نسبي 252", group=GRP_VOL)
+float  i_rvolClimax = input.float(2.0, "حجم نسبي — نشاط استثنائي", minval=1.0, step=0.1, group=GRP_VOL)
+int    i_cmfLen     = input.int(20, "تدفق الأموال CMF", group=GRP_VOL)
+int    i_volScanLen = input.int(500, "مسح أعلى الحجم (شموع)", minval=100, maxval=3000, group=GRP_VOL)
+int    i_topVolN    = input.int(5, "عدد صفوف جدول الحجم", minval=3, maxval=10, group=GRP_VOL)
+bool   i_showTopVol = input.bool(true, "جدول أعلى الحجم (أسفل)", group=GRP_VOL)
+
+int    i_adxLen     = input.int(14, "طول ADX", group=GRP_STRUCT)
+float  i_adxMin     = input.float(18.0, "ADX — حد اتجاه (مرحلة 5–6)", minval=10.0, group=GRP_STRUCT)
+
+int    i_wavePivot  = input.int(8, "Pivot موجي", minval=3, maxval=30, group=GRP_WAVE)
+int    i_consolLook = input.int(40, "نافذة تماسك (موجة كبيرة)", minval=10, group=GRP_WAVE)
+float  i_extRsi     = input.float(72.0, "RSI — امتداد/مطاردة", minval=65.0, group=GRP_WAVE)
+
+bool   i_useGann    = input.bool(true, "نوافذ Gann (9/18/27/45/90)", group=GRP_TIME)
+int    i_timeTol    = input.int(2, "تسامح ±شموع", minval=0, maxval=5, group=GRP_TIME)
+int    i_cycleLb    = input.int(500, "نافذة دورات قمة/قاع", minval=100, group=GRP_TIME)
+
+float  i_zoneAtr    = input.float(0.35, "عرض منطقة ×ATR", group=GRP_ZONE)
+float  i_minRR      = input.float(1.5, "حد أدنى R/R (يدوي)", minval=0.8, step=0.25, group=GRP_ZONE, tooltip="Selective preset: 2.0")
+float  i_chaseRR    = input.float(1.0, "تحذير مطاردة إذا R/R <", group=GRP_ZONE)
+int    i_atrLen     = input.int(14, "ATR", group=GRP_ZONE)
+
+float  i_wStruct = input.float(16.0, "وزن بنية/مرحلة", group=GRP_RANK)
+float  i_wBase   = input.float(12.0, "وزن قاعدة", group=GRP_RANK)
+float  i_wVol    = input.float(18.0, "وزن حجم", group=GRP_RANK)
+float  i_wBreak  = input.float(14.0, "وزن اختراق", group=GRP_RANK)
+float  i_wMtf    = input.float(12.0, "وزن MTF", group=GRP_RANK)
+float  i_wWave   = input.float(10.0, "وزن موجي", group=GRP_RANK)
+float  i_wZone   = input.float(10.0, "وزن منطقة", group=GRP_RANK)
+float  i_wRR     = input.float(8.0, "وزن R/R", group=GRP_RANK)
+float  i_rankMin = input.float(62.0, "حد فرصة قوية (يدوي)", minval=40.0, maxval=90.0, group=GRP_RANK, tooltip="EGX Selective: 65")
+
+bool   i_showZones   = input.bool(true, "صناديق طلب/عرض", group=GRP_VIS)
+bool   i_showTargets = input.bool(true, "T1/T2/T3", group=GRP_VIS)
+bool   i_showMarks   = input.bool(false, "علامات كسر/انعكاس بنية", group=GRP_VIS)
+bool   i_showClassicPiv = input.bool(false, "محور يومي PP/R1/S1", group=GRP_VIS)
+bool   i_showGaps    = input.bool(true, "علامات فجوات", group=GRP_VIS)
+bool   i_showFvg     = input.bool(true, "فجوة FVG (3 شموع)", group=GRP_VIS)
+bool   i_showPoc     = input.bool(false, "خط POC تقريبي (أعلى حجم)", group=GRP_VIS)
+bool   i_showDivMarks = input.bool(true, "علامات تباعد OBV / تراكم", group=GRP_VIS)
+bool   i_showBB      = input.bool(false, "Bollinger (20,2)", group=GRP_VIS)
+bool   i_useST       = input.bool(false, "Supertrend — خط وفلتر", group=GRP_VIS)
+float  i_stFactor    = input.float(3.0, "معامل Supertrend", minval=1.0, step=0.5, group=GRP_VIS)
+int    i_stLen       = input.int(10, "Supertrend — طول ATR", group=GRP_VIS)
+color  i_colBull = input.color(color.teal, "صاعد", group=GRP_VIS)
+color  i_colBear = input.color(color.red, "هابط", group=GRP_VIS)
+
+string i_egxPreset = input.string("معيار EGX", "إعداد EGX جاهز", options=["مخصص — يدوي", "معيار EGX", "قطع كبير", "انتقائي", "أسهم صغيرة"], group=GRP_EGX, tooltip="معيار: متوازن | قطع كبير: سيولة أعلى | انتقائي: فرص أقل وأجود | أسهم صغيرة: حذر")
+float  i_minAvgVol = input.float(2000.0, "حد أدنى متوسط حجم (يدوي)", minval=0.0, group=GRP_EGX, tooltip="Blue Chip: 3000 | Small Cap: 500")
+float  i_egxCommPct = input.float(0.125, "عمولة EGX % (مرجع)", minval=0.0, step=0.025, group=GRP_EGX)
+bool   i_egxNote   = input.bool(true, "تحذيرات EGX", group=GRP_EGX)
+string egxBoardLim = input.string("نشط (EGX100)", "لوحة halt/LULD", options=["نشط (EGX100)", "EGX30 (بيع مكشوف)", "SME تميّز", "SME نايل", "غير نشط"], group=GRP_EGX)
+bool   blockLimitLim = input.bool(true, "منع قرب halt/LULD", group=GRP_EGX)
+string i_benchSym  = input.symbol("EGX:EGX30", "مؤشر مقارنة", group=GRP_EGX)
+bool   i_useBench  = input.bool(true, "القوة النسبية vs المؤشر", group=GRP_EGX)
+int    i_wk252     = input.int(252, "قمة 52 أسبوع (جلسات)", minval=60, group=GRP_EGX)
+bool   i_useGlob   = input.bool(true, "توافق EGX/عالمي في اللوحة", group=GRP_EGX)
+bool   i_useMktRegime = input.bool(true, "نظام سوق EGX30/70 في اللوحة", group=GRP_EGX)
+bool   i_useCycle12  = input.bool(true, "دورة 12 (مراحل السوق)", group=GRP_STRUCT)
+bool   i_showWyckoff = input.bool(true, "علامات وايكوف SC/BC", group=GRP_VOL)
+bool   i_showKelly   = input.bool(true, "كيلي — حجم مقترح %", group=GRP_RANK)
+float  i_kellyCap    = input.float(15.0, "سقف كيلي %", minval=5.0, maxval=40.0, group=GRP_RANK)
+
+bool   i_alertBase   = input.bool(true, "قاعدة محتملة", group=GRP_ALT)
+bool   i_alertWave   = input.bool(true, "درجة موجة", group=GRP_ALT)
+bool   i_alertVol    = input.bool(true, "حجم استثنائي", group=GRP_ALT)
+bool   i_alertRes    = input.bool(true, "قرب مقاومة", group=GRP_ALT)
+bool   i_alertBrk    = input.bool(true, "اختراق مؤكد", group=GRP_ALT)
+bool   i_alertRetest = input.bool(true, "إعادة اختبار", group=GRP_ALT)
+bool   i_alertFail   = input.bool(true, "فشل/إبطال", group=GRP_ALT)
+bool   i_alertRank   = input.bool(true, "عبور درجة الفرصة", group=GRP_ALT)
+bool   i_alertTgtSl  = input.bool(true, "هدف 1 / وقف", group=GRP_ALT)
+bool   i_alertChase  = input.bool(true, "مطاردة", group=GRP_ALT)
+bool   i_alertBottom = input.bool(true, "قاع محتمل", group=GRP_ALT)
+bool   i_alertSelect = input.bool(true, "إعداد انتقائي", group=GRP_ALT)
+bool   i_alertRegime = input.bool(true, "ضغط بيعي على المؤشرات", group=GRP_ALT)
+bool   i_alertWyck   = input.bool(false, "وايكوف SC (ذروة بيع)", group=GRP_ALT)
+bool   i_alertScreener = input.bool(true, "ماسح بوابات (7/7)", group=GRP_ALT)
+bool   i_alertCycle4 = input.bool(false, "دورة 12 — مرحلة 4", group=GRP_ALT)
+
+bool   i_useGateScreener = input.bool(true, "ماسح بوابات في اللوحة", group=GRP_ACT)
+int    i_minGatePass = input.int(6, "حد أدنى بوابات (/7)", minval=4, maxval=7, group=GRP_ACT)
+bool   i_showActionBanner = input.bool(true, "بانر قرار (أسفل يسار)", group=GRP_ACT)
+bool   i_showSelectiveMark = input.bool(true, "إشارة ✓ انتقائية", group=GRP_ACT)
+int    i_evtFwdBars  = input.int(20, "جدول حجم: +N شموع (تاريخي)", minval=5, maxval=60, group=GRP_ACT)
+
+bool   i_modeSwing   = input.bool(true, "تقييم مضاربة", group=GRP_MODE)
+bool   i_modeInvest  = input.bool(true, "تقييم استثمار", group=GRP_MODE)
+float  i_decSwingMin = input.float(58.0, "حد مضاربة (/100)", minval=40, maxval=90, group=GRP_MODE)
+float  i_decInvestMin = input.float(60.0, "حد استثمار (/100)", minval=45, maxval=90, group=GRP_MODE)
+int    i_decMinBull  = input.int(5, "شروط مضاربة (من 7)", minval=3, maxval=7, group=GRP_MODE)
+int    i_decInvMinHit = input.int(5, "شروط استثمار (من 7)", minval=3, maxval=7, group=GRP_MODE)
+
+float effMinAvgVol = switch i_egxPreset
+    "قطع كبير" => 3000.0
+    "انتقائي" => 2500.0
+    "أسهم صغيرة" => 500.0
+    "معيار EGX" => 2000.0
+    => i_minAvgVol
+
+float effRankMin = switch i_egxPreset
+    "انتقائي" => 65.0
+    "قطع كبير" => 62.0
+    "معيار EGX" => 58.0
+    "أسهم صغيرة" => 52.0
+    => i_rankMin
+
+float effMinRR = switch i_egxPreset
+    "انتقائي" => 2.0
+    "قطع كبير" => 1.75
+    "معيار EGX" => 1.5
+    "أسهم صغيرة" => 1.5
+    => i_minRR
+
+bool barOk = i_confirmOnly ? barstate.isconfirmed : true
+
+// ─── MTF (بدون lookahead) ─────────────────────────────────────────────────────
+f_trendPack() =>
+    int sc = 0
+    sc += close > ta.ema(close, 20) ? 1 : close < ta.ema(close, 20) ? -1 : 0
+    sc += ta.ema(close, 20) > ta.ema(close, 50) ? 1 : ta.ema(close, 20) < ta.ema(close, 50) ? -1 : 0
+    sc += ta.ema(close, 50) > ta.ema(close, 100) ? 1 : ta.ema(close, 50) < ta.ema(close, 100) ? -1 : 0
+    sc
+
+f_structPack(int plen) =>
+    var float sh1 = na
+    var float sh2 = na
+    var float sl1 = na
+    var float sl2 = na
+    float ph = ta.pivothigh(high, plen, plen)
+    float pl = ta.pivotlow(low, plen, plen)
+    if not na(ph)
+        sh2 := sh1
+        sh1 := ph
+    if not na(pl)
+        sl2 := sl1
+        sl1 := pl
+    int bias = 0
+    if not na(sh1) and not na(sh2) and not na(sl1) and not na(sl2)
+        bool hh = sh1 > sh2
+        bool hl = sl1 > sl2
+        bool lh = sh1 < sh2
+        bool ll = sl1 < sl2
+        if hh and hl
+            bias := 1
+        else if lh and ll
+            bias := -1
+    bias
+
+f_secTrend(string tf) =>
+    request.security(syminfo.tickerid, tf, f_trendPack(), barmerge.gaps_off, barmerge.lookahead_off)
+
+f_secStruct(string tf) =>
+    request.security(syminfo.tickerid, tf, f_structPack(i_pivotLen), barmerge.gaps_off, barmerge.lookahead_off)
+
+int tr15 = i_useMTF15 ? f_secTrend(i_tf15) : 0
+int tr60 = i_useMTF60 ? f_secTrend(i_tf60) : 0
+int trD  = i_useMTFD ? f_secTrend(i_tfD) : 0
+int trW  = i_useMTFW ? f_secTrend(i_tfW) : 0
+int trM  = i_useMTFM ? f_secTrend(i_tfM) : 0
+int structD = i_useMTFD ? f_secStruct(i_tfD) : 0
+int structW = i_useMTFW ? f_secStruct(i_tfW) : 0
+
+float mtfAlign = 0.0
+mtfAlign += trD > 0 ? 22.0 : trD < 0 ? -14.0 : 0.0
+mtfAlign += trW > 0 ? 22.0 : trW < 0 ? -14.0 : 0.0
+mtfAlign += trM > 0 ? 14.0 : trM < 0 ? -9.0 : 0.0
+mtfAlign += tr60 > 0 ? 9.0 : tr60 < 0 ? -7.0 : 0.0
+mtfAlign += i_useMTF15 and tr15 > 0 ? 8.0 : i_useMTF15 and tr15 < 0 ? -6.0 : 0.0
+mtfAlign += structD == 1 ? 6.0 : structD == -1 ? -6.0 : 0.0
+mtfAlign := math.max(0.0, math.min(100.0, 50.0 + mtfAlign))
+
+string trendD = trD > 0 ? f_txt("يومي صاعد", "D bull") : trD < 0 ? f_txt("يومي هابط", "D bear") : f_txt("يومي محايد", "D flat")
+string trendW = trW > 0 ? f_txt("أسبوعي صاعد", "W bull") : trW < 0 ? f_txt("أسبوعي هابط", "W bear") : f_txt("أسبوعي محايد", "W flat")
+string trendM = trM > 0 ? f_txt("شهري صاعد", "M bull") : trM < 0 ? f_txt("شهري هابط", "M bear") : f_txt("شهري محايد", "M flat")
+
+// ─── محلي ────────────────────────────────────────────────────────────────────
+float atr = ta.atr(i_atrLen)
+float rsi = ta.rsi(close, 14)
+[_, _, macdH] = ta.macd(close, 12, 26, 9)
+[_, _, adx] = ta.dmi(i_adxLen, i_adxLen)
+bool adxTrendOk = adx >= i_adxMin
+float ema20 = ta.ema(close, 20)
+float ema200 = ta.ema(close, 200)
+[stLine, stDir] = ta.supertrend(i_stFactor, i_stLen)
+bool stBull = close > stLine
+plot(i_useST ? stLine : na, "سوبرترند", color=stBull ? i_colBull : i_colBear, linewidth=2)
+[bbMid, bbUp, bbLo] = ta.bb(close, 20, 2.0)
+float bbWidth = bbMid > 0 ? (bbUp - bbLo) / bbMid : na
+bool bbSqueeze = not na(bbWidth) and bbWidth <= ta.lowest(bbWidth, 20) * 1.05
+plot(i_showBB ? bbUp : na, "BB علوي", color=color.new(color.blue, 65))
+plot(i_showBB ? bbLo : na, "BB سفلي", color=color.new(color.blue, 65))
+
+int globBull = 0
+globBull += close > ema20 ? 1 : close < ema20 ? -1 : 0
+globBull += macdH > 0 ? 1 : -1
+globBull += rsi > 50 ? 1 : rsi < 40 ? -1 : 0
+globBull += stBull ? 1 : -1
+globBull += not na(rsMom) and rsMom > 0 ? 1 : not na(rsMom) and rsMom < 0 ? -1 : 0
+var string globVerdict = "—"
+
+float wkHigh = ta.highest(high, i_wk252)
+float wkLow = ta.lowest(low, i_wk252)
+float pctFromWkHigh = wkHigh > 0 ? (close - wkHigh) / wkHigh * 100.0 : na
+
+float benchC = i_useBench ? request.security(i_benchSym, timeframe.period, close, barmerge.gaps_off, barmerge.lookahead_off) : na
+float rsRatio = not na(benchC) and benchC > 0 ? close / benchC : na
+float rsMom = not na(rsRatio) and rsRatio[20] > 0 ? (rsRatio / rsRatio[20] - 1.0) * 100.0 : na
+string rsTxt = not i_useBench ? "—" : na(rsMom) ? "—" : str.tostring(rsMom, "#.##") + "% مقابل المؤشر"
+
+f_mktTr() =>
+    int sc = 0
+    float e20 = ta.ema(close, 20)
+    float e50 = ta.ema(close, 50)
+    float e100 = ta.ema(close, 100)
+    sc += close > e20 ? 1 : close < e20 ? -1 : 0
+    sc += e20 > e50 ? 1 : e20 < e50 ? -1 : 0
+    sc += e50 > e100 ? 1 : e50 < e100 ? -1 : 0
+    sc
+
+f_mktMom() =>
+    close[20] > 0 ? (close / close[20] - 1.0) * 100.0 : 0.0
+
+int trMkt30 = i_useMktRegime ? request.security("EGX:EGX30", timeframe.period, f_mktTr(), barmerge.gaps_off, barmerge.lookahead_off) : 0
+float momMkt30 = i_useMktRegime ? request.security("EGX:EGX30", timeframe.period, f_mktMom(), barmerge.gaps_off, barmerge.lookahead_off) : 0.0
+float momMkt70 = i_useMktRegime ? request.security("EGX:EGX70EWI", timeframe.period, f_mktMom(), barmerge.gaps_off, barmerge.lookahead_off) : 0.0
+bool heavySellMkt = i_useMktRegime and momMkt30 < -4.0 and momMkt70 < -3.0 and trMkt30 <= -1
+bool broadUpMkt = i_useMktRegime and momMkt30 > 2.0 and momMkt70 > 1.5 and trMkt30 >= 1
+string regimeTxt = not i_useMktRegime ? "—" : heavySellMkt ? "🔴 ضغط بيعي على المؤشرات" : broadUpMkt ? "🟢 اتساع صاعد (30/70)" : trMkt30 >= 1 ? "🟡 صعود معتدل" : trMkt30 <= -1 ? "🟠 نظام هابط" : "⚪ مختلط / عرضي"
+
+[dH, dL, dC] = request.security(syminfo.tickerid, "D", [high[1], low[1], close[1]], barmerge.gaps_off, barmerge.lookahead_off)
+float pp = (dH + dL + dC) / 3.0
+float pivR1 = 2.0 * pp - dL
+float pivS1 = 2.0 * pp - dH
+plot(i_showClassicPiv ? pp : na, "محور PP", color=color.new(color.white, 50), style=plot.style_circles)
+plot(i_showClassicPiv ? pivR1 : na, "مقاومة R1", color=color.new(color.red, 60), style=plot.style_linebr)
+plot(i_showClassicPiv ? pivS1 : na, "دعم S1", color=color.new(color.green, 60), style=plot.style_linebr)
+
+bool gapUp = low > high[1]
+bool gapDown = high < low[1]
+plotshape(i_showGaps and gapUp and barOk, "فجوة↑", shape.diamond, location.belowbar, color.new(color.aqua, 0), size=size.tiny)
+plotshape(i_showGaps and gapDown and barOk, "فجوة↓", shape.diamond, location.abovebar, color.new(color.maroon, 0), size=size.tiny)
+
+bool fvgBull = i_showFvg and low > high[2] and close > open
+bool fvgBear = i_showFvg and high < low[2] and close < open
+plotshape(fvgBull and barOk, "FVG صاعد", shape.square, location.belowbar, color=color.new(color.blue, 55), size=size.tiny)
+plotshape(fvgBear and barOk, "FVG هابط", shape.square, location.abovebar, color=color.new(color.purple, 55), size=size.tiny)
+
+int pocOff = ta.highestbars(volume, i_volWinTop)
+float pocProxy = i_showPoc and pocOff >= 0 and bar_index > 10 ? hlc3[pocOff] : na
+plot(pocProxy, "POC تقريبي", color=color.new(color.yellow, 35), style=plot.style_linebr)
+
+int mtfDen = (i_useMTF15 ? 1 : 0) + (i_useMTF60 ? 1 : 0) + (i_useMTFD ? 1 : 0) + (i_useMTFW ? 1 : 0) + (i_useMTFM ? 1 : 0)
+int mtfBull = 0
+mtfBull += i_useMTF15 and tr15 > 0 ? 1 : 0
+mtfBull += i_useMTF60 and tr60 > 0 ? 1 : 0
+mtfBull += i_useMTFD and trD > 0 ? 1 : 0
+mtfBull += i_useMTFW and trW > 0 ? 1 : 0
+mtfBull += i_useMTFM and trM > 0 ? 1 : 0
+string mtfSync = str.tostring(mtfBull) + "/" + str.tostring(math.max(mtfDen, 1)) + " " + f_txt("أطر صاعدة", "TF bull")
+string structTxt = "يومي:" + str.tostring(structD) + " أسب:" + str.tostring(structW)
+
+float pHigh = ta.pivothigh(high, i_pivotLen, i_pivotLen)
+float pLow  = ta.pivotlow(low, i_pivotLen, i_pivotLen)
+
+var float swingHigh = na
+var float swingLow  = na
+var int   structBias = 0
+
+if not na(pHigh)
+    swingHigh := pHigh
+if not na(pLow)
+    swingLow := pLow
+
+var float volAtPivotHigh = na
+var float volAtPivotLow = na
+if not na(pHigh)
+    volAtPivotHigh := volume[i_pivotLen]
+if not na(pLow)
+    volAtPivotLow := volume[i_pivotLen]
+string volPivotTxt = na(volAtPivotHigh) or na(volAtPivotLow) ? "—" : "قاع " + str.tostring(volAtPivotLow, "#") + " / قمة " + str.tostring(volAtPivotHigh, "#") + (volAtPivotLow > volAtPivotHigh ? " · تجميع؟" : volAtPivotHigh > volAtPivotLow * 1.3 ? " · تصريف؟" : "")
+
+bool bosUp = false
+bool bosDn = false
+bool chochUp = false
+bool chochDn = false
+
+var int barsSinceBos = 999
+var float lastBosLevel = na
+if barOk and not na(swingHigh) and close > swingHigh and close[1] <= nz(swingHigh[1], swingHigh)
+    bosUp := true
+    if structBias == -1
+        chochUp := true
+    structBias := 1
+    barsSinceBos := 0
+    lastBosLevel := swingHigh
+else
+    barsSinceBos += 1
+if barOk and not na(swingLow) and close < swingLow and close[1] >= nz(swingLow[1], swingLow)
+    bosDn := true
+    if structBias == 1
+        chochDn := true
+    structBias := -1
+float extBosPct = not na(lastBosLevel) and lastBosLevel > 0 ? (close - lastBosLevel) / lastBosLevel * 100.0 : na
+string bosTxt = not na(lastBosLevel) and barsSinceBos < 120 ? f_txt("من BOS ", "Since BOS ") + str.tostring(barsSinceBos) + f_txt(" ش · ", " b · ") + str.tostring(extBosPct, "#.#") + "%" : "—"
+
+var int fbTimer = 0
+var float fbLevel = na
+var int fbDir = 0
+if bosUp and barOk
+    fbTimer := 5
+    fbLevel := swingHigh
+    fbDir := 1
+else if bosDn and barOk
+    fbTimer := 5
+    fbLevel := swingLow
+    fbDir := -1
+else if fbTimer > 0
+    fbTimer -= 1
+
+bool fakeBreakUp = fbDir == 1 and fbTimer > 0 and close < fbLevel
+bool fakeBreakDn = fbDir == -1 and fbTimer > 0 and close > fbLevel
+bool scenarioFail = fakeBreakUp or (barOk and not na(swingLow) and close < swingLow)
+
+float histRes = ta.highest(high, i_srLookback)
+float histSup = ta.lowest(low, i_srLookback)
+float refRes  = na(swingHigh) ? histRes : math.min(swingHigh, histRes)
+
+bool nearResist = refRes > 0 and (refRes - close) / close * 100.0 <= i_nearResPct
+bool retestSupport = not na(swingLow) and low <= swingLow * 1.006 and close > swingLow and barOk
+bool retestResist  = not na(swingHigh) and high >= swingHigh * 0.994 and close < swingHigh and barOk
+
+float zoneW = atr * i_zoneAtr
+float demandLo = na(swingLow) ? na : swingLow - zoneW
+float demandHi = na(swingLow) ? na : swingLow + zoneW
+float supplyLo = na(swingHigh) ? na : swingHigh - zoneW
+float supplyHi = na(swingHigh) ? na : swingHigh + zoneW
+
+// ─── قاعدة / تماسك ───────────────────────────────────────────────────────────
+float atrMa = ta.sma(atr, 20)
+bool atrCompress = atrMa > 0 and atr / atrMa <= i_compressAtr
+float rangeHi = ta.highest(high, i_consolLook)
+float rangeLo = ta.lowest(low, i_consolLook)
+float rangePct = rangeLo > 0 ? (rangeHi - rangeLo) / rangeLo * 100.0 : na
+bool tightRange = not na(rangePct) and rangePct < 18.0
+
+var int barsInBase = 0
+bool inBaseZone = tightRange and atrCompress and structBias <= 0 and trD <= 0
+if inBaseZone
+    barsInBase += 1
+else
+    barsInBase := 0
+
+bool higherLows = not na(swingLow) and not na(swingLow[1]) and swingLow > swingLow[1]
+bool downtrendWeak = rsi > rsi[5] and macdH > macdH[5] and trD <= 0
+bool baseCandidate = barsInBase >= i_baseMinBars or (inBaseZone and higherLows)
+
+// ─── Volume engine ───────────────────────────────────────────────────────────
+float volAvg = ta.sma(volume, i_volAvgLen)
+float rvol = volAvg > 0 ? volume / volAvg : na
+float rvolVs20  = ta.sma(volume, i_rvol20) > 0 ? volume / ta.sma(volume, i_rvol20) : na
+float rvolVs60  = ta.sma(volume, i_rvol60) > 0 ? volume / ta.sma(volume, i_rvol60) : na
+float rvolVs120 = ta.sma(volume, i_rvol120) > 0 ? volume / ta.sma(volume, i_rvol120) : na
+float rvolVs252 = ta.sma(volume, i_rvol252) > 0 ? volume / ta.sma(volume, i_rvol252) : na
+string rvolPack = "20:" + str.tostring(rvolVs20, "#.##") + " 60:" + str.tostring(rvolVs60, "#.##") + " 120:" + str.tostring(rvolVs120, "#.##") + " 252:" + str.tostring(rvolVs252, "#.##")
+float rvolBlend = na(rvolVs20) ? rvol : (nz(rvolVs20, rvol) + nz(rvolVs60, rvol) + nz(rvolVs120, rvol) + nz(rvolVs252, rvol)) / 4.0
+
+float cmf = ta.cmf(i_cmfLen)
+float obv = ta.obv
+float adLine = ta.accdist
+float obvSlope = ta.linreg(obv, 10, 0) - ta.linreg(obv, 10, 1)
+float adSlope = ta.linreg(adLine, 10, 0) - ta.linreg(adLine, 10, 1)
+float volPctRank = ta.percentrank(volume, i_volWinTop)
+bool volTop10 = volPctRank >= 90.0
+
+var float histMaxVol = na
+var int histMaxBarsAgo = 0
+if na(histMaxVol) or volume >= histMaxVol
+    histMaxVol := volume
+    histMaxBarsAgo := 0
+else
+    histMaxBarsAgo += 1
+
+float candleRange = high - low
+float closePosWy = candleRange > syminfo.mintick ? (close - low) / candleRange : 0.5
+bool ultraVolWy = volume > volAvg * 2.5
+bool sellingClimax = i_showWyckoff and barOk and ultraVolWy and closePosWy > 0.55 and low <= ta.lowest(low, 10)
+bool buyingClimax = i_showWyckoff and barOk and ultraVolWy and closePosWy < 0.45 and high >= ta.highest(high, 10)
+plotshape(sellingClimax, "وايكوف SC", shape.labelup, location.belowbar, color=color.new(i_colBull, 25), text="SC", size=size.tiny)
+plotshape(buyingClimax, "وايكوف BC", shape.labeldown, location.abovebar, color=color.new(i_colBear, 25), text="BC", size=size.tiny)
+float volPerRange = candleRange > 0 ? volume / candleRange : na
+bool volUpStrongClose = rvol > 1.2 and close > open and close > (high + low) / 2
+bool volUpWeakClose   = rvol > 1.2 and close < open
+bool volUpNoProgress  = rvol > 1.5 and candleRange < atr * 0.18
+bool priceUpVolDown   = close > close[3] and volume < volume[3] and volume[3] > volAvg
+bool bullDiv = close < close[5] and obv > obv[5] and barOk
+bool bearDiv = close > close[5] and obv < obv[5] and barOk
+bool bullAdDiv = close < close[5] and adLine > adLine[5] and barOk
+bool bearAdDiv = close > close[5] and adLine < adLine[5] and barOk
+plotshape(i_showDivMarks and bullDiv, "OBV↑", shape.triangleup, location.belowbar, color.new(i_colBull, 35), size=size.tiny)
+plotshape(i_showDivMarks and bearDiv, "OBV↓", shape.triangledown, location.abovebar, color.new(i_colBear, 35), size=size.tiny)
+plotshape(i_showDivMarks and bullAdDiv, "AD↑", shape.circle, location.belowbar, color.new(color.teal, 40), size=size.tiny)
+plotshape(i_showDivMarks and bearAdDiv, "AD↓", shape.circle, location.abovebar, color.new(color.orange, 40), size=size.tiny)
+
+int accPts = 0
+int distPts = 0
+accPts += rvol > 1.0 and candleRange < atr * 0.28 ? 1 : 0
+accPts += volUpNoProgress ? 1 : 0
+accPts += cmf > 0.05 ? 1 : 0
+accPts += obvSlope > 0 ? 1 : 0
+accPts += retestSupport and rvol < 1.1 ? 1 : 0
+accPts += bullDiv ? 1 : 0
+accPts += bullAdDiv ? 1 : 0
+accPts += adSlope > 0 ? 1 : 0
+accPts += low < open and close > hl2 ? 1 : 0
+
+distPts += volUpWeakClose ? 1 : 0
+distPts += fakeBreakUp ? 1 : 0
+distPts += cmf < -0.05 ? 1 : 0
+distPts += obvSlope < 0 ? 1 : 0
+distPts += retestResist and rvol > 1.2 ? 1 : 0
+distPts += bearDiv ? 1 : 0
+distPts += bearAdDiv ? 1 : 0
+distPts += adSlope < 0 ? 1 : 0
+distPts += priceUpVolDown ? 1 : 0
+
+bool breakVolConfirm = bosUp and rvol >= 1.25
+
+string volKind = "نشاط غير معتاد"
+if rvol >= i_rvolClimax or volTop10
+    if breakVolConfirm
+        volKind := "تأكيد اختراق"
+    else if accPts >= 4 and accPts > distPts + 1
+        volKind := "تجميع محتمل"
+    else if distPts >= 4 and distPts > accPts + 1
+        volKind := "تصريف محتمل"
+    else if volUpNoProgress or volUpWeakClose
+        volKind := "توسع حجمي"
+    else
+        volKind := "نشاط غير معتاد"
+else if accPts > distPts + 2
+    volKind := "تجميع محتمل"
+else if distPts > accPts + 2
+    volKind := "تصريف محتمل"
+else if rsi > i_extRsi and priceUpVolDown
+    volKind := "خطر ذروة"
+
+string volClass = volKind
+globBull += accPts > distPts ? 1 : accPts < distPts ? -1 : 0
+globVerdict := not i_useGlob ? "—" : globBull >= 4 ? "توافق EGX/عالمي — صاعد" : globBull <= -3 ? "توافق سلبي" : "مختلط — شائع في EGX"
+
+float distRisk = volKind == "تصريف محتمل" ? 75.0 : volKind == "خطر ذروة" ? 68.0 : distPts > accPts ? 52.0 : 22.0
+float accScore100 = math.max(0.0, math.min(100.0, 40.0 + (accPts - distPts) * 9.0))
+
+float activeSupport = na(swingLow) ? histSup : swingLow
+bool atSupport = not na(activeSupport) and low <= activeSupport + atr * i_nearSupAtr and close >= activeSupport * 0.995
+float refHighDrop = ta.highest(high, i_srLookback)
+float dropPct = refHighDrop > 0 ? (refHighDrop - close) / refHighDrop * 100.0 : 0.0
+var int barsSincePLow = 999
+if not na(pLow)
+    barsSincePLow := 0
+else
+    barsSincePLow += 1
+bool rsiTurn = rsi > rsi[1] and rsi[1] < 38.0
+bool bottomReversal = (chochUp or bullDiv or bullAdDiv or rsiTurn) and accPts >= distPts
+bool bottomConfirmed = barOk and barsSincePLow <= i_bottomBars and atSupport and bottomReversal and dropPct >= i_bottomDropPct and volKind != "تصريف محتمل"
+bool bottomWatch = barOk and barsSincePLow <= i_bottomBars and atSupport and dropPct >= i_bottomDropPct and not bottomConfirmed
+string bottomTxt = bottomConfirmed ? f_txt("🟢 قاع محتمل (مؤكد جزئيًا)", "🟢 Bottom (partial)") : bottomWatch ? f_txt("🟡 قاع — انتظر", "🟡 Bottom watch") : "—"
+
+// ─── Time cycles ─────────────────────────────────────────────────────────────
+var int barsSincePivot = 0
+if not na(pHigh) or not na(pLow)
+    barsSincePivot := 0
+else
+    barsSincePivot += 1
+
+var int[] gannArr = array.from(9, 18, 27, 45, 90)
+int gannHits = 0
+int nearestGann = 999
+if i_useGann
+    for i = 0 to array.size(gannArr) - 1
+        int g = array.get(gannArr, i)
+        if math.abs(barsSincePivot - g) <= i_timeTol
+            gannHits += 1
+        nearestGann := math.min(nearestGann, math.abs(barsSincePivot - g))
+
+int bsPH = ta.barssince(not na(pHigh))
+int bsPL = ta.barssince(not na(pLow))
+float avgUpCycle = ta.sma(na(bsPH) ? na : float(bsPH), 20)
+float avgDnCycle = ta.sma(na(bsPL) ? na : float(bsPL), 20)
+float cycleRatio = avgUpCycle > 0 and avgDnCycle > 0 ? avgUpCycle / avgDnCycle : na
+string cycleTxt = na(cycleRatio) ? "—" : f_txt("ق/ق ", "H/L ") + str.tostring(cycleRatio, "#.##") + (cycleRatio > 1.1 ? f_txt(" · تمدد صعود", " · up ext") : cycleRatio < 0.9 ? f_txt(" · تمدد هبوط", " · dn ext") : "")
+
+float timeScore = gannHits >= 2 ? 72.0 : gannHits == 1 ? 55.0 : nearestGann <= 3 ? 42.0 : 25.0
+string timeWindow = gannHits > 0 ? f_txt("تزامن Gann: ", "Gann sync: ") + str.tostring(gannHits) + f_txt(" · من pivot ", " · bars ") + str.tostring(barsSincePivot) :
+     f_txt("من pivot ", "From pivot ") + str.tostring(barsSincePivot) + f_txt(" ش · عدم يقين", " bars · uncertain")
+timeWindow += " · " + cycleTxt
+
+// ─── Elliott (استكشافي) ──────────────────────────────────────────────────────
+float wPh = ta.pivothigh(high, i_wavePivot, i_wavePivot)
+float wPl = ta.pivotlow(low, i_wavePivot, i_wavePivot)
+var float w0 = na
+var float w1 = na
+var float w2 = na
+var float w3 = na
+if not na(wPl)
+    w3 := w2
+    w2 := w1
+    w1 := w0
+    w0 := wPl
+if not na(wPh)
+    w3 := w2
+    w2 := w1
+    w1 := w0
+    w0 := wPh
+
+bool haveW = not na(w1) and not na(w2) and not na(w3)
+float leg1 = haveW ? math.abs(w1 - w2) : na
+float leg2 = haveW ? math.abs(w2 - w3) : na
+bool rule3 = haveW and leg2 >= leg1 * 0.85
+string wavePrimary = "غير محسوم"
+string waveAlt = "—"
+float waveInv = na
+if haveW and rule3 and structBias == 1
+    wavePrimary := f_txt("دافعة 1-5 — موجة 3/5", "Impulse — wave 3/5")
+    waveAlt := f_txt("ABC عند ", "ABC if break ") + str.tostring(nz(swingLow, w3), format.mintick)
+    waveInv := na(swingLow) ? w3 - atr : swingLow - atr * 0.5
+else if haveW and structBias == -1
+    wavePrimary := f_txt("تصحيح ABC محتمل", "Corrective ABC")
+    waveAlt := f_txt("استئناف هبوط", "Resume down")
+    waveInv := na(swingHigh) ? w0 + atr : swingHigh + atr * 0.5
+else if haveW
+    wavePrimary := f_txt("قواعد Elliott ناقصة", "Elliott rules incomplete")
+    waveAlt := f_txt("Fib 61.8% ", "Fib 61.8 ") + str.tostring(na(leg1) ? na : w1 - leg1 * 0.618, format.mintick)
+
+float waveScore = wavePrimary == "غير محسوم" ? 35.0 : 62.0
+
+// ─── Long Wave Detector (3 setups) ───────────────────────────────────────────
+float consolScore = math.min(100.0, barsInBase / float(i_baseMinBars) * 35.0 + (atrCompress ? 25.0 : 0.0) + (tightRange ? 20.0 : 0.0))
+float volWaveScore = math.min(100.0, math.min(nz(rvolBlend, 1.0), 3.0) / 3.0 * 40.0 + accScore100 * 0.35)
+float weeklyBoost = trW > 0 ? 20.0 : trW < 0 ? -15.0 : 0.0
+
+float earlySetup = math.max(0.0, math.min(100.0, consolScore * 0.32 + accScore100 * 0.22 + volWaveScore * 0.12 + (downtrendWeak ? 15.0 : 0.0) + (baseCandidate ? 15.0 : 0.0) + weeklyBoost * 0.5))
+float breakoutSetup = math.max(0.0, math.min(100.0, (nearResist ? 30.0 : 0.0) + (atrCompress ? 20.0 : 0.0) + accScore100 * 0.25 + (higherLows ? 15.0 : 0.0) + mtfAlign * 0.15))
+float momentumSetup = math.max(0.0, math.min(100.0, (bosUp ? 35.0 : 0.0) + (breakVolConfirm ? 25.0 : 0.0) + (structBias == 1 ? 15.0 : 0.0) + (trD > 0 ? 15.0 : 0.0) + (adxTrendOk ? 10.0 : -8.0) - (rsi > i_extRsi ? 20.0 : 0.0) - (priceUpVolDown ? 15.0 : 0.0)))
+
+float longWaveScore = math.max(earlySetup, math.max(breakoutSetup, momentumSetup))
+string longWaveType = momentumSetup >= breakoutSetup and momentumSetup >= earlySetup ? "زخم (محتمل)" :
+     breakoutSetup >= earlySetup ? "اختراق (محتمل)" :
+     "مبكر (محتمل)"
+
+// ─── Phase engine (8 states) ─────────────────────────────────────────────────
+bool c_endDowntrend = downtrendWeak or chochUp
+bool c_base = baseCandidate
+bool c_accum = volKind == "تجميع محتمل" or accPts >= distPts + 2
+bool c_breakReady = nearResist and (c_base or c_accum) and atrCompress
+bool c_breakConf = bosUp and breakVolConfirm and not fakeBreakUp and adxTrendOk
+bool c_uptrend = structBias == 1 and trD > 0 and close > ema200 and adxTrendOk
+bool c_extended = c_uptrend and (rsi > i_extRsi or nearResist) and momentumSetup > 50
+bool c_fail = scenarioFail or volKind == "تصريف محتمل" or fakeBreakUp
+
+int phaseId = 1
+string phaseName = f_txt("1 اتجاه هابط", "1 Downtrend")
+if c_fail and not c_breakConf
+    phaseId := 8
+    phaseName := f_txt("8 فشل السيناريو", "8 Scenario failure")
+else if c_extended
+    phaseId := 7
+    phaseName := f_txt("7 صاعد ممتد/مخاطر", "7 Extended / risk")
+else if c_uptrend
+    phaseId := 6
+    phaseName := f_txt("6 اتجاه صاعد", "6 Uptrend")
+else if c_breakConf
+    phaseId := 5
+    phaseName := f_txt("5 اختراق مؤكد", "5 Confirmed breakout")
+else if c_breakReady
+    phaseId := 4
+    phaseName := f_txt("4 استعداد اختراق", "4 Breakout ready")
+else if c_accum and c_base
+    phaseId := 3
+    phaseName := f_txt("3 تجميع محتمل", "3 Accumulation")
+else if c_base
+    phaseId := 2
+    phaseName := f_txt("2 قاعدة محتملة", "2 Potential base")
+else
+    phaseId := 1
+    phaseName := f_txt("1 اتجاه هابط", "1 Downtrend")
+
+bool breakFailed = fakeBreakUp or (barOk and bosDn and barsSinceBos < 15)
+bool breakConfirmed = c_breakConf
+bool breakRetest = retestSupport and structBias == 1
+bool breakEarly = bosUp and not breakVolConfirm
+bool watchlistSetup = phaseId == 4 or (nearResist and phaseId >= 2 and phaseId <= 4)
+string breakState = breakFailed ? "فشل اختراق" :
+     breakConfirmed ? "اختراق مؤكد" :
+     breakRetest ? "إعادة اختبار" :
+     breakEarly ? "اختراق مبكر" :
+     watchlistSetup ? "قائمة مراقبة" : "—"
+
+f_cycleName(int st) =>
+    st == 1 ? "1 هبوط" : st == 2 ? "2 تباطؤ" : st == 3 ? "3 قاعدة" : st == 4 ? "4 تجميع" : st == 5 ? "5 اختراق" : st == 6 ? "6 صاعد" : st == 7 ? "7 إعادة تجميع" : st == 8 ? "8 ممتد" : st == 9 ? "9 تصريف" : st == 10 ? "10 ضعف" : st == 11 ? "11 كسر" : "12 هابط"
+
+bool dnTrendC = trD < 0 and close < ema200 and structBias <= 0
+bool dnSlowC = dnTrendC and downtrendWeak and atrCompress
+bool inBaseC = inBaseZone or phaseId == 2
+bool accPhaseC = phaseId == 3
+bool initBreakC = c_breakConf
+bool upTrendC = c_uptrend
+bool pullBackC = upTrendC and close < ema20 and close > ema200
+bool extRallyC = phaseId == 7
+bool distPhaseC = volKind == "تصريف محتمل" or distPts > accPts + 3
+bool weakTrendC = phaseId == 7 and rsi < 58
+bool structBreakC = scenarioFail or (bosDn and barsSinceBos < 25)
+bool newDnC = phaseId == 8
+
+var int cycle12 = 3
+var int cycle12Bars = 0
+int newCycle12 = cycle12
+if dnTrendC and not dnSlowC
+    newCycle12 := 1
+else if dnSlowC
+    newCycle12 := 2
+else if accPhaseC
+    newCycle12 := 4
+else if inBaseC
+    newCycle12 := 3
+else if initBreakC and not upTrendC
+    newCycle12 := 5
+else if pullBackC
+    newCycle12 := 7
+else if extRallyC
+    newCycle12 := 8
+else if distPhaseC
+    newCycle12 := 9
+else if weakTrendC
+    newCycle12 := 10
+else if structBreakC and cycle12 <= 10
+    newCycle12 := 11
+else if newDnC
+    newCycle12 := 12
+else if upTrendC
+    newCycle12 := 6
+
+if barOk and i_useCycle12
+    if newCycle12 != cycle12
+        cycle12 := newCycle12
+        cycle12Bars := 0
+    else
+        cycle12Bars += 1
+
+string cycle12Txt = i_useCycle12 ? f_cycleName(cycle12) + " · " + str.tostring(cycle12Bars) + " ش" : "—"
+string cycleHint = cycle12 == 4 ? "BOS↑+حجم" : cycle12 == 9 ? "حذر تصريف" : cycle12 == 3 ? "RVOL↑" : "—"
+
+// ─── Targets ─────────────────────────────────────────────────────────────────
+float fibBase = na(swingLow) or na(swingHigh) ? na : swingHigh - swingLow
+float fib618 = na(fibBase) ? na : swingHigh + fibBase * 0.618
+float fib100 = na(fibBase) ? na : swingHigh + fibBase * 1.0
+float fib161 = na(fibBase) ? na : swingHigh + fibBase * 1.618
+float meas = na(fibBase) ? na : swingHigh + fibBase
+float waveExt = haveW and not na(leg1) ? w1 + leg1 * 1.0 : na
+
+f_pick3(float ref, float a, float b, float c, float d, float e, float f, float g) =>
+    float t1 = na
+    float t2 = na
+    float t3 = na
+    for k = 0 to 6
+        float v = k == 0 ? a : k == 1 ? b : k == 2 ? c : k == 3 ? d : k == 4 ? e : k == 5 ? f : g
+        if not na(v) and v > ref
+            if na(t1) or v < t1
+                t3 := t2
+                t2 := t1
+                t1 := v
+            else if na(t2) or v < t2
+                t3 := t2
+                t2 := v
+            else if na(t3) or v < t3
+                t3 := v
+    [t1, t2, t3]
+
+float pivTgt = not na(pivR1) and pivR1 > close ? pivR1 : na
+[tgt1, tgt2, tgt3] = f_pick3(close, fib618, fib100, fib161, meas, histRes, pivTgt, waveExt)
+if na(tgt1)
+    tgt1 := close + atr * 1.5
+if na(tgt2)
+    tgt2 := close + atr * 2.5
+if na(tgt3)
+    tgt3 := close + atr * 4.0
+
+string tgtKind1 = f_txt("قريب", "Near")
+string tgtKind2 = f_txt("متوسط", "Mid")
+string tgtKind3 = f_txt("ممتد*", "Extended*")
+
+// ─── Buy zones ───────────────────────────────────────────────────────────────
+float entryEarly = na(demandHi) ? close : demandHi
+float entryBreak = na(swingHigh) ? close : swingHigh
+float entryRetest = na(swingLow) ? close : swingLow + zoneW * 0.5
+float stopBase = na(demandLo) ? close - atr * 2 : demandLo - atr * 0.5
+float stopBreak = na(swingLow) ? stopBase : swingLow - atr * 0.35
+float activeStop = c_breakConf ? stopBreak : stopBase
+
+string buyZoneType = c_breakConf and retestSupport ? f_txt("إعادة اختبار", "Retest") :
+     c_breakConf ? f_txt("بعد اختراق", "Post-breakout") :
+     inBaseZone ? f_txt("داخل قاعدة", "In base") :
+     retestSupport ? f_txt("ارتداد دعم", "Support bounce") :
+     trW > 0 and close > ema200 ? f_txt("استثماري تدريجي", "Invest DCA") :
+     f_txt("مراقبة فقط", "Watch only")
+
+float buyLo = c_breakConf ? entryRetest : na(demandLo) ? close - zoneW : demandLo
+float buyHi = c_breakConf ? entryBreak + zoneW : na(demandHi) ? close + zoneW : demandHi
+string buyConfirm = c_breakConf ? f_txt("إغلاق فوق مقاومة + RVOL", "Close above + RVOL") :
+     f_txt("CHoCH/قيعان أعلى + حجم", "CHoCH/HL + volume")
+
+float risk = buyHi > activeStop ? buyHi - activeStop : na
+float rew1 = tgt1 - buyHi
+float rr1 = risk > 0 and not na(rew1) ? rew1 / risk : na
+float rew2 = tgt2 - buyHi
+float rr2 = risk > 0 ? rew2 / risk : na
+float rew3 = tgt3 - buyHi
+float rr3 = risk > 0 ? rew3 / risk : na
+float commFrac = i_egxCommPct / 100.0 * 2.0
+float rr1Net = not na(rr1) and risk > 0 ? math.max(0.0, (rew1 - close * commFrac)) / (risk + close * commFrac) : na
+
+string missing = ""
+missing += c_endDowntrend ? "" : f_txt("· ضعف هبوط ", "· downtrend weak ")
+missing += higherLows ? "" : f_txt("· قيعان أعلى ", "· higher lows ")
+missing += atrCompress ? "" : f_txt("· انكماش تقلب ", "· vol compress ")
+missing += c_accum ? "" : f_txt("· حجم تجميع ", "· acc volume ")
+missing += nearResist ? "" : f_txt("· قرب مقاومة ", "· near resistance ")
+missing += trW > 0 ? "" : f_txt("· أسبوعي ", "· weekly ")
+missing += c_breakConf ? "" : f_txt("· اختراق مؤكد ", "· confirmed BO ")
+missing += adxTrendOk ? "" : f_txt("· ADX ", "· ADX ")
+missing += not na(rr1) and rr1 >= effMinRR ? "" : f_txt("· R/R ", "· R/R ")
+missing += i_useBench and not na(rsMom) and rsMom > 0 ? "" : i_useBench ? f_txt("· RS المؤشر ", "· RS bench ") : ""
+missing += not i_useST or stBull ? "" : f_txt("· Supertrend ", "· ST ")
+missing += structD == 1 ? "" : f_txt("· بنية D ", "· struct D ")
+if missing == ""
+    missing := f_txt("— لا شروط ناقصة بارزة", "— no major gaps")
+
+float dPrevLim = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+float dayPctLim = dPrevLim > 0 ? (close - dPrevLim) / dPrevLim * 100.0 : 0.0
+float haltPctLim = egxBoardLim == "SME تميّز" or egxBoardLim == "SME نايل" or egxBoardLim == "غير نشط" ? 5.0 : 10.0
+float luldPctLim = egxBoardLim == "غير نشط" ? 5.0 : (egxBoardLim == "SME تميّز" or egxBoardLim == "SME نايل" ? 10.0 : 20.0)
+bool nearLimitLim = blockLimitLim and dPrevLim > 0 and (dayPctLim >= math.min(9.0, haltPctLim - 1.0) or dayPctLim >= luldPctLim - 0.25)
+
+bool chaseWarn = not na(rr1) and rr1 < i_chaseRR and close > nz(buyHi, close) * 1.04
+int setupQuality = 0
+setupQuality += not na(rr1) and rr1 >= effMinRR ? 2 : 0
+setupQuality += accPts >= distPts ? 1 : 0
+setupQuality += mtfAlign >= 55 ? 1 : 0
+setupQuality += phaseId >= 3 and phaseId <= 5 ? 1 : 0
+setupQuality += adxTrendOk ? 1 : 0
+setupQuality += not i_useST or stBull ? 1 : 0
+setupQuality += structD == 1 ? 1 : 0
+setupQuality += bbSqueeze and nearResist ? 1 : 0
+
+bool cTrTrend = tr60 > 0 and trD >= 0
+bool cVolume = accPts >= distPts and volKind != "تصريف محتمل"
+bool cMomentum = rsi > 42 and rsi < 78 and macdH > 0 and adxTrendOk
+bool cLocation = inBaseZone or retestSupport or atSupport or c_breakConf
+bool cRisk = not na(rr1) and rr1 >= effMinRR
+bool cLiq = volAvg >= effMinAvgVol
+int bullHits = 0
+bullHits += cTrTrend ? 1 : 0
+bullHits += cVolume ? 1 : 0
+bullHits += cMomentum ? 1 : 0
+bullHits += cLocation ? 1 : 0
+bullHits += cRisk ? 1 : 0
+bullHits += structBias == 1 ? 1 : 0
+bullHits += cLiq ? 1 : 0
+
+bool iW = trW > 0
+bool iM = trM >= 0
+bool i200 = close > ema200
+bool iStr = structD == 1 or structBias == 1
+bool iVol = volKind == "تجميع محتمل"
+bool iLoc = atSupport or inBaseZone or bottomWatch
+bool iSafe = volKind != "تصريف محتمل"
+int invHits = 0
+invHits += iW ? 1 : 0
+invHits += iM ? 1 : 0
+invHits += i200 ? 1 : 0
+invHits += iStr ? 1 : 0
+invHits += iVol ? 1 : 0
+invHits += iLoc ? 1 : 0
+invHits += iSafe ? 1 : 0
+
+float swingScore = 50.0
+if i_modeSwing
+    swingScore += tr60 > 0 ? 12.0 : -10.0
+    swingScore += c_breakConf ? 14.0 : 0.0
+    swingScore += volKind == "تجميع محتمل" ? 10.0 : volKind == "تصريف محتمل" ? -18.0 : 0.0
+    swingScore += bullHits >= i_decMinBull ? 12.0 : -6.0
+    swingScore := math.max(0.0, math.min(100.0, swingScore))
+
+float investScore = 50.0
+if i_modeInvest
+    investScore += trW > 0 ? 16.0 : -12.0
+    investScore += trM > 0 ? 12.0 : -8.0
+    investScore += i200 ? 10.0 : -10.0
+    investScore += invHits >= i_decInvMinHit ? 12.0 : -6.0
+    investScore := math.max(0.0, math.min(100.0, investScore))
+
+string scalpLine = bullHits >= i_decMinBull and swingScore >= i_decSwingMin ? "🟢 مضاربة: جاهز" : bullHits >= i_decMinBull - 1 ? "🟡 مضاربة: مراقبة" : "⚪ مضاربة: انتظار"
+string investLine = invHits >= i_decInvMinHit and investScore >= i_decInvestMin ? "🟢 استثمار: تراكم" : invHits >= i_decInvMinHit - 1 ? "🟡 استثمار: مراقبة" : "⚪ استثمار: انتظار"
+
+string scenBull = phaseId >= 5 ? "صاعد: فوق مقاومة + حجم" : "—"
+string scenBase = phaseName + " · " + volKind + (bbSqueeze ? " · ضغط BB" : "")
+string scenBear = close < nz(swingLow, histSup) ? "هابط: كسر دعم" : "—"
+
+// ─── Opportunity rank /100 ───────────────────────────────────────────────────
+float sStruct = phaseId == 8 ? 15.0 : phaseId == 5 ? 85.0 : phaseId == 4 ? 72.0 : phaseId == 3 ? 65.0 : phaseId == 2 ? 58.0 : phaseId == 6 ? 70.0 : phaseId == 7 ? 45.0 : 30.0
+float sBase = math.min(100.0, consolScore)
+float sVolR = accScore100
+float sBrk = breakoutSetup * 0.6 + momentumSetup * 0.4
+float sMtf = mtfAlign
+float sWv = waveScore
+float sZn = setupQuality >= 6 ? 78.0 : setupQuality >= 4 ? 58.0 : 38.0
+float sRR = na(rr1) ? 35.0 : math.min(100.0, rr1 / 3.0 * 100.0)
+
+float wSum = i_wStruct + i_wBase + i_wVol + i_wBreak + i_wMtf + i_wWave + i_wZone + i_wRR
+wSum := wSum <= 0 ? 1.0 : wSum
+
+float oppRank = (sStruct * i_wStruct + sBase * i_wBase + sVolR * i_wVol + sBrk * i_wBreak + sMtf * i_wMtf + sWv * i_wWave + sZn * i_wZone + sRR * i_wRR) / wSum
+oppRank := math.max(0.0, math.min(100.0, oppRank))
+if chaseWarn
+    oppRank := math.min(oppRank, 48.0)
+if i_useST and not stBull
+    oppRank := math.max(0.0, oppRank - 6.0)
+if heavySellMkt
+    oppRank := math.max(0.0, oppRank - 5.0)
+
+float winProbK = math.max(0.35, math.min(0.72, bullHits / 7.0 * 0.52 + oppRank / 100.0 * 0.38))
+float kellyRaw = not na(rr1) and rr1 > 0 ? (winProbK * rr1 - (1.0 - winProbK)) / rr1 : 0.0
+float kellyPct = i_showKelly ? math.max(0.0, math.min(i_kellyCap, kellyRaw * 100.0)) : na
+string kellyTxt = i_showKelly and not na(kellyPct) ? str.tostring(kellyPct, "#.#") + "% (P≈" + str.tostring(winProbK * 100.0, "#") + ")" : "—"
+
+float rrGate = not na(rr1Net) ? rr1Net : rr1
+int gatePass = 0
+gatePass += volAvg >= effMinAvgVol ? 1 : 0
+gatePass += phaseId >= 3 and phaseId <= 5 ? 1 : 0
+gatePass += not na(rrGate) and rrGate >= effMinRR ? 1 : 0
+gatePass += bullHits >= i_decMinBull ? 1 : 0
+gatePass += not chaseWarn and not nearLimitLim ? 1 : 0
+gatePass += not heavySellMkt ? 1 : 0
+gatePass += oppRank >= effRankMin - 4 ? 1 : 0
+bool gateScreener = i_useGateScreener and gatePass >= i_minGatePass
+bool gateScreenerFull = gatePass >= 7
+
+string oppVerdict = oppRank >= effRankMin and phaseId >= 3 and phaseId <= 5 ? f_txt("فرصة محتملة — انتقائي", "Selective opportunity") :
+     oppRank >= effRankMin - 8 ? f_txt("مراقبة — شروط ناقصة", "Watch — gaps") :
+     phaseId == 8 ? f_txt("تجنب — فشل", "Avoid — failure") :
+     f_txt("لا إعداد واضح", "No clear setup")
+
+bool selectiveSetup = barOk and oppRank >= effRankMin and phaseId >= 3 and phaseId <= 5 and not chaseWarn and volAvg >= effMinAvgVol and (not i_useST or stBull) and (not i_useGateScreener or gateScreener)
+plotshape(i_showSelectiveMark and selectiveSetup and not selectiveSetup[1], "انتقائي", shape.labelup, location.belowbar, color=i_colBull, text="✓", textcolor=color.white, size=size.small)
+
+string actionHead = phaseId == 8 ? f_txt("🔴 تجنب", "🔴 Avoid") :
+     selectiveSetup ? f_txt("🟢 إعداد انتقائي", "🟢 Selective") :
+     bottomConfirmed ? f_txt("🟢 قاع/دعم", "🟢 Bottom") :
+     phaseId == 5 ? f_txt("🟢 اختراق", "🟢 Breakout") :
+     phaseId >= 2 and phaseId <= 4 ? f_txt("🟡 مراقبة", "🟡 Watch") :
+     f_txt("⚪ انتظار", "⚪ Wait")
+string actionBody = breakState + " · " + buyZoneType + " · وقف " + str.tostring(activeStop, format.mintick)
+
+var table actBan = table.new(position.bottom_right, 1, 3, border_width=2)
+if i_showActionBanner and barstate.islast
+    table.clear(actBan, 0, 0, 0, 2)
+    color ac = selectiveSetup ? i_colBull : phaseId == 8 ? i_colBear : color.gray
+    table.cell(actBan, 0, 0, actionHead, bgcolor=color.new(ac, 65), text_color=color.white, text_size=size.normal)
+    table.cell(actBan, 0, 1, actionBody, bgcolor=color.new(color.black, 80), text_color=color.white, text_size=size.small)
+    table.cell(actBan, 0, 2, "درجة " + str.tostring(oppRank, "#.#") + " · " + oppVerdict + " · بوابات " + str.tostring(gatePass) + "/7" + (i_useCycle12 ? " · " + cycle12Txt : ""), bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.tiny)
+
+// ─── Visual ──────────────────────────────────────────────────────────────────
+plot(ta.ema(close, 20), "متوسط 20", color=color.new(color.blue, 50))
+plot(ta.ema(close, 50), "متوسط 50", color=color.new(color.orange, 50))
+plot(i_showTargets ? tgt1 : na, "هدف 1", color=color.new(color.green, 30), style=plot.style_linebr)
+plot(i_showTargets ? tgt2 : na, "هدف 2", color=color.new(color.green, 50), style=plot.style_linebr)
+plot(i_showTargets ? tgt3 : na, "هدف 3", color=color.new(color.green, 65), style=plot.style_linebr)
+
+var box dBox = na
+var box sBox = na
+if i_showZones and barstate.islast
+    if not na(dBox)
+        box.delete(dBox)
+    if not na(sBox)
+        box.delete(sBox)
+    if not na(demandLo)
+        dBox := box.new(bar_index - 50, demandHi, bar_index + 5, demandLo, bgcolor=color.new(i_colBull, 88), border_color=i_colBull, text=f_txt("طلب", "Demand"))
+    if not na(supplyLo)
+        sBox := box.new(bar_index - 50, supplyHi, bar_index + 5, supplyLo, bgcolor=color.new(i_colBear, 88), border_color=i_colBear, text=f_txt("عرض", "Supply"))
+
+if i_showMarks and barOk
+    if bosUp
+        label.new(bar_index, low, "كسر↑", style=label.style_label_up, color=i_colBull, size=size.tiny)
+    if chochUp
+        label.new(bar_index, low, "انعكاس↑", style=label.style_label_up, color=color.new(i_colBull, 40), size=size.tiny)
+
+bgcolor(phaseId == 5 ? color.new(i_colBull, 94) : phaseId == 8 ? color.new(i_colBear, 93) : na)
+
+f_histFwd(int off, int n) =>
+    off > n ? (close[off - n] - close[off]) / close[off] * 100.0 : na
+
+// ─── Top volume table (compact) ───────────────────────────────────────────────
+var table topVolTbl = table.new(position.bottom_center, 5, 8, border_width=1)
+if i_showTopVol and barstate.islast
+    int scanLen = math.min(math.min(i_volScanLen, i_cycleLb), bar_index - 1)
+    scanLen := math.max(scanLen, 1)
+    array<int> picked = array.new_int()
+    int ranks = math.min(i_topVolN, 10)
+    table.clear(topVolTbl, 0, 0, 4, 7)
+    color vHdr = color.new(color.black, 15)
+    table.cell(topVolTbl, 0, 0, "أعلى الحجم", bgcolor=vHdr, text_color=color.yellow, text_size=size.small)
+    table.cell(topVolTbl, 1, 0, str.tostring(scanLen) + f_txt(" ش", " b"), bgcolor=vHdr, text_color=color.white, text_size=size.tiny)
+    table.cell(topVolTbl, 2, 0, f_txt("سعر", "Px"), bgcolor=vHdr, text_color=color.white, text_size=size.tiny)
+    table.cell(topVolTbl, 3, 0, "RVOL", bgcolor=vHdr, text_color=color.white, text_size=size.tiny)
+    table.cell(topVolTbl, 4, 0, "+" + str.tostring(i_evtFwdBars) + f_txt("ش%", "b%"), bgcolor=vHdr, text_color=color.aqua, text_size=size.tiny)
+    for rank = 0 to ranks - 1
+        float bestV = -1.0
+        int bestOff = -1
+        for off = 1 to scanLen
+            bool used = false
+            for u = 0 to array.size(picked) - 1
+                if array.get(picked, u) == off
+                    used := true
+            if not used and volume[off] > bestV
+                bestV := volume[off]
+                bestOff := off
+        int row = rank + 1
+        if bestOff > 0 and row <= 7
+            array.push(picked, bestOff)
+            float vAvgAt = ta.sma(volume, i_volAvgLen)[bestOff]
+            float rAt = vAvgAt > 0 ? volume[bestOff] / vAvgAt : na
+            table.cell(topVolTbl, 0, row, "#" + str.tostring(rank + 1) + " " + str.tostring(bestOff) + f_txt("ش", "b"), text_color=color.white, text_size=size.tiny)
+            table.cell(topVolTbl, 1, row, str.tostring(volume[bestOff], "#"), text_color=color.white, text_size=size.tiny)
+            table.cell(topVolTbl, 2, row, str.tostring(close[bestOff], format.mintick), text_color=color.white, text_size=size.tiny)
+            table.cell(topVolTbl, 3, row, str.tostring(rAt, "#.##"), text_color=color.fuchsia, text_size=size.tiny)
+            table.cell(topVolTbl, 4, row, str.tostring(f_histFwd(bestOff, i_evtFwdBars), "#.#"), text_color=color.aqua, text_size=size.tiny)
+
+// ─── Dashboard ─────────────────────────────────────────────────────────────────
+var table dash = table.new(position.top_right, 2, 33, border_width=1)
+
+if i_showDash and barstate.islast
+    table.clear(dash, 0, 0, 1, 32)
+    color hdr = color.new(#1a237e, 10)
+    table.cell(dash, 0, 0, "صياد موجات EGX PRO", bgcolor=hdr, text_color=color.white)
+    table.cell(dash, 1, 0, syminfo.ticker, bgcolor=hdr, text_color=color.white)
+
+    table.cell(dash, 0, 1, f_txt("المرحلة", "Phase"), bgcolor=color.gray, text_color=color.white)
+    table.cell(dash, 1, 1, phaseName + " · " + breakState, text_color=phaseId >= 5 ? i_colBull : phaseId == 8 ? i_colBear : color.white, text_size=size.small)
+
+    table.cell(dash, 0, 2, f_txt("شروط ناقصة", "Missing"), bgcolor=color.gray, text_color=color.white)
+    table.cell(dash, 1, 2, missing, text_color=color.orange, text_size=size.small)
+
+    table.cell(dash, 0, 3, f_txt("ترتيب /100", "Rank"), bgcolor=color.gray, text_color=color.white)
+    table.cell(dash, 1, 3, str.tostring(oppRank, "#.#") + " · " + oppVerdict, text_color=oppRank >= effRankMin ? i_colBull : color.white)
+
+    table.cell(dash, 0, 4, f_txt("موجة كبيرة", "Long wave"), bgcolor=color.gray, text_color=color.white)
+    table.cell(dash, 1, 4, longWaveType + " " + str.tostring(longWaveScore, "#") + "/100 · " + bosTxt, text_color=color.white, text_size=size.small)
+
+    table.cell(dash, 0, 5, "مبكر/اختراق/زخم", bgcolor=color.gray, text_color=color.white)
+    table.cell(dash, 1, 5, "م:" + str.tostring(earlySetup, "#") + " خ:" + str.tostring(breakoutSetup, "#") + " ز:" + str.tostring(momentumSetup, "#"), text_size=size.small)
+
+    table.cell(dash, 0, 6, f_txt("اتجاه D/W/M", "Trend"), bgcolor=color.gray, text_color=color.white)
+    table.cell(dash, 1, 6, trendD + " | " + trendW + " | " + trendM + " · " + mtfSync + " · " + structTxt + " · " + str.tostring(mtfAlign, "#"), text_size=size.tiny)
+
+    table.cell(dash, 0, 7, f_txt("RS / 252H", "RS / 52w"), bgcolor=color.gray, text_color=color.white)
+    table.cell(dash, 1, 7, rsTxt + " · 252H " + str.tostring(pctFromWkHigh, "#.#") + "%", text_color=not na(rsMom) and rsMom > 0 ? i_colBull : color.white, text_size=size.small)
+
+    table.cell(dash, 0, 8, f_txt("حجم / RVOL", "Vol / RVOL"), bgcolor=color.gray, text_color=color.white)
+    table.cell(dash, 1, 8, volClass + " · " + rvolPack, text_color=volKind == "تصريف محتمل" ? i_colBear : i_colBull, text_size=size.tiny)
+
+    table.cell(dash, 0, 9, f_txt("ADX / A-D", "ADX / A-D"), bgcolor=color.gray, text_color=color.white)
+    table.cell(dash, 1, 9, "ADX " + str.tostring(adx, "#.#") + (adxTrendOk ? " ✓" : " ✗") + " · OBV" + (bullDiv ? "↑" : bearDiv ? "↓" : "—") + " · A/D" + (bullAdDiv ? "↑" : bearAdDiv ? "↓" : "—"), text_size=size.small)
+
+    table.cell(dash, 0, 10, f_txt("حجم pivots", "Pivot vol"), bgcolor=color.gray, text_color=color.white)
+    table.cell(dash, 1, 10, volPivotTxt, text_size=size.small)
+
+    table.cell(dash, 0, 11, f_txt("أقصى حجم", "Max vol"), bgcolor=color.gray, text_color=color.white)
+    table.cell(dash, 1, 11, str.tostring(histMaxVol, "#") + f_txt(" قبل ", " ") + str.tostring(histMaxBarsAgo) + f_txt(" ش · خطر ", " b · dist ") + str.tostring(distRisk, "#"))
+
+    table.cell(dash, 0, 12, f_txt("S/R · PP", "S/R · PP"), bgcolor=color.gray, text_color=color.white)
+    table.cell(dash, 1, 12, str.tostring(nz(swingLow, histSup), format.mintick) + " / " + str.tostring(nz(swingHigh, histRes), format.mintick) + " · PP " + str.tostring(pp, format.mintick), text_size=size.small)
+
+    table.cell(dash, 0, 13, f_txt("منطقة شراء", "Buy zone"), bgcolor=color.gray, text_color=color.white)
+    table.cell(dash, 1, 13, str.tostring(buyLo, format.mintick) + "–" + str.tostring(buyHi, format.mintick) + " · " + buyZoneType, text_color=i_colBull, text_size=size.small)
+
+    table.cell(dash, 0, 14, f_txt("تأكيد", "Confirm"), bgcolor=color.gray, text_color=color.white)
+    table.cell(dash, 1, 14, buyConfirm, text_size=size.small)
+
+    table.cell(dash, 0, 15, f_txt("وقف", "Stop"), bgcolor=color.gray, text_color=color.white)
+    table.cell(dash, 1, 15, str.tostring(activeStop, format.mintick) + " · inv " + str.tostring(waveInv, format.mintick))
+
+    table.cell(dash, 0, 16, f_txt("أهداف", "Targets"), bgcolor=color.gray, text_color=color.white)
+    table.cell(dash, 1, 16, tgtKind1 + " T1 " + str.tostring(tgt1, format.mintick) + " RR " + str.tostring(rr1, "#.##") + (not na(rr1Net) ? " net " + str.tostring(rr1Net, "#.##") : "") + " | " + tgtKind2 + " T2 RR " + str.tostring(rr2, "#.##") + " | " + tgtKind3 + " T3", text_size=size.tiny)
+
+    table.cell(dash, 0, 17, f_txt("مطاردة؟", "Chase?"), bgcolor=color.gray, text_color=color.white)
+    table.cell(dash, 1, 17, chaseWarn ? f_txt("⚠ R/R ضعيف — تجنب المطاردة", "⚠ Poor R/R — no chase") : "—", text_color=chaseWarn ? color.orange : color.white)
+
+    table.cell(dash, 0, 18, f_txt("Elliott", "Elliott"), bgcolor=color.gray, text_color=color.white)
+    table.cell(dash, 1, 18, wavePrimary + " | Alt: " + waveAlt, text_size=size.small)
+
+    table.cell(dash, 0, 19, f_txt("زمن", "Time"), bgcolor=color.gray, text_color=color.white)
+    table.cell(dash, 1, 19, timeWindow + " · score " + str.tostring(timeScore, "#"), text_size=size.tiny)
+
+    table.cell(dash, 0, 20, f_txt("جودة", "Quality"), bgcolor=color.gray, text_color=color.white)
+    table.cell(dash, 1, 20, str.tostring(setupQuality) + "/9 · تجميع " + str.tostring(accScore100, "#") + " · " + globVerdict, text_size=size.tiny)
+
+    table.cell(dash, 0, 21, f_txt("إبطال", "Invalidate"), bgcolor=color.gray, text_color=color.white)
+    table.cell(dash, 1, 21, f_txt("كسر ", "Break ") + str.tostring(activeStop, format.mintick) + f_txt(" أو تصريف حجم", " or dist volume"), text_size=size.small)
+
+    string liqWarn = volAvg < effMinAvgVol ? f_txt("سيولة ضعيفة EGX", "Low EGX liquidity") : f_txt("سيولة مقبولة", "Liquidity OK")
+    string egxTxt = i_egxNote ? f_txt("عمولة ~", "Comm ~") + str.tostring(i_egxCommPct, "#.###") + "% · " + i_egxPreset : "—"
+    table.cell(dash, 0, 22, f_txt("EGX", "EGX"), bgcolor=color.gray, text_color=color.white)
+    table.cell(dash, 1, 22, liqWarn + " · حد حجم " + str.tostring(effMinAvgVol, "#") + " · " + egxTxt, text_color=color.orange, text_size=size.small)
+
+    table.cell(dash, 0, 23, f_txt("قاع / فجوة", "Bottom/Gap"), bgcolor=color.gray, text_color=color.white)
+    table.cell(dash, 1, 23, bottomTxt + " · " + (gapUp ? f_txt("فجوة↑", "Gap↑") : gapDown ? f_txt("فجوة↓", "Gap↓") : "—"), text_color=bottomConfirmed ? i_colBull : color.white, text_size=size.small)
+
+    table.cell(dash, 0, 24, f_txt("قائمة مراقبة", "Watchlist"), bgcolor=color.gray, text_color=color.white)
+    table.cell(dash, 1, 24, f_txt("رمز الشارت فقط — أضف المؤشر لكل سهم", "Chart symbol only — add per ticker"), text_size=size.small)
+
+    table.cell(dash, 0, 25, "نظام السوق", bgcolor=color.gray, text_color=color.white)
+    table.cell(dash, 1, 25, regimeTxt, text_color=heavySellMkt ? i_colBear : broadUpMkt ? i_colBull : color.white, text_size=size.tiny)
+
+    table.cell(dash, 0, 26, "دورة 12", bgcolor=color.gray, text_color=color.white)
+    table.cell(dash, 1, 26, cycle12Txt + (cycleHint != "—" ? " · " + cycleHint : ""), text_size=size.tiny)
+
+    table.cell(dash, 0, 27, "كيلي / درجات", bgcolor=color.gray, text_color=color.white)
+    table.cell(dash, 1, 27, kellyTxt + " · مض " + str.tostring(swingScore, "#") + " · است " + str.tostring(investScore, "#"), text_size=size.tiny)
+
+    table.cell(dash, 0, 28, "مضاربة / استثمار", bgcolor=color.gray, text_color=color.white)
+    table.cell(dash, 1, 28, scalpLine + " · " + investLine + " (" + str.tostring(bullHits) + "/7 · " + str.tostring(invHits) + "/7)", text_size=size.tiny)
+
+    table.cell(dash, 0, 29, "سيناريوهات", bgcolor=color.gray, text_color=color.white)
+    table.cell(dash, 1, 29, scenBull + " | " + scenBase + " | " + scenBear, text_size=size.tiny)
+
+    table.cell(dash, 0, 30, "وايكوف / FVG", bgcolor=color.gray, text_color=color.white)
+    table.cell(dash, 1, 30, (sellingClimax ? "SC" : buyingClimax ? "BC" : "—") + " · " + (fvgBull ? "FVG↑" : fvgBear ? "FVG↓" : "—"), text_size=size.tiny)
+
+    table.cell(dash, 0, 31, "ماسح بوابات", bgcolor=color.gray, text_color=color.white)
+    table.cell(dash, 1, 31, str.tostring(gatePass) + "/7 · " + (gateScreenerFull ? "✓ كامل" : gateScreener ? "✓ انتقائي" : "—"), text_color=gateScreener ? i_colBull : color.orange, text_size=size.tiny)
+
+    table.cell(dash, 0, 32, "تنويه", bgcolor=color.gray, text_color=color.white)
+    table.cell(dash, 1, 32, "OHLCV فقط — لا دلتا/مؤسسات", text_size=size.tiny)
+
+// ─── Alerts ────────────────────────────────────────────────────────────────────
+bool ab = barstate.isconfirmed
+
+alertcondition(ab and i_alertBase and phaseId == 2 and phaseId[1] != 2, "صياد: قاعدة محتملة", "صياد EGX: قاعدة محتملة {{ticker}}")
+alertcondition(ab and i_alertWave and longWaveScore >= 65 and longWaveScore[1] < 65, "صياد: درجة موجة", "صياد EGX: درجة موجة ↑ {{ticker}}")
+alertcondition(ab and i_alertVol and volKind == "توسع حجمي", "صياد: حجم استثنائي", "صياد EGX: نشاط حجمي {{ticker}}")
+alertcondition(ab and i_alertRes and nearResist and not nearResist[1], "صياد: قرب مقاومة", "صياد EGX: قرب مقاومة {{ticker}}")
+alertcondition(ab and i_alertBrk and c_breakConf, "صياد: اختراق مؤكد", "صياد EGX: اختراق مؤكد {{ticker}}")
+alertcondition(ab and i_alertRetest and retestSupport, "صياد: إعادة اختبار", "صياد EGX: إعادة اختبار {{ticker}}")
+alertcondition(ab and i_alertFail and (fakeBreakUp or phaseId == 8 and phaseId[1] != 8), "صياد: فشل/إبطال", "صياد EGX: فشل/إبطال {{ticker}}")
+alertcondition(ab and i_alertTgtSl and high >= tgt1 and high[1] < tgt1, "صياد: الهدف 1", "صياد EGX: الهدف 1 {{ticker}}")
+alertcondition(ab and i_alertTgtSl and low <= activeStop and low[1] > activeStop, "صياد: وقف", "صياد EGX: وقف {{ticker}}")
+alertcondition(ab and i_alertRank and oppRank >= effRankMin and oppRank[1] < effRankMin, "صياد: عبور درجة", "صياد EGX: فرصة /100 {{ticker}}")
+alertcondition(ab and i_alertChase and chaseWarn and not chaseWarn[1], "صياد: مطاردة", "صياد EGX: مطاردة {{ticker}}")
+alertcondition(ab and i_alertSelect and selectiveSetup and not selectiveSetup[1], "صياد: إعداد انتقائي", "صياد EGX: إعداد انتقائي {{ticker}}")
+alertcondition(ab and i_alertBottom and bottomConfirmed and not bottomConfirmed[1], "صياد: قاع/دعم", "صياد EGX: قاع/دعم {{ticker}}")
+alertcondition(ab and i_alertRegime and heavySellMkt and not heavySellMkt[1], "صياد: ضغط مؤشرات", "صياد EGX: ضغط بيعي EGX30/70 {{ticker}}")
+alertcondition(ab and i_alertWyck and sellingClimax and not sellingClimax[1], "صياد: وايكوف SC", "صياد EGX: ذروة بيع SC {{ticker}}")
+alertcondition(ab and i_alertScreener and gateScreenerFull and not gateScreenerFull[1], "صياد: ماسح 7/7", "صياد EGX: بوابات 7/7 {{ticker}}")
+alertcondition(ab and i_alertCycle4 and cycle12 == 4 and cycle12[1] != 4, "صياد: دورة 4", "صياد EGX: مرحلة تجميع (4) {{ticker}}")
+alertcondition(ab and fvgBull and not fvgBull[1], "صياد: FVG صاعد", "صياد EGX: FVG صاعد {{ticker}}")
+
+plot(oppRank, "درجة الفرصة", display=display.none)
+plot(gatePass, "بوابات_7", display=display.data_window)
+plot(gateScreener ? 1 : 0, "ماسح_بوابات", display=display.data_window)
+plot(i_showKelly ? kellyPct : na, "كيلي_%", display=display.data_window)
+plot(i_useCycle12 ? cycle12 : na, "دورة_12", display=display.data_window)
+plot(longWaveScore, "درجة الموجة", display=display.none)

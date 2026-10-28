@@ -1,0 +1,30 @@
+//@version=6
+indicator("EGX Tool 85 VCP مينرفيني — Minervini VCP", shorttitle="EGX T-VCP", overlay=true, max_labels_count=80, max_lines_count=80, max_boxes_count=40, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة ز أنظمة · #85/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+float r1 = ta.highest(high, 15) - ta.lowest(low, 15)
+float r2 = ta.highest(high, 10) - ta.lowest(low, 10)
+float r3 = ta.highest(high, 5) - ta.lowest(low, 5)
+bool contract = r1 > r2 and r2 > r3
+float volMa = ta.sma(volume, 20)
+bool dry = ta.sma(volume, 5) < volMa * 0.85
+float pivot = ta.highest(high, 15)
+bool fire = contract and dry and close > pivot[1] and volume > volMa * 1.4
+int vote = fire ? 1 : contract and dry ? 0 : close > ta.ema(close, 50) ? 1 : -1
+plot(pivot, "Pivot", color=color.yellow, style=plot.style_linebr)
+plotshape(fire, "VCP", shape.triangleup, location.belowbar, color.lime, size=size.small)
+
+plot(vote, "EGXT_VCP_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_VCP_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_VCP_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "VCP", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-VCP صاعد", "EGX Tool VCP: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-VCP هابط", "EGX Tool VCP: vote هابط")

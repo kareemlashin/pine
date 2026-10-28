@@ -1,0 +1,16 @@
+name: validate-egx
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  watchlist-and-sectors:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate watchlist files
+        run: python3 scripts/validate_egx_watchlist.py
+      - name: Check sector map synced to BOARD200
+        run: python3 scripts/gen_egx_sector_pine.py --check

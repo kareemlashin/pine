@@ -1,0 +1,626 @@
+//@version=6
+indicator("EGX Market Intelligence Pro", shorttitle="EGX MI Pro", overlay=true, max_labels_count=300, max_lines_count=300, max_boxes_count=50, calc_bars_count=5000)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ⚠ LEGACY — استخدم EGX_الاخير · docs/legacy/README.md
+// EGX MARKET INTELLIGENCE PRO — Pine Script v6
+// محركات: نظام السوق · حجم/VSA · ملف حجم تقريبي · تجميع/تصريف · هيكل · دورات · اختراق · أهداف · MTF
+// استراتيجية الاختبار: pine/EGX_MARKET_INTELLIGENCE_PRO_STRATEGY.pine
+// ═══════════════════════════════════════════════════════════════════════════════
+
+string G_CORE = "═══ عام / EGX ═══"
+bool confirmBars = input.bool(true, "إشارات نهائية عند إغلاق الشمعة", group=G_CORE)
+float minAvgVol = input.float(1500.0, "حد أدنى متوسط حجم (تحذير جودة)", minval=0.0, group=G_CORE)
+bool blockLimitZone = input.bool(true, "تحذير قرب halt/LULD", group=G_CORE)
+float limitPct = input.float(9.0, "تحذير halt % (نشط)", minval=3.0, maxval=10.0, step=0.5, group=G_CORE)
+string egxBoard = input.string("نشط (EGX100)", "لوحة", options=["نشط (EGX100)", "EGX30 (بيع مكشوف)", "SME تميّز", "SME نايل", "غير نشط"], group=G_CORE)
+string egxTz = input.string("Africa/Cairo", "المنطقة الزمنية", group=G_CORE)
+
+string G_MKT = "═══ محرك 1: نظام السوق ═══"
+bool useBench = input.bool(true, "مؤشر مرجعي EGX (يدوي)", group=G_MKT)
+string benchSym = input.symbol("EGX:EGX30", "رمز المؤشر المرجعي", group=G_MKT)
+string benchSym2 = input.symbol("EGX:EGX70EWI", "رمز اتساع (اختياري)", group=G_MKT)
+int rsLen = input.int(20, "فترة RS", minval=5, group=G_MKT)
+
+string G_TA = "═══ اتجاه / تقلب ═══"
+int emaFast = input.int(20, "EMA سريع", minval=1, group=G_TA)
+int emaMid = input.int(50, "EMA متوسط", minval=1, group=G_TA)
+int emaSlow = input.int(200, "EMA بطيء", minval=1, group=G_TA)
+int adxLen = input.int(14, "ADX", minval=2, group=G_TA)
+float adxTrendMin = input.float(20.0, "ADX — حد اتجاه", minval=10.0, group=G_TA)
+int atrLen = input.int(14, "ATR", minval=1, group=G_TA)
+
+string G_VOL = "═══ محرك 2: Volume Intelligence ═══"
+int volMaLen = input.int(20, "متوسط الحجم", minval=5, group=G_VOL)
+int volLookback = input.int(252, "نافذة RVOL طويلة", minval=30, group=G_VOL)
+float rvolLow = input.float(0.65, "RVOL — منخفض <", minval=0.2, step=0.05, group=G_VOL)
+float rvolHigh = input.float(1.35, "RVOL — مرتفع ≥", minval=1.0, step=0.05, group=G_VOL)
+float rvolExtreme = input.float(2.0, "RVOL — استثنائي ≥", minval=1.5, step=0.1, group=G_VOL)
+int adLen = input.int(14, "CMF / A/D", minval=5, group=G_VOL)
+bool trackVolEvents = input.bool(true, "أحداث حجم + عائد لاحق", group=G_VOL)
+
+string G_VP = "═══ محرك 3: ملف حجم تقريبي / VWAP ═══"
+int vpBars = input.int(60, "نافذة ملف الحجم (bars)", minval=20, maxval=200, group=G_VP)
+int vpBins = input.int(24, "عدد مستويات السعر (تقريب)", minval=8, maxval=40, group=G_VP)
+bool showVpLevels = input.bool(true, "خطوط POC / VA", group=G_VP)
+string vwapAnchor = input.string("آخر قاع محوري", "ارتكاز AVWAP", options=["آخر قاع محوري", "آخر قمة محورية", "شمعة حجم استثنائي", "يدوي — bars للخلف"], group=G_VP)
+int manualAnchorBars = input.int(50, "ارتكاز يدوي (bars)", minval=5, group=G_VP)
+float vwapSigma = input.float(1.0, "AVWAP ±σ", minval=0.5, step=0.25, group=G_VP)
+
+string G_AD = "═══ محرك 4: تجميع / تصريف (Score) ═══"
+int consolLen = input.int(15, "طول نطاق (bars)", minval=5, group=G_AD)
+float squeezeAtr = input.float(0.85, "تماسك ATR ×", minval=0.5, step=0.05, group=G_AD)
+float accAlertMin = input.float(55.0, "تنبيه: درجة تجميع ≥", minval=30, maxval=90, group=G_AD)
+float distAlertMin = input.float(55.0, "تنبيه: درجة تصريف ≥", minval=30, maxval=90, group=G_AD)
+
+string G_STRUCT = "═══ محرك 5: هيكل السوق ═══"
+int structPivot = input.int(5, "تأكيد Pivot (L/R)", minval=2, maxval=15, group=G_STRUCT)
+float eqTolPct = input.float(0.35, "تساوي قمم/قيعان %", minval=0.1, step=0.05, group=G_STRUCT)
+bool showStructMarks = input.bool(true, "علامات BOS/CHoCH/Sweep", group=G_STRUCT)
+
+string G_HIST = "═══ محرك 6: تشابه تاريخي ═══"
+bool useHistSim = input.bool(true, "مسح حالات مشابهة (على آخر bar)", group=G_HIST)
+int histLook = input.int(180, "نافذة المسح", minval=40, maxval=400, group=G_HIST)
+float histMinSim = input.float(60.0, "حد تشابه %", minval=40, maxval=85, group=G_HIST)
+
+string G_BR = "═══ محرك 7: اختراق ═══"
+int srLook = input.int(120, "S/R تاريخي", minval=30, group=G_BR)
+float breakRvolMin = input.float(1.15, "RVOL أدنى للتأكيد بالحجم", minval=1.0, step=0.05, group=G_BR)
+bool requireRetest = input.bool(false, "اشتراط إعادة اختبار للإشارة", group=G_BR)
+
+string G_RISK = "═══ محرك 8: أهداف / مخاطرة ═══"
+float stopAtrMult = input.float(1.5, "وقف مرجعي × ATR", minval=0.5, step=0.1, group=G_RISK)
+float minRRwarn = input.float(1.2, "تحذير R/R أقل من", minval=0.8, step=0.1, group=G_RISK)
+bool showRiskLines = input.bool(true, "خطوط دخول/وقف/أهداف", group=G_RISK)
+
+string G_MTF = "═══ محرك 9: Multi-Timeframe ═══"
+bool useMtf = input.bool(true, "اتجاه MTF", group=G_MTF)
+string tfWeek = input.timeframe("W", "أسبوعي", group=G_MTF)
+string tfDay = input.timeframe("D", "يومي", group=G_MTF)
+string tfHour = input.timeframe("60", "ساعة (اختياري)", group=G_MTF)
+
+string G_UI = "═══ لوحة المعلومات ═══"
+bool showDash = input.bool(true, "Dashboard", group=G_UI)
+string dashPos = input.string("top_right", "موقع اللوحة", options=["top_right", "top_left", "bottom_right", "bottom_left", "middle_right"], group=G_UI)
+bool showEma = input.bool(true, "EMA 20/50/200", group=G_UI)
+
+bool sigOk = not confirmBars or barstate.isconfirmed
+
+f_pts100(float pts, float ptMax) =>
+    ptMax > 0 ? math.min(100.0, math.max(0.0, pts / ptMax * 100.0)) : 0.0
+
+const float ACC_PT_MAX = 104.0
+const float DIST_PT_MAX = 103.0
+
+f_pos(string p) =>
+    p == "top_left" ? position.top_left : p == "bottom_right" ? position.bottom_right : p == "bottom_left" ? position.bottom_left : p == "middle_right" ? position.middle_right : position.top_right
+
+// ─── أساسيات ───
+float ema20 = ta.ema(close, emaFast)
+float ema50 = ta.ema(close, emaMid)
+float ema200 = ta.ema(close, emaSlow)
+float atr = ta.atr(atrLen)
+[diPlus, diMinus, adx] = ta.dmi(adxLen, adxLen)
+bool trendUp = ema20 > ema50 and ema50 > ema200 and close > ema50
+bool trendDn = ema20 < ema50 and ema50 < ema200 and close < ema50
+bool adxTrend = adx >= adxTrendMin
+bool adxUp = adxTrend and diPlus > diMinus
+bool adxDn = adxTrend and diMinus > diPlus
+
+float volMa = ta.sma(volume, volMaLen)
+bool dataThin = minAvgVol > 0 and volMa < minAvgVol
+float rvol = volume / math.max(volMa, 1.0)
+float rvolLong = volume / math.max(ta.sma(volume, math.min(volLookback, bar_index + 1)), 1.0)
+string rvolClass = rvol >= rvolExtreme ? "استثنائي" : rvol >= rvolHigh ? "مرتفع" : rvol <= rvolLow ? "منخفض" : "طبيعي"
+
+float spread = high - low
+float closePos = spread > syminfo.mintick ? (close - low) / spread : 0.5
+float mfm = ((close - low) - (high - close)) / math.max(spread, syminfo.mintick)
+float cmf = ta.sma(mfm * volume, adLen) / math.max(ta.sma(volume, adLen), 1.0)
+float obv = ta.obv
+float obvSlope = ta.linreg(obv, 10, 0) - ta.linreg(obv, 10, 1)
+bool obvBullDiv = sigOk and low < low[5] and obv > obv[5]
+bool obvBearDiv = sigOk and high > high[5] and obv < obv[5]
+
+// VSA patterns (احتمالية)
+bool vsaHighVolNarrow = rvol >= rvolHigh and spread < atr * 0.35
+bool vsaHighVolWideUp = rvol >= rvolHigh and close > open and spread > atr * 0.6
+bool vsaHighVolNoFollow = rvol >= rvolHigh and math.abs(close - close[1]) < atr * 0.2
+bool vsaRejectRes = rvol >= rvolHigh and closePos < 0.35 and high >= ta.highest(high, 10) * 0.995
+bool vsaDryUp = rvol <= rvolLow and spread < atr * 0.4
+string vsaHint = vsaHighVolNarrow ? "حجم↑ مدى ضيق" : vsaHighVolWideUp ? "حجم↑ شمعة واسعة" : vsaRejectRes ? "رفض قرب قمة" : vsaHighVolNoFollow ? "حجم↑ بلا متابعة" : vsaDryUp ? "انكماش حجم" : "—"
+
+float dPrev = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+float dayChg = dPrev > 0 ? (close - dPrev) / dPrev * 100.0 : 0.0
+float haltPctMi = egxBoard == "SME تميّز" or egxBoard == "SME نايل" or egxBoard == "غير نشط" ? 5.0 : 10.0
+float luldPctMi = egxBoard == "غير نشط" ? 5.0 : (egxBoard == "SME تميّز" or egxBoard == "SME نايل" ? 10.0 : 20.0)
+float haltWarnMi = math.min(limitPct, math.max(haltPctMi - 1.0, haltPctMi * 0.9))
+bool nearLimit = blockLimitZone and dPrev > 0 and (dayChg >= haltWarnMi or dayChg >= luldPctMi - 0.25 or dayChg <= -haltWarnMi)
+
+// ─── MTF ───
+f_tfTrend(string tf) =>
+    float c = request.security(syminfo.tickerid, tf, close, barmerge.gaps_off, barmerge.lookahead_off)
+    float e = request.security(syminfo.tickerid, tf, ta.ema(close, emaMid), barmerge.gaps_off, barmerge.lookahead_off)
+    c > e ? 1 : c < e ? -1 : 0
+
+int trW = useMtf ? f_tfTrend(tfWeek) : 0
+int trD = useMtf ? f_tfTrend(tfDay) : 0
+int trH = useMtf ? f_tfTrend(tfHour) : 0
+string mtfTxt = useMtf ? "W:" + str.tostring(trW) + " D:" + str.tostring(trD) + " H:" + str.tostring(trH) : "—"
+
+// ─── RS vs benchmark ───
+float benchRoc = useBench ? request.security(benchSym, timeframe.period, ta.roc(close, rsLen), barmerge.gaps_off, barmerge.lookahead_off) : na
+float bench2Roc = useBench ? request.security(benchSym2, timeframe.period, ta.roc(close, rsLen), barmerge.gaps_off, barmerge.lookahead_off) : na
+float stkRoc = ta.roc(close, rsLen)
+float rsSpread = not na(benchRoc) ? stkRoc - benchRoc : na
+bool rsStrong = not na(rsSpread) and rsSpread > 0
+
+f_benchRegime() =>
+    float e20 = ta.ema(close, 20)
+    float e50 = ta.ema(close, 50)
+    int sc = 0
+    sc += close > e20 ? 1 : close < e20 ? -1 : 0
+    sc += e20 > e50 ? 1 : e20 < e50 ? -1 : 0
+    sc
+
+int benchReg = useBench ? request.security(benchSym, timeframe.period, f_benchRegime(), barmerge.gaps_off, barmerge.lookahead_off) : 0
+int benchReg70 = useBench ? request.security(benchSym2, timeframe.period, f_benchRegime(), barmerge.gaps_off, barmerge.lookahead_off) : 0
+string mktRegimeTxt = not useBench ? "غير متاح — حدد المؤشر" : benchReg >= 2 and benchReg70 >= 1 ? "مؤشر: صاعد + اتساع 70" : benchReg >= 2 ? "مؤشر: صاعد" : benchReg <= -2 ? "مؤشر: هابط" : "مؤشر: عرضي/مختلط"
+
+// ─── Pivots / structure ───
+float ph = ta.pivothigh(high, structPivot, structPivot)
+float pl = ta.pivotlow(low, structPivot, structPivot)
+
+var float sh1 = na
+var float sh2 = na
+var float sl1 = na
+var float sl2 = na
+var float lastSH = na
+var float lastSL = na
+var int lastSHBar = na
+var int lastSLBar = na
+var int structDir = 0
+var string structTxt = "—"
+
+if not na(ph)
+    sh2 := sh1
+    sh1 := ph
+    lastSH := ph
+    lastSHBar := bar_index - structPivot
+if not na(pl)
+    sl2 := sl1
+    sl1 := pl
+    lastSL := pl
+    lastSLBar := bar_index - structPivot
+
+float phs = ta.pivothigh(high, structPivot, structPivot)
+float pls = ta.pivotlow(low, structPivot, structPivot)
+var float actHigh = na
+var float actLow = na
+if not na(phs)
+    actHigh := phs
+if not na(pls)
+    actLow := pls
+
+bool bosUp = sigOk and not na(actHigh) and close > actHigh and close[1] <= actHigh
+bool bosDn = sigOk and not na(actLow) and close < actLow and close[1] >= actLow
+bool chochUp = false
+bool chochDn = false
+if bosUp
+    chochUp := structDir < 0
+    structDir := 1
+    structTxt := chochUp ? "CHoCH ↑" : "BOS ↑"
+    actHigh := na
+if bosDn
+    chochDn := structDir > 0
+    structDir := -1
+    structTxt := chochDn ? "CHoCH ↓" : "BOS ↓"
+    actLow := na
+
+bool eqHighs = not na(sh1) and not na(sh2) and math.abs(sh1 - sh2) / math.max(sh1, syminfo.mintick) * 100.0 <= eqTolPct
+bool eqLows = not na(sl1) and not na(sl2) and math.abs(sl1 - sl2) / math.max(sl1, syminfo.mintick) * 100.0 <= eqTolPct
+bool sweepHigh = sigOk and not na(lastSH) and high > lastSH and close < lastSH
+bool sweepLow = sigOk and not na(lastSL) and low < lastSL and close > lastSL
+
+// HH/HL heuristic
+bool hh = not na(sh1) and not na(sh2) and sh1 > sh2
+bool hl = not na(sl1) and not na(sl2) and sl1 > sl2
+bool lh = not na(sh1) and not na(sh2) and sh1 < sh2
+bool ll = not na(sl1) and not na(sl2) and sl1 < sl2
+string hhhlTxt = hh and hl ? "HH/HL" : lh and ll ? "LH/LL" : "مختلط"
+
+// ─── Range / squeeze ───
+float rangeHi = ta.highest(high, consolLen)
+float rangeLo = ta.lowest(low, consolLen)
+float rangeW = rangeHi - rangeLo
+float atrMa = ta.sma(atr, 20)
+bool squeeze = atr < atrMa * squeezeAtr
+bool rangeContract = rangeW < (ta.highest(high, consolLen * 2) - ta.lowest(low, consolLen * 2)) * 0.55
+bool failedLow = not na(lastSL) and low <= lastSL * 1.008 and close > lastSL
+bool retestSup = sigOk and not na(lastSL) and low <= lastSL * 1.005 and close > lastSL
+bool retestRes = sigOk and not na(lastSH) and high >= lastSH * 0.995 and close < lastSH
+bool swingBreakUp = sigOk and not na(lastSH) and close > lastSH and close[1] <= lastSH
+bool fakeBreakUp = sigOk and not na(lastSH) and high > lastSH and close < lastSH
+bool fakeBreakDn = sigOk and not na(lastSL) and low < lastSL and close > lastSL
+bool supportBreak = sigOk and not na(lastSL) and close < lastSL and close[1] >= lastSL
+
+float zoneW = atr * 0.35
+bool inDemandZone = not na(lastSL) and low <= lastSL + zoneW and high >= lastSL - zoneW
+bool inSupplyZone = not na(lastSH) and low <= lastSH + zoneW and high >= lastSH - zoneW
+
+// ─── Acc / Dist scores with factors ───
+var string accFactors = "—"
+var string distFactors = "—"
+float accScore = 0.0
+float distScore = 0.0
+
+accScore += rangeContract ? 12.0 : 0.0
+accScore += squeeze ? 10.0 : 0.0
+accScore += vsaHighVolNarrow ? 12.0 : 0.0
+accScore += failedLow ? 12.0 : 0.0
+accScore += retestSup ? 10.0 : 0.0
+accScore += fakeBreakDn ? 8.0 : 0.0
+accScore += cmf > 0.05 ? 8.0 : 0.0
+accScore += obvSlope > 0 ? 8.0 : 0.0
+accScore += obvBullDiv ? 8.0 : 0.0
+accScore += rsStrong ? 5.0 : 0.0
+accScore += inDemandZone ? 5.0 : 0.0
+accScore += eqLows ? 4.0 : 0.0
+
+distScore += fakeBreakUp ? 14.0 : 0.0
+distScore += vsaHighVolNoFollow and close < open ? 10.0 : 0.0
+distScore += vsaRejectRes ? 12.0 : 0.0
+distScore += retestRes and rvol >= rvolHigh ? 10.0 : 0.0
+distScore += cmf < -0.05 ? 8.0 : 0.0
+distScore += obvSlope < 0 ? 8.0 : 0.0
+distScore += obvBearDiv ? 8.0 : 0.0
+distScore += supportBreak ? 16.0 : 0.0
+distScore += sweepHigh ? 8.0 : 0.0
+distScore += inSupplyZone ? 5.0 : 0.0
+distScore += eqHighs ? 4.0 : 0.0
+
+float accRaw = accScore
+float distRaw = distScore
+accScore := f_pts100(accRaw, ACC_PT_MAX)
+distScore := f_pts100(distRaw, DIST_PT_MAX)
+
+accFactors := (rangeContract ? "نطاق;" : "") + (squeeze ? "تماسك;" : "") + (vsaHighVolNarrow ? "VSAضيق;" : "") + (failedLow ? "فشلقاع;" : "") + (retestSup ? "RTدعم;" : "") + (cmf > 0.05 ? "CMF+;" : "") + (obvBullDiv ? "OBV↑;" : "")
+distFactors := (fakeBreakUp ? "اختراقكاذب;" : "") + (vsaRejectRes ? "رفض;" : "") + (retestRes ? "RTمقا;" : "") + (supportBreak ? "كسردعم;" : "") + (obvBearDiv ? "OBV↓;" : "")
+
+// ─── Breakout engine ───
+float histRes = ta.highest(high, srLook)
+float histSup = ta.lowest(low, srLook)
+bool breakClose = sigOk and close > rangeHi[1] and close[1] <= rangeHi[1]
+bool breakVol = rvol >= breakRvolMin or rvolLong >= breakRvolMin
+bool breakConfirmed = breakClose and breakVol and not fakeBreakUp
+bool breakPotential = breakClose and not breakVol
+bool breakRetestOk = requireRetest ? retestSup and structDir == 1 : retestSup
+int breakCode = fakeBreakUp ? 5 : breakConfirmed ? 4 : breakRetestOk ? 3 : breakPotential ? 2 : squeeze and close > ema20 ? 1 : 0
+string breakTxt = breakCode == 5 ? "فشل / كاذب" : breakCode == 4 ? "مؤكد (إغلاق+حجم)" : breakCode == 3 ? "إعادة اختبار" : breakCode == 2 ? "محتمل" : breakCode == 1 ? "مراقبة تماسك" : "—"
+
+// ─── Volume Profile approximation (volume at close bin) ───
+f_vp() =>
+    int n = math.min(vpBars, bar_index)
+    float hi = ta.highest(high, n)
+    float lo = ta.lowest(low, n)
+    float step = (hi - lo) / math.max(vpBins, 1)
+    step := step <= syminfo.mintick ? syminfo.mintick : step
+    array<float> bins = array.new_float(vpBins, 0.0)
+    for i = 0 to n - 1
+        float px = close[i]
+        int b = int(math.floor((px - lo) / step))
+        b := math.max(0, math.min(vpBins - 1, b))
+        array.set(bins, b, array.get(bins, b) + volume[i])
+    int pocIdx = 0
+    float maxV = array.get(bins, 0)
+    for b = 1 to vpBins - 1
+        float v = array.get(bins, b)
+        if v > maxV
+            maxV := v
+            pocIdx := b
+    float poc = lo + (pocIdx + 0.5) * step
+    float totalV = 0.0
+    for b = 0 to vpBins - 1
+        totalV += array.get(bins, b)
+    float target = totalV * 0.70
+    float acc = array.get(bins, pocIdx)
+    int loIdx = pocIdx
+    int hiIdx = pocIdx
+    while acc < target and (loIdx > 0 or hiIdx < vpBins - 1)
+        float vLo = loIdx > 0 ? array.get(bins, loIdx - 1) : 0.0
+        float vHi = hiIdx < vpBins - 1 ? array.get(bins, hiIdx + 1) : 0.0
+        if vLo >= vHi and loIdx > 0
+            loIdx -= 1
+            acc += vLo
+        else if hiIdx < vpBins - 1
+            hiIdx += 1
+            acc += vHi
+        else if loIdx > 0
+            loIdx -= 1
+            acc += array.get(bins, loIdx)
+        else
+            break
+    float vah = lo + (hiIdx + 1) * step
+    float val = lo + loIdx * step
+    [poc, vah, val]
+
+[pocPx, vahPx, valPx] = f_vp()
+
+// ─── Anchored VWAP ───
+var float avPV = 0.0
+var float avV = 0.0
+var float avP2V = 0.0
+var int avStart = na
+
+bool extremeVolBar = rvol >= rvolExtreme
+bool manualVwap = vwapAnchor == "يدوي — bars للخلف"
+if not manualVwap and vwapAnchor == "آخر قاع محوري" and not na(pl)
+    avStart := bar_index - structPivot
+    avPV := 0.0
+    avV := 0.0
+    avP2V := 0.0
+else if not manualVwap and vwapAnchor == "آخر قمة محورية" and not na(ph)
+    avStart := bar_index - structPivot
+    avPV := 0.0
+    avV := 0.0
+    avP2V := 0.0
+else if not manualVwap and vwapAnchor == "شمعة حجم استثنائي" and sigOk and extremeVolBar
+    avStart := bar_index
+    avPV := 0.0
+    avV := 0.0
+    avP2V := 0.0
+
+if not manualVwap and not na(avStart) and bar_index >= avStart
+    float tpA = hlc3
+    avPV += tpA * volume
+    avV += volume
+    avP2V += tpA * tpA * volume
+
+f_rollVwap(int n) =>
+    float sp = 0.0
+    float sv = 0.0
+    float sp2 = 0.0
+    int lim = math.min(n, bar_index)
+    for i = 0 to lim - 1
+        float tp = hlc3[i]
+        sp += tp * volume[i]
+        sv += volume[i]
+        sp2 += tp * tp * volume[i]
+    float vw = sv > 0 ? sp / sv : na
+    float vr = sv > 0 ? math.max(sp2 / sv - vw * vw, 0.0) : 0.0
+    [vw, math.sqrt(vr)]
+
+[avManual, avManualSd] = f_rollVwap(manualAnchorBars)
+float avwapLater = manualVwap ? avManual : avV > 0 ? avPV / avV : na
+float avSd = manualVwap ? avManualSd : avV > 0 ? math.sqrt(math.max(avP2V / avV - avwapLater * avwapLater, 0.0)) : 0.0
+string vwapStat = na(avwapLater) ? "—" : close > avwapLater + avSd * vwapSigma ? "فوق +σ" : close < avwapLater - avSd * vwapSigma ? "تحت -σ" : close > avwapLater ? "فوق AVWAP" : "تحت AVWAP"
+
+if not na(avwapLater) and close <= avwapLater
+    accScore := math.min(100.0, accScore + (close <= avwapLater - avSd * vwapSigma ? 5.0 : 2.0))
+
+// ─── Stock regime (8 states) — بعد الدرجات النهائية ───
+int regimeCode = 8
+string regimeName = "غير واضح / بيانات ناقصة"
+if dataThin
+    regimeCode := 8
+    regimeName := "بيانات رفيعة — حذر"
+else if fakeBreakUp or sweepHigh
+    regimeCode := 7
+    regimeName := "اختراق كاذب محتمل"
+else if breakConfirmed or (swingBreakUp and breakVol)
+    regimeCode := 6
+    regimeName := "اختراق مؤكد نسبيًا"
+else if accScore >= distScore + 15 and (rangeContract or squeeze)
+    regimeCode := 4
+    regimeName := "تجميع محتمل"
+else if distScore >= accScore + 15
+    regimeCode := 5
+    regimeName := "تصريف محتمل"
+else if trendUp and adxUp
+    regimeCode := 1
+    regimeName := "اتجاه صاعد"
+else if trendDn and adxDn
+    regimeCode := 2
+    regimeName := "اتجاه هابط"
+else if not adxTrend
+    regimeCode := 3
+    regimeName := "تذبذب عرضي"
+else
+    regimeCode := 8
+    regimeName := "غير واضح"
+
+// ─── Volume events ───
+var int evOff = -1
+var float evRvol = na
+var string evFwd = "—"
+if trackVolEvents and sigOk and rvol >= rvolExtreme
+    evOff := 0
+    evRvol := rvol
+else if evOff >= 0 and evOff < 65
+    evOff += 1
+
+f_fwd(int n) =>
+    evOff >= n ? (close - close[evOff]) / close[evOff] * 100.0 : na
+
+if barstate.islast and evOff >= 5
+    evFwd := "+5/10/20/60=" + str.tostring(f_fwd(5), "#.#") + "/" + str.tostring(f_fwd(10), "#.#") + "/" + str.tostring(f_fwd(20), "#.#") + "/" + str.tostring(evOff >= 60 ? f_fwd(60) : na, "#.#") + "%"
+
+// ─── Historical similarity (last bar only) ───
+var string histTxt = "—"
+var int histN = 0
+var float histMed = na
+var float histAvg = na
+var float histWin = na
+
+f_feat(int off) =>
+    float atrO = atr[off]
+    float rv = volMa[off] > 0 ? volume[off] / volMa[off] : 1.0
+    float rng = ta.highest(high, consolLen)[off] - ta.lowest(low, consolLen)[off]
+    float rngN = atrO > 0 ? rng / atrO : 0.0
+    float distE = atrO > 0 ? (close[off] - ema50[off]) / atrO : 0.0
+    [rngN, rv, distE, accScore[off], distScore[off]]
+
+f_sim(int off) =>
+    [r0, v0, e0, a0, d0] = f_feat(0)
+    [r1, v1, e1, a1, d1] = f_feat(off)
+    float s = 100.0
+    s -= math.min(30.0, math.abs(r0 - r1) * 8.0)
+    s -= math.min(25.0, math.abs(v0 - v1) * 10.0)
+    s -= math.min(20.0, math.abs(e0 - e1) * 6.0)
+    s -= math.min(15.0, math.abs(a0 - a1) * 0.25)
+    s -= math.min(10.0, math.abs(d0 - d1) * 0.25)
+    math.max(0.0, s)
+
+f_ret(int off, int n) =>
+    off >= n ? (close[off - n] - close[off]) / close[off] * 100.0 : na
+
+if barstate.islast and useHistSim
+    int lb = math.min(histLook, bar_index - 25)
+    lb := math.max(lb, 25)
+    histN := 0
+    float sum5 = 0.0
+    float sum10 = 0.0
+    float sum20 = 0.0
+    float sum60 = 0.0
+    int wins = 0
+    float best20 = -1e10
+    float worst20 = 1e10
+    float sumMfe = 0.0
+    float sumMae = 0.0
+    array<float> rets = array.new_float()
+    for off = 15 to lb
+        if f_sim(off) >= histMinSim
+            float r20 = f_ret(off, 20)
+            if not na(r20)
+                histN += 1
+                sum5 += nz(f_ret(off, 5), 0.0)
+                sum10 += nz(f_ret(off, 10), 0.0)
+                sum20 += r20
+                sum60 += nz(f_ret(off, 60), 0.0)
+                wins += r20 > 0 ? 1 : 0
+                best20 := math.max(best20, r20)
+                worst20 := math.min(worst20, r20)
+                array.push(rets, r20)
+                float mfe = 0.0
+                float mae = 0.0
+                for j = 1 to 20
+                    float rj = (close[off - j] - close[off]) / close[off] * 100.0
+                    mfe := math.max(mfe, rj)
+                    mae := math.min(mae, rj)
+                sumMfe += mfe
+                sumMae += mae
+    if histN >= 3
+        array.sort(rets, order.ascending)
+        histMed := array.get(rets, int(array.size(rets) / 2))
+        histAvg := sum20 / histN
+        histWin := histN > 0 ? wins / histN * 100.0 : na
+        histTxt := "n=" + str.tostring(histN) + " μ5/10/20/60=" + str.tostring(sum5 / histN, "#.#") + "/" + str.tostring(sum10 / histN, "#.#") + "/" + str.tostring(histAvg, "#.#") + "/" + str.tostring(sum60 / histN, "#.#") + "% med20=" + str.tostring(histMed, "#.#") + " ↑=" + str.tostring(histWin, "#") + "% b/w=" + str.tostring(best20, "#.#") + "/" + str.tostring(worst20, "#.#") + " MFE/MAE=" + str.tostring(sumMfe / histN, "#.#") + "/" + str.tostring(sumMae / histN, "#.#")
+    else
+        histTxt := "عينة غير كافية"
+        histMed := na
+        histAvg := na
+        histWin := na
+
+// ─── Targets / R:R ───
+float entryZ = nz(lastSL, close) + atr * 0.15
+float invalid = nz(lastSL, low) - atr * 0.25
+float stopRef = nz(lastSL, close) - atr * stopAtrMult
+float risk = math.max(close - stopRef, syminfo.mintick)
+float t1 = close + risk * 1.0
+float t2 = close + math.max(rangeW, atr * 2.5)
+float t3 = histRes
+t2 := math.max(t2, t1 + atr)
+t3 := math.max(t3, t2 + atr * 0.5)
+float rr1 = (t1 - close) / risk
+bool rrWarn = rr1 < minRRwarn or (not na(lastSH) and lastSH - close < atr * 1.5)
+
+// ─── Dashboard ───
+var table dash = table.new(f_pos(dashPos), 2, 18, border_width=1)
+if showDash and barstate.islast
+    color hdr = color.new(color.black, 10)
+    table.cell(dash, 0, 0, "EGX MI Pro", bgcolor=hdr, text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 0, syminfo.ticker, bgcolor=hdr, text_color=color.yellow, text_size=size.small)
+    table.cell(dash, 0, 1, "نظام السهم", text_size=size.tiny)
+    table.cell(dash, 1, 1, regimeName, text_size=size.tiny, text_color=regimeCode == 1 ? color.lime : regimeCode == 2 ? color.red : regimeCode == 4 ? color.teal : regimeCode == 5 ? color.orange : color.gray)
+    table.cell(dash, 0, 2, "نظام المؤشر", text_size=size.tiny)
+    table.cell(dash, 1, 2, mktRegimeTxt, text_size=size.tiny)
+    table.cell(dash, 0, 3, "MTF", text_size=size.tiny)
+    table.cell(dash, 1, 3, mtfTxt, text_size=size.tiny)
+    table.cell(dash, 0, 4, "RVOL", text_size=size.tiny)
+    table.cell(dash, 1, 4, str.tostring(rvol, "#.##") + " · " + rvolClass, text_size=size.tiny)
+    table.cell(dash, 0, 5, "VSA", text_size=size.tiny)
+    table.cell(dash, 1, 5, vsaHint, text_size=size.tiny)
+    table.cell(dash, 0, 6, "تجميع Score", text_size=size.tiny)
+    table.cell(dash, 1, 6, str.tostring(accScore, "#") + " | " + accFactors, text_size=size.tiny, text_color=color.teal)
+    table.cell(dash, 0, 7, "تصريف Score", text_size=size.tiny)
+    table.cell(dash, 1, 7, str.tostring(distScore, "#") + " | " + distFactors, text_size=size.tiny, text_color=color.orange)
+    table.cell(dash, 0, 8, "هيكل", text_size=size.tiny)
+    table.cell(dash, 1, 8, structTxt + " · " + hhhlTxt, text_size=size.tiny)
+    table.cell(dash, 0, 9, "اختراق", text_size=size.tiny)
+    table.cell(dash, 1, 9, breakTxt, text_size=size.tiny)
+    table.cell(dash, 0, 10, "AVWAP", text_size=size.tiny)
+    table.cell(dash, 1, 10, vwapStat, text_size=size.tiny)
+    table.cell(dash, 0, 11, "POC≈ / VA", text_size=size.tiny)
+    table.cell(dash, 1, 11, str.tostring(pocPx, "#.##") + " · " + str.tostring(valPx, "#.##") + "-" + str.tostring(vahPx, "#.##"), text_size=size.tiny)
+    table.cell(dash, 0, 12, "تشابه تاريخي", text_size=size.tiny)
+    table.cell(dash, 1, 12, histTxt, text_size=size.tiny)
+    table.cell(dash, 0, 13, "حدث حجم", text_size=size.tiny)
+    table.cell(dash, 1, 13, evOff >= 0 ? "RV" + str.tostring(evRvol, "#.#") + " " + evFwd : "—", text_size=size.tiny)
+    table.cell(dash, 0, 14, "Entry / Invalid", text_size=size.tiny)
+    table.cell(dash, 1, 14, str.tostring(entryZ, "#.##") + " / " + str.tostring(invalid, "#.##"), text_size=size.tiny)
+    table.cell(dash, 0, 15, "T1-T3 / R:R", text_size=size.tiny)
+    table.cell(dash, 1, 15, str.tostring(t1, "#.##") + " · " + str.tostring(t2, "#.##") + " · " + str.tostring(t3, "#.##") + " | " + str.tostring(rr1, "#.#"), text_size=size.tiny)
+    table.cell(dash, 0, 16, "جودة البيانات", text_size=size.tiny)
+    table.cell(dash, 1, 16, dataThin ? "حجم ضعيف" : nearLimit ? "قرب حد EGX" : "OK", text_color=dataThin or nearLimit ? color.orange : color.lime, text_size=size.tiny)
+    table.cell(dash, 0, 17, "تأكيد", text_size=size.tiny)
+    table.cell(dash, 1, 17, confirmBars ? (sigOk ? "مغلقة" : "قيد التكوين") : "لحظي", text_size=size.tiny)
+
+// ─── Plots ───
+plot(showEma ? ema20 : na, "EMA20", color=color.new(color.teal, 0))
+plot(showEma ? ema50 : na, "EMA50", color=color.new(color.orange, 0))
+plot(showEma ? ema200 : na, "EMA200", color=color.new(color.purple, 40))
+plot(showVpLevels ? pocPx : na, "POC approx", color=color.new(color.yellow, 0), linewidth=2, style=plot.style_linebr)
+plot(showVpLevels ? vahPx : na, "VAH approx", color=color.new(color.gray, 50), style=plot.style_linebr)
+plot(showVpLevels ? valPx : na, "VAL approx", color=color.new(color.gray, 50), style=plot.style_linebr)
+plot(showVpLevels ? avwapLater : na, "AVWAP", color=color.new(color.white, 30), linewidth=2)
+
+var line lnE = na
+var line lnS = na
+var line lnT1 = na
+if showRiskLines and barstate.islast
+    line.delete(lnE)
+    line.delete(lnS)
+    line.delete(lnT1)
+    lnE := line.new(bar_index - 20, entryZ, bar_index + 10, entryZ, color=color.new(color.lime, 30), style=line.style_dashed)
+    lnS := line.new(bar_index - 20, stopRef, bar_index + 10, stopRef, color=color.new(color.red, 30), style=line.style_dotted)
+    lnT1 := line.new(bar_index - 20, t1, bar_index + 10, t1, color=color.new(color.aqua, 40))
+
+plotshape(showStructMarks and sigOk and bosUp and not chochUp, "BOS↑", shape.labelup, location.belowbar, color.teal, size=size.tiny, text="BOS")
+plotshape(showStructMarks and sigOk and chochUp, "CHoCH↑", shape.labelup, location.belowbar, color.aqua, size=size.tiny, text="CH")
+plotshape(showStructMarks and sigOk and sweepHigh, "SweepH", shape.xcross, location.abovebar, color.orange, size=size.tiny, text="Sw")
+plotshape(showStructMarks and sigOk and sweepLow, "SweepL", shape.xcross, location.belowbar, color.teal, size=size.tiny, text="Sw")
+plotshape(sigOk and breakConfirmed, "Break+", shape.triangleup, location.belowbar, color.lime, size=size.tiny, text="BO")
+plotshape(sigOk and fakeBreakUp, "Fake BO", shape.xcross, location.abovebar, color.red, size=size.tiny, text="FK")
+
+bgcolor(dataThin ? color.new(color.orange, 95) : na)
+bgcolor(rrWarn and showDash ? color.new(color.maroon, 96) : na)
+
+// ─── Screener / exports ───
+plot(accScore, "EGXMI_AccScore", display=display.none)
+plot(distScore, "EGXMI_DistScore", display=display.none)
+plot(regimeCode, "EGXMI_Regime", display=display.none)
+plot(breakCode, "EGXMI_BreakCode", display=display.none)
+plot(rvol, "EGXMI_RVOL", display=display.none)
+plot(rr1, "EGXMI_RR", display=display.none)
+plot(histN, "EGXMI_HistN", display=display.none)
+
+// ─── Alerts ───
+alertcondition(sigOk and rvol >= rvolExtreme, "RVOL استثنائي", "RVOL استثنائي — ليس إشارة شراء تلقائية")
+alertcondition(sigOk and accScore >= accAlertMin and accScore > distScore + 10, "دليل تجميع محتمل", "درجة توافق تجميع مرتفعة — احتمالية فقط")
+alertcondition(sigOk and distScore >= distAlertMin and distScore > accScore + 10, "دليل تصريف محتمل", "درجة توافق تصريف مرتفعة — احتمالية فقط")
+alertcondition(sigOk and breakConfirmed, "اختراق مقاومة (إغلاق+حجم)", "اختراق مؤكد نسبيًا بالإغلاق والحجم")
+alertcondition(sigOk and breakRetestOk, "إعادة اختبار ناجحة", "إعادة اختبار دعم بعد اختراق")
+alertcondition(sigOk and fakeBreakUp, "اختراق فاشل/كاذب", "عودة داخل النطاق بعد تجاوز قمة")
+alertcondition(sigOk and supportBreak, "كسر دعم", "إغلاق تحت آخر قاع محوري")
+alertcondition(sigOk and regimeCode != regimeCode[1], "تغير نظام السهم", "تغير حالة نظام السهم")
+alertcondition(sigOk and (high >= t1 or low <= invalid), "هدف أو إبطال", "لمس مستوى هدف أو إبطال مرجعي")

@@ -1,0 +1,129 @@
+//@version=6
+indicator("EGX TOOLS — 8 مجموعات (lite)", shorttitle="EGX T Grp", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// خريطة 8 مجموعات (تقريب) — EGXTGrp_A … EGXTGrp_H · إطار D
+// المرجع الكامل: EGX_TOOLS_MASTER
+// ═══════════════════════════════════════════════════════════════════════════════
+
+bool showTbl = input.bool(true, "جدول")
+
+float ema20 = ta.ema(close, 20)
+float ema50 = ta.ema(close, 50)
+float ema200 = ta.ema(close, 200)
+float rsi = ta.rsi(close, 14)
+[macdL, macdS, macdH] = ta.macd(close, 12, 26, 9)
+[diP, diM, adx] = ta.dmi(14, 14)
+[stLine, stDir] = ta.supertrend(3.0, 10)
+float rng = math.max(high - low, syminfo.mintick)
+float cmf = ta.sma(((close - low) - (high - close)) / rng * volume, 20) / ta.sma(volume, 20)
+float obvSl = ta.linreg(ta.obv, 10, 0) - ta.linreg(ta.obv, 10, 1)
+float volMa = ta.sma(volume, 20)
+float rvol = volume / math.max(volMa, 1.0)
+[bbMid, bbUp, bbLo] = ta.bb(close, 20, 2.0)
+float bbw = bbMid > 0 ? (bbUp - bbLo) / bbMid : 0.0
+
+int a1 = rsi > 52 and rsi < 68 ? 1 : rsi >= 68 ? 0 : -1
+int a2 = macdH > 0 and macdL > macdS ? 1 : -1
+int a3 = ta.stoch(close, high, low, 14) > 50 ? 1 : -1
+int a4 = ta.roc(close, 10) > 0 ? 1 : -1
+float pctA = (a1 + a2 + a3 + a4) / 4.0 * 100.0
+
+int b1 = adx > 22 and diP > diM ? 1 : -1
+int b2 = close > ema20 and ema20 > ema50 ? 1 : -1
+int b3 = stDir < 0 ? 1 : -1
+int b4 = close > ta.sar(0.02, 0.02, 0.2) ? 1 : -1
+float pctB = (b1 + b2 + b3 + b4) / 4.0 * 100.0
+
+int c1 = cmf > 0 ? 1 : -1
+int c2 = obvSl > 0 ? 1 : -1
+int c3 = ta.accdist > ta.ema(ta.accdist, 20) ? 1 : -1
+int c4 = rvol >= 1.0 ? 1 : -1
+float pctC = (c1 + c2 + c3 + c4) / 4.0 * 100.0
+
+int d1 = close > bbMid ? 1 : -1
+int d2 = bbw < ta.sma(bbw, 20) ? 1 : -1
+float pctD = (d1 + d2) / 2.0 * 100.0
+
+bool bosUp = close > ta.highest(high, 20)[1]
+int e1 = bosUp ? 1 : -1
+int e2 = close > ema50 ? 1 : -1
+float pctE = (e1 + e2) / 2.0 * 100.0
+
+float lookHi = ta.highest(high, 80)
+float lookLo = ta.lowest(low, 80)
+bool inDem = close <= lookHi - 0.618 * (lookHi - lookLo) and close >= lookLo
+int f1 = inDem ? 1 : -1
+float pctF = f1 * 100.0
+
+int g1 = close > ema200 ? 1 : -1
+int g2 = adx > 20 ? 1 : 0
+float pctG = (g1 + g2) / 2.0 * 100.0
+
+float bench = request.security("EGX:EGX30", timeframe.period, ta.roc(close, 20), barmerge.gaps_off, barmerge.lookahead_off)
+int h1 = ta.roc(close, 20) - bench > 0 ? 1 : -1
+int h2 = close > (lookHi + lookLo) / 2.0 ? 1 : -1
+float pctH = (h1 + h2) / 2.0 * 100.0
+
+float wSum = 0.2 + 0.2 + 0.2 + 0.1 + 0.1 + 0.08 + 0.08 + 0.04
+float totalLite = (pctA * 0.2 + pctB * 0.2 + pctC * 0.2 + pctD * 0.1 + pctE * 0.1 + pctF * 0.08 + pctG * 0.08 + pctH * 0.04) / wSum
+
+plot(pctA, "أ زخم", color=color.aqua)
+plot(pctB, "ب اتجاه", color=color.orange)
+plot(pctC, "ج حجم", color=color.fuchsia)
+plot(pctD, "د تقلب", color=color.gray)
+plot(pctE, "ه SMC", color=color.yellow)
+plot(pctF, "و موجات", color=color.teal)
+plot(pctG, "ز أنظمة", color=color.lime)
+plot(pctH, "ح بروفايل", color=color.purple)
+hline(0, "0", color=color.gray)
+hline(50, "+50", color=color.new(color.lime, 70))
+hline(-50, "-50", color=color.new(color.red, 70))
+
+f_col(float p) =>
+    p >= 40 ? color.lime : p <= -40 ? color.red : color.gray
+
+var table g = table.new(position.top_right, 3, 10, border_width=1)
+if showTbl and barstate.islast
+    table.clear(g, 0, 0, 2, 9)
+    table.cell(g, 0, 0, "مجموعة", text_color=color.gray, text_size=size.tiny)
+    table.cell(g, 1, 0, "%", text_color=color.gray, text_size=size.tiny)
+    table.cell(g, 2, 0, "وزن", text_color=color.gray, text_size=size.tiny)
+    table.cell(g, 0, 1, "أ", text_size=size.tiny)
+    table.cell(g, 1, 1, str.tostring(pctA, "#"), bgcolor=f_col(pctA), text_size=size.tiny)
+    table.cell(g, 2, 1, "20%", text_size=size.tiny)
+    table.cell(g, 0, 2, "ب", text_size=size.tiny)
+    table.cell(g, 1, 2, str.tostring(pctB, "#"), bgcolor=f_col(pctB), text_size=size.tiny)
+    table.cell(g, 2, 2, "20%", text_size=size.tiny)
+    table.cell(g, 0, 3, "ج", text_size=size.tiny)
+    table.cell(g, 1, 3, str.tostring(pctC, "#"), bgcolor=f_col(pctC), text_size=size.tiny)
+    table.cell(g, 2, 3, "20%", text_size=size.tiny)
+    table.cell(g, 0, 4, "د", text_size=size.tiny)
+    table.cell(g, 1, 4, str.tostring(pctD, "#"), bgcolor=f_col(pctD), text_size=size.tiny)
+    table.cell(g, 2, 4, "10%", text_size=size.tiny)
+    table.cell(g, 0, 5, "ه", text_size=size.tiny)
+    table.cell(g, 1, 5, str.tostring(pctE, "#"), bgcolor=f_col(pctE), text_size=size.tiny)
+    table.cell(g, 2, 5, "10%", text_size=size.tiny)
+    table.cell(g, 0, 6, "و", text_size=size.tiny)
+    table.cell(g, 1, 6, str.tostring(pctF, "#"), bgcolor=f_col(pctF), text_size=size.tiny)
+    table.cell(g, 2, 6, "8%", text_size=size.tiny)
+    table.cell(g, 0, 7, "ز", text_size=size.tiny)
+    table.cell(g, 1, 7, str.tostring(pctG, "#"), bgcolor=f_col(pctG), text_size=size.tiny)
+    table.cell(g, 2, 7, "8%", text_size=size.tiny)
+    table.cell(g, 0, 8, "ح", text_size=size.tiny)
+    table.cell(g, 1, 8, str.tostring(pctH, "#"), bgcolor=f_col(pctH), text_size=size.tiny)
+    table.cell(g, 2, 8, "4%", text_size=size.tiny)
+    table.cell(g, 0, 9, "Lite Σ", text_color=color.white, text_size=size.tiny)
+    table.cell(g, 1, 9, str.tostring(totalLite, "#") + "%", text_color=totalLite >= 20 ? color.lime : color.white, text_size=size.small)
+    table.merge_cells(g, 1, 9, 2, 9)
+
+plot(pctA, "EGXTGrp_A", display=display.data_window)
+plot(pctB, "EGXTGrp_B", display=display.data_window)
+plot(pctC, "EGXTGrp_C", display=display.data_window)
+plot(pctD, "EGXTGrp_D", display=display.data_window)
+plot(pctE, "EGXTGrp_E", display=display.data_window)
+plot(pctF, "EGXTGrp_F", display=display.data_window)
+plot(pctG, "EGXTGrp_G", display=display.data_window)
+plot(pctH, "EGXTGrp_H", display=display.data_window)
+plot(totalLite, "EGXTGrp_Total", display=display.data_window)
+plot(1, "EGXTGrp", display=display.data_window)

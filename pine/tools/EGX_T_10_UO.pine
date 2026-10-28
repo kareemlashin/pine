@@ -1,0 +1,30 @@
+//@version=6
+indicator("EGX Tool 10 المذبذب النهائي — Ultimate Oscillator", shorttitle="EGX T-UO", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة أ الزخم · #10/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+float bp = close - math.min(low, close[1])
+float trR = math.max(high, close[1]) - math.min(low, close[1])
+float a7 = math.sum(bp, 7) / math.max(math.sum(trR, 7), syminfo.mintick)
+float a14 = math.sum(bp, 14) / math.max(math.sum(trR, 14), syminfo.mintick)
+float a28 = math.sum(bp, 28) / math.max(math.sum(trR, 28), syminfo.mintick)
+float v = 100.0 * (4.0 * a7 + 2.0 * a14 + a28) / 7.0
+int vote = v > 55 ? 1 : v < 45 ? -1 : 0
+plot(v, "EGXT_UO_Val", color=color.aqua, linewidth=2)
+hline(70, "70", color=color.red)
+hline(30, "30", color=color.lime)
+hline(50, "50", color=color.gray)
+
+plot(vote, "EGXT_UO_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_UO_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_UO_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "UO", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-UO صاعد", "EGX Tool UO: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-UO هابط", "EGX Tool UO: vote هابط")

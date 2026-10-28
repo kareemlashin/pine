@@ -1,0 +1,23 @@
+//@version=6
+indicator("EGX Tool 39 شايكين — Chaikin Oscillator", shorttitle="EGX T-CHAIKIN", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة ج الحجم · #39/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+float v = ta.ema(ta.accdist, 3) - ta.ema(ta.accdist, 10)
+int vote = v > 0 ? 1 : -1
+plot(v, "EGXT_CHO", color=v >= 0 ? color.lime : color.red, linewidth=2)
+hline(0, "0", color=color.gray)
+
+plot(vote, "EGXT_CHAIKIN_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_CHAIKIN_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_CHAIKIN_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "CHAIKIN", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-CHAIKIN صاعد", "EGX Tool CHAIKIN: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-CHAIKIN هابط", "EGX Tool CHAIKIN: vote هابط")

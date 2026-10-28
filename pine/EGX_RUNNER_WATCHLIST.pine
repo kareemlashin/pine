@@ -1,0 +1,101 @@
+//@version=6
+indicator("EGX عدّاء — محفظة 6", shorttitle="EGX R WL", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// 6 رموز · Rank · Buy · DNA — إطار D
+// EGXRWL_Pass = 1 · EGXRWL_AnyBuy = 1 · EGXRWL_TopRank
+
+string egxBoard = input.string("نشط (EGX100)", "لوحة", options=["نشط (EGX100)", "EGX30 (بيع مكشوف)", "SME تميّز", "SME نايل", "غير نشط"], group=G)
+string G = "رموز EGX"
+string s1 = input.symbol("EGX:UNIP", "1", group=G)
+string s2 = input.symbol("EGX:CNIN", "2", group=G)
+string s3 = input.symbol("EGX:AMER", "3", group=G)
+string s4 = input.symbol("EGX:CIRA", "4", group=G)
+string s5 = input.symbol("EGX:PHDC", "5", group=G)
+string s6 = input.symbol("EGX:ORWE", "6", group=G)
+float minVol = input.float(800.0, "حد حجم", group=G)
+
+f_runner() =>
+    float volMa = ta.sma(volume, 20)
+    bool liq = volMa >= minVol
+    float cmf = ta.sma(((close - low) - (high - close)) / math.max(high - low, syminfo.mintick) * volume, 20) / ta.sma(volume, 20)
+    float obvSl = ta.linreg(ta.obv, 10, 0) - ta.linreg(ta.obv, 10, 1)
+    float acc = math.min(100.0, (cmf > 0 and obvSl > 0 ? 40.0 : 0.0) + (cmf > 0 ? 15.0 : 0.0))
+    float dist = math.min(100.0, (cmf < 0 and obvSl < 0 ? 35.0 : 0.0))
+    float atr = ta.atr(14)
+    float pl = ta.pivotlow(low, 8, 8)
+    var float sl = na
+    if not na(pl)
+        sl := pl
+    float zw = atr * 0.35
+    bool atZ = low <= nz(sl, low) + zw and close >= nz(sl, low) - zw * 1.2
+    int cyc = acc >= 58 and dist < 50 ? 4 : dist >= 55 ? 9 : 3
+    bool supBr = not na(sl) and close < sl and close[1] >= sl
+    float rk = math.min(100.0, acc * 0.5 + (100.0 - dist) * 0.25 + (atZ ? 10.0 : 0.0) + (cyc >= 4 and cyc <= 7 ? 8.0 : 0.0))
+    float dna = math.min(100.0, (acc >= 55 ? 25.0 : 0.0) + (dist < 45 ? 20.0 : 0.0) + (cyc == 4 ? 15.0 : 0.0))
+    bool buy = liq and acc >= 58 and dist < 50 and cyc >= 4 and cyc <= 7 and atZ and not supBr and not nearLimit
+    bool pass = buy or (acc >= 52 and dist < 52 and cyc <= 4)
+    [rk, buy ? 1.0 : 0.0, dna, acc, dist, cyc, pass ? 1.0 : 0.0]
+
+f_row(string sym) =>
+    request.security(sym, "D", f_runner(), barmerge.gaps_off, barmerge.lookahead_off)
+
+[rk1, b1, dna1, a1, di1, c1, p1] = f_row(s1)
+[rk2, b2, dna2, a2, di2, c2, p2] = f_row(s2)
+[rk3, b3, dna3, a3, di3, c3, p3] = f_row(s3)
+[rk4, b4, dna4, a4, di4, c4, p4] = f_row(s4)
+[rk5, b5, dna5, a5, di5, c5, p5] = f_row(s5)
+[rk6, b6, dna6, a6, di6, c6, p6] = f_row(s6)
+
+float topRk = math.max(rk1, math.max(rk2, math.max(rk3, math.max(rk4, math.max(rk5, rk6)))))
+string topSym = rk1 >= topRk ? s1 : rk2 >= topRk ? s2 : rk3 >= topRk ? s3 : rk4 >= topRk ? s4 : rk5 >= topRk ? s5 : s6
+bool anyBuy = b1 > 0 or b2 > 0 or b3 > 0 or b4 > 0 or b5 > 0 or b6 > 0
+bool wlPass = p1 > 0 or p2 > 0 or p3 > 0 or p4 > 0 or p5 > 0 or p6 > 0
+
+var table t = table.new(position.top_right, 5, 9, bgcolor=color.new(#0d1117, 5), border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 4, 8)
+    table.cell(t, 0, 0, "رمز", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 0, "Rank", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 2, 0, "DNA", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 3, 0, "Buy", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 4, 0, "دورة", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 0, 1, s1, text_size=size.tiny, text_color=color.white)
+    table.cell(t, 1, 1, str.tostring(rk1, "#"), text_size=size.tiny, text_color=rk1 >= 60 ? color.lime : color.white)
+    table.cell(t, 2, 1, str.tostring(dna1, "#"), text_size=size.tiny)
+    table.cell(t, 3, 1, b1 > 0 ? "✓" : "—", text_size=size.tiny, text_color=b1 > 0 ? color.lime : color.gray)
+    table.cell(t, 4, 1, str.tostring(c1, "#"), text_size=size.tiny)
+    table.cell(t, 0, 2, s2, text_size=size.tiny, text_color=color.white)
+    table.cell(t, 1, 2, str.tostring(rk2, "#"), text_size=size.tiny)
+    table.cell(t, 2, 2, str.tostring(dna2, "#"), text_size=size.tiny)
+    table.cell(t, 3, 2, b2 > 0 ? "✓" : "—", text_size=size.tiny, text_color=b2 > 0 ? color.lime : color.gray)
+    table.cell(t, 4, 2, str.tostring(c2, "#"), text_size=size.tiny)
+    table.cell(t, 0, 3, s3, text_size=size.tiny, text_color=color.white)
+    table.cell(t, 1, 3, str.tostring(rk3, "#"), text_size=size.tiny)
+    table.cell(t, 2, 3, str.tostring(dna3, "#"), text_size=size.tiny)
+    table.cell(t, 3, 3, b3 > 0 ? "✓" : "—", text_size=size.tiny)
+    table.cell(t, 4, 3, str.tostring(c3, "#"), text_size=size.tiny)
+    table.cell(t, 0, 4, s4, text_size=size.tiny, text_color=color.white)
+    table.cell(t, 1, 4, str.tostring(rk4, "#"), text_size=size.tiny)
+    table.cell(t, 2, 4, str.tostring(dna4, "#"), text_size=size.tiny)
+    table.cell(t, 3, 4, b4 > 0 ? "✓" : "—", text_size=size.tiny)
+    table.cell(t, 4, 4, str.tostring(c4, "#"), text_size=size.tiny)
+    table.cell(t, 0, 5, s5, text_size=size.tiny, text_color=color.white)
+    table.cell(t, 1, 5, str.tostring(rk5, "#"), text_size=size.tiny)
+    table.cell(t, 2, 5, str.tostring(dna5, "#"), text_size=size.tiny)
+    table.cell(t, 3, 5, b5 > 0 ? "✓" : "—", text_size=size.tiny)
+    table.cell(t, 4, 5, str.tostring(c5, "#"), text_size=size.tiny)
+    table.cell(t, 0, 6, s6, text_size=size.tiny, text_color=color.white)
+    table.cell(t, 1, 6, str.tostring(rk6, "#"), text_size=size.tiny)
+    table.cell(t, 2, 6, str.tostring(dna6, "#"), text_size=size.tiny)
+    table.cell(t, 3, 6, b6 > 0 ? "✓" : "—", text_size=size.tiny)
+    table.cell(t, 4, 6, str.tostring(c6, "#"), text_size=size.tiny)
+    table.cell(t, 0, 7, "★", text_color=color.lime, text_size=size.tiny)
+    table.cell(t, 1, 7, topSym + " " + str.tostring(topRk, "#"), text_color=color.lime, text_size=size.tiny)
+    table.cell(t, 2, 7, anyBuy ? "Buy✓" : "—", text_color=anyBuy ? color.lime : color.gray, text_size=size.tiny)
+    table.cell(t, 0, 8, "EGX R WL", text_color=color.gray, text_size=size.tiny)
+
+plot(anyBuy ? 1 : 0, "EGXRWL_AnyBuy", display=display.data_window)
+plot(wlPass ? 1 : 0, "EGXRWL_Pass", display=display.data_window)
+plot(topRk, "EGXRWL_TopRank", display=display.data_window)
+plot(b1 + b2 + b3 + b4 + b5 + b6, "EGXRWL_BuySum", display=display.data_window)
+plot(1, "EGXRWL", display=display.data_window)

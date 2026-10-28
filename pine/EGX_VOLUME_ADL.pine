@@ -1,0 +1,31 @@
+//@version=6
+indicator("EGX Volume A/D Line — Chaikin", shorttitle="EGX VAD", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// Accumulation/Distribution · docs/EGX_VOLUME.md
+
+string G = "A/D"
+int maLen = input.int(21, "MA A/D", group=G)
+
+float mfm = ((close - low) - (high - close)) / math.max(high - low, syminfo.mintick)
+float mfv = mfm * volume
+var float ad = 0.0
+ad += mfv
+float adMa = ta.ema(ad, maLen)
+
+bool acc = ad > adMa and ad > ad[5]
+bool dist = ad < adMa and ad < ad[5]
+bool xUp = ta.crossover(ad, adMa)
+bool xDn = ta.crossunder(ad, adMa)
+
+plot(ad, "A/D", color=color.teal, linewidth=2)
+plot(adMa, "A/D MA", color=color.orange, linewidth=1)
+
+var table t = table.new(position.top_right, 2, 3, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 2)
+    table.cell(t, 0, 0, "A/D", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, acc ? "Acc" : dist ? "Dist" : "—", text_size=size.tiny)
+
+plot(acc ? 1 : 0, "EGVAD_Acc", display=display.all)
+plot(xUp ? 1 : 0, "EGVAD_XUp", display=display.all)
+plot(ad - adMa, "EGVAD_Spread", display=display.all)

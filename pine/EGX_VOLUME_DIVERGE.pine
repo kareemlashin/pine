@@ -1,0 +1,55 @@
+//@version=6
+indicator("EGX Volume Divergence — price vs flow", shorttitle="EGX VDiv", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// تباعد سعر vs OBV / cum delta proxy · docs/EGX_VOLUME.md
+
+string G = "Div"
+int look = input.int(14, "Pivot look", minval=5, group=G)
+int smooth = input.int(5, "OBV smooth", group=G)
+
+float rng = math.max(high - low, syminfo.mintick)
+float delta = volume * ((close - low) - (high - close)) / rng
+float cumD = ta.cum(delta)
+float obv = ta.obv
+float obvMa = ta.ema(obv, smooth)
+float flow = ta.ema(cumD, smooth)
+
+float ph = ta.pivothigh(high, look, look)
+float pl = ta.pivotlow(low, look, look)
+
+var float lastHiPx = na
+var float lastHiFlow = na
+var float lastLoPx = na
+var float lastLoFlow = na
+
+bool bearDiv = false
+bool bullDiv = false
+
+if not na(ph)
+    if not na(lastHiPx) and high[look] > lastHiPx and flow[look] < lastHiFlow
+        bearDiv := true
+    lastHiPx := high[look]
+    lastHiFlow := flow[look]
+
+if not na(pl)
+    if not na(lastLoPx) and low[look] < lastLoPx and flow[look] > lastLoFlow
+        bullDiv := true
+    lastLoPx := low[look]
+    lastLoFlow := flow[look]
+
+plot(obvMa, "OBV smooth", color=color.teal, linewidth=1)
+plot(flow, "Flow smooth", color=color.orange, linewidth=2)
+plotshape(bullDiv, "Bull div", shape.triangleup, location=location.bottom, color=color.lime, size=size.small, offset=-look)
+plotshape(bearDiv, "Bear div", shape.triangledown, location=location.top, color=color.red, size=size.small, offset=-look)
+
+var table t = table.new(position.top_right, 2, 3, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 2)
+    table.cell(t, 0, 0, "Divergence", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, bullDiv ? "Bull" : bearDiv ? "Bear" : "—", text_size=size.tiny)
+
+plot(bullDiv ? 1 : 0, "EGVDiv_Bull", display=display.all)
+plot(bearDiv ? 1 : 0, "EGVDiv_Bear", display=display.all)
+
+alertcondition(bullDiv, "Bull div", "Volume flow bull divergence")
+alertcondition(bearDiv, "Bear div", "Volume flow bear divergence")

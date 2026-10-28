@@ -1,0 +1,147 @@
+//@version=6
+indicator("EGX قرار — محفظة 6 (قرار)", shorttitle="EGX Q WL", overlay=false, max_tables_count=4, calc_bars_count=5000)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 6 رموز EGX · قرار مبسّط (Action · Rank · Buy)
+// غيّر الرموز في الإعدادات · إطار D
+// EGXQWL_Pass = 1 → Action≥2 و Buy أو Pre
+// ═══════════════════════════════════════════════════════════════════════════════
+
+string egxBoard = input.string("نشط (EGX100)", "لوحة", options=["نشط (EGX100)", "EGX30 (بيع مكشوف)", "SME تميّز", "SME نايل", "غير نشط"], group=G)
+string G = "رموز EGX"
+string s1 = input.symbol("EGX:COMI", "1", group=G)
+string s2 = input.symbol("EGX:SWDY", "2", group=G)
+string s3 = input.symbol("EGX:TMGH", "3", group=G)
+string s4 = input.symbol("EGX:HRHO", "4", group=G)
+string s5 = input.symbol("EGX:FWRY", "5", group=G)
+string s6 = input.symbol("EGX:UNIP", "6", group=G)
+string bench = input.symbol("EGX:EGX30", "EGX30", group=G)
+float minVol = input.float(800.0, "حد حجم (عدّاء)", group=G)
+
+f_decision() =>
+    float ema21 = ta.ema(close, 21)
+    float ema50 = ta.ema(close, 50)
+    float atr = ta.atr(14)
+    float volMa = ta.sma(volume, 20)
+    bool liq = volMa >= minVol
+    float rvol = volume / math.max(volMa, 1.0)
+    float cmf = ta.sma(((close - low) - (high - close)) / math.max(high - low, syminfo.mintick) * volume, 20) / ta.sma(volume, 20)
+    float obvSl = ta.linreg(ta.obv, 10, 0) - ta.linreg(ta.obv, 10, 1)
+    float acc = math.min(100.0, (cmf > 0 and obvSl > 0 ? 40.0 : 0.0) + (cmf > 0 ? 15.0 : 0.0))
+    float dist = math.min(100.0, (cmf < 0 and obvSl < 0 ? 35.0 : 0.0))
+    float hi = ta.highest(high, 252)
+    float lo = ta.lowest(low, 252)
+    float pctHi = hi > 0 ? (close - hi) / hi * 100.0 : 0.0
+    float rocB = lo > 0 ? (close / lo - 1.0) * 100.0 : 0.0
+    bool trap = rocB > 100 and pctHi < -28 and dist >= 38
+    float rsi = ta.rsi(close, 14)
+    bool chase = pctHi > -3 and rsi > 72
+    float dPrevL = close[1]
+    float dayPctL = dPrevL > 0 ? (close - dPrevL) / dPrevL * 100.0 : 0.0
+    float haltPctL = egxBoard == "SME تميّز" or egxBoard == "SME نايل" or egxBoard == "غير نشط" ? 5.0 : 10.0
+    float luldPctL = egxBoard == "غير نشط" ? 5.0 : (egxBoard == "SME تميّز" or egxBoard == "SME نايل" ? 10.0 : 20.0)
+    bool nearLimit = dayPctL >= math.min(9.0, haltPctL - 1.0) or dayPctL >= luldPctL - 0.25
+    float pl = ta.pivotlow(low, 8, 8)
+    var float sl = na
+    if not na(pl)
+        sl := pl
+    bool supBr = not na(sl) and close < sl and close[1] >= sl
+    float zw = atr * 0.35
+    float bTop = nz(sl, low) + zw
+    float bBot = nz(sl, low) - zw * 1.2
+    bool atZ = low <= bTop and close >= bBot
+    bool ret = not na(sl) and low <= sl * 1.006 and close > sl
+    int cyc = acc >= 55 ? 4 : 3
+    if dist >= 55
+        cyc := 9
+    if supBr
+        cyc := 11
+    float br = request.security(bench, timeframe.period, ta.roc(close, 20), barmerge.gaps_off, barmerge.lookahead_off)
+    bool rs = ta.roc(close, 20) - br > 0
+    float rk = math.min(100.0, acc * 0.45 + (100.0 - dist) * 0.25 + (rs ? 12.0 : 0.0) + (atZ ? 8.0 : 0.0))
+    bool buy = liq and acc >= 55 and dist < 50 and cyc >= 4 and cyc <= 7 and (atZ or ret) and not supBr and not chase and not trap and not nearLimit
+    bool exit = supBr or dist >= 65 or trap or cyc == 9
+    int act = exit ? 0 : buy ? 4 : cyc <= 4 and acc >= 48 ? 2 : 1
+    [act, rk, buy ? 1.0 : 0.0, acc, dist, cyc]
+
+f_row(string sym) =>
+    request.security(sym, "D", f_decision(), barmerge.gaps_off, barmerge.lookahead_off)
+
+[act1, rk1, b1, a1, d1, c1] = f_row(s1)
+[act2, rk2, b2, a2, d2, c2] = f_row(s2)
+[act3, rk3, b3, a3, d3, c3] = f_row(s3)
+[act4, rk4, b4, a4, d4, c4] = f_row(s4)
+[act5, rk5, b5, a5, d5, c5] = f_row(s5)
+[act6, rk6, b6, a6, d6, c6] = f_row(s6)
+
+f_actTxt(int a) =>
+    a == 4 ? "✅ شراء" : a == 3 ? "📌 امسك" : a == 2 ? "⏳ راقب" : a == 0 ? "🛑 خروج" : "⛔ لا"
+
+float topRk = math.max(rk1, math.max(rk2, math.max(rk3, math.max(rk4, math.max(rk5, rk6)))))
+string topSym = rk1 >= topRk ? s1 : rk2 >= topRk ? s2 : rk3 >= topRk ? s3 : rk4 >= topRk ? s4 : rk5 >= topRk ? s5 : s6
+bool anyBuy = b1 > 0 or b2 > 0 or b3 > 0 or b4 > 0 or b5 > 0 or b6 > 0
+bool wlPass = anyBuy or (act1 >= 2 and rk1 >= 55) or (act2 >= 2 and rk2 >= 55) or (act3 >= 2 and rk3 >= 55) or (act4 >= 2 and rk4 >= 55) or (act5 >= 2 and rk5 >= 55) or (act6 >= 2 and rk6 >= 55)
+
+var table t = table.new(position.top_right, 6, 9, bgcolor=color.new(#0d1117, 5), border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 5, 8)
+    table.cell(t, 0, 0, "رمز", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 0, "قرار", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 2, 0, "Rank", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 3, 0, "Act", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 4, 0, "تجم", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 5, 0, "دورة", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 0, 1, s1, text_size=size.tiny, text_color=color.white)
+    table.cell(t, 1, 1, f_actTxt(int(act1)), text_size=size.tiny, text_color=act1 == 4 ? color.lime : act1 == 0 ? color.red : color.yellow)
+    table.cell(t, 2, 1, str.tostring(rk1, "#"), text_size=size.tiny)
+    table.cell(t, 3, 1, str.tostring(act1, "#"), text_size=size.tiny)
+    table.cell(t, 4, 1, str.tostring(a1, "#"), text_size=size.tiny)
+    table.cell(t, 5, 1, str.tostring(c1, "#"), text_size=size.tiny)
+    table.cell(t, 0, 2, s2, text_size=size.tiny, text_color=color.white)
+    table.cell(t, 1, 2, f_actTxt(int(act2)), text_size=size.tiny, text_color=act2 == 4 ? color.lime : color.yellow)
+    table.cell(t, 2, 2, str.tostring(rk2, "#"), text_size=size.tiny)
+    table.cell(t, 3, 2, str.tostring(act2, "#"), text_size=size.tiny)
+    table.cell(t, 4, 2, str.tostring(a2, "#"), text_size=size.tiny)
+    table.cell(t, 5, 2, str.tostring(c2, "#"), text_size=size.tiny)
+    table.cell(t, 0, 3, s3, text_size=size.tiny, text_color=color.white)
+    table.cell(t, 1, 3, f_actTxt(int(act3)), text_size=size.tiny, text_color=act3 == 4 ? color.lime : color.yellow)
+    table.cell(t, 2, 3, str.tostring(rk3, "#"), text_size=size.tiny)
+    table.cell(t, 3, 3, str.tostring(act3, "#"), text_size=size.tiny)
+    table.cell(t, 4, 3, str.tostring(a3, "#"), text_size=size.tiny)
+    table.cell(t, 5, 3, str.tostring(c3, "#"), text_size=size.tiny)
+    table.cell(t, 0, 4, s4, text_size=size.tiny, text_color=color.white)
+    table.cell(t, 1, 4, f_actTxt(int(act4)), text_size=size.tiny, text_color=act4 == 4 ? color.lime : color.yellow)
+    table.cell(t, 2, 4, str.tostring(rk4, "#"), text_size=size.tiny)
+    table.cell(t, 3, 4, str.tostring(act4, "#"), text_size=size.tiny)
+    table.cell(t, 4, 4, str.tostring(a4, "#"), text_size=size.tiny)
+    table.cell(t, 5, 4, str.tostring(c4, "#"), text_size=size.tiny)
+    table.cell(t, 0, 5, s5, text_size=size.tiny, text_color=color.white)
+    table.cell(t, 1, 5, f_actTxt(int(act5)), text_size=size.tiny, text_color=act5 == 4 ? color.lime : color.yellow)
+    table.cell(t, 2, 5, str.tostring(rk5, "#"), text_size=size.tiny)
+    table.cell(t, 3, 5, str.tostring(act5, "#"), text_size=size.tiny)
+    table.cell(t, 4, 5, str.tostring(a5, "#"), text_size=size.tiny)
+    table.cell(t, 5, 5, str.tostring(c5, "#"), text_size=size.tiny)
+    table.cell(t, 0, 6, s6, text_size=size.tiny, text_color=color.white)
+    table.cell(t, 1, 6, f_actTxt(int(act6)), text_size=size.tiny, text_color=act6 == 4 ? color.lime : color.yellow)
+    table.cell(t, 2, 6, str.tostring(rk6, "#"), text_size=size.tiny)
+    table.cell(t, 3, 6, str.tostring(act6, "#"), text_size=size.tiny)
+    table.cell(t, 4, 6, str.tostring(a6, "#"), text_size=size.tiny)
+    table.cell(t, 5, 6, str.tostring(c6, "#"), text_size=size.tiny)
+    table.cell(t, 0, 7, "★ أعلى", text_color=color.lime, text_size=size.tiny)
+    table.cell(t, 1, 7, topSym, text_color=color.white, text_size=size.tiny)
+    table.cell(t, 2, 7, str.tostring(topRk, "#"), text_color=color.lime, text_size=size.tiny)
+    table.cell(t, 3, 7, anyBuy ? "Buy✓" : "—", text_color=anyBuy ? color.lime : color.gray, text_size=size.tiny)
+    table.cell(t, 0, 8, "EGX Q WL", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 8, "D · قرار", text_color=color.gray, text_size=size.tiny)
+
+plot(act1, "EGXQWL_Act1", display=display.data_window)
+plot(b1, "EGXQWL_Buy1", display=display.data_window)
+plot(rk1, "EGXQWL_Rank1", display=display.data_window)
+plot(act1 + act2 + act3 + act4 + act5 + act6, "EGXQWL_SumAct", display=display.data_window)
+plot(b1 + b2 + b3 + b4 + b5 + b6, "EGXQWL_BuySum", display=display.data_window)
+plot(1, "EGXQWL", display=display.data_window)
+
+plot(anyBuy ? 1 : 0, "EGXQWL_AnyBuy", display=display.data_window)
+plot(wlPass ? 1 : 0, "EGXQWL_Pass", display=display.data_window)
+plot(topRk, "EGXQWL_TopRank", display=display.data_window)
+plot(b1 > 0 ? rk1 : b2 > 0 ? rk2 : b3 > 0 ? rk3 : b4 > 0 ? rk4 : b5 > 0 ? rk5 : b6 > 0 ? rk6 : topRk, "EGXQWL_BestBuyRank", display=display.data_window)

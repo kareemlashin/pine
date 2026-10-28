@@ -1,0 +1,97 @@
+//@version=6
+indicator("EGX TOOLS Alerts", shorttitle="EGX T Al", overlay=false, calc_bars_count=5000)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// تنبيهات lite — EGXTAl_* · Filter: EGXTAl_Any=1
+// كامل: EGX_TOOLS_MASTER · Hub عام: EGX_ALERT_HUB.pine
+// ═══════════════════════════════════════════════════════════════════════════════
+
+string profile = input.string("EGX يومي", "ملف", options=["EGX يومي", "مضاربة", "استثمار"])
+bool onClose = input.bool(true, "إغلاق الشمعة")
+float minVol = profile == "مضاربة" ? 3000.0 : profile == "استثمار" ? 800.0 : 1500.0
+float sigMin = profile == "مضاربة" ? 18.0 : profile == "استثمار" ? 25.0 : 20.0
+string mkt = input.symbol("EGX:EGX30", "EGX30")
+string egxBoard = input.string("نشط (EGX100)", "لوحة", options=["نشط (EGX100)", "EGX30 (بيع مكشوف)", "SME تميّز", "SME نايل", "غير نشط"])
+
+bool sigOk = not onClose or barstate.isconfirmed
+
+f_mktTr() =>
+    int sc = 0
+    float e20 = ta.ema(close, 20)
+    float e50 = ta.ema(close, 50)
+    sc += close > e20 ? 1 : -1
+    sc += e20 > e50 ? 1 : -1
+    sc
+float mom30 = request.security(mkt, timeframe.period, close[20] > 0 ? (close / close[20] - 1) * 100 : 0.0, barmerge.gaps_off, barmerge.lookahead_off)
+int tr30 = request.security(mkt, timeframe.period, f_mktTr(), barmerge.gaps_off, barmerge.lookahead_off)
+bool bearMkt = mom30 < -4 and tr30 <= -1
+
+float dPrev = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+float dayPctA = dPrev > 0 ? (close - dPrev) / dPrev * 100.0 : 0.0
+float haltPctA = egxBoard == "SME تميّز" or egxBoard == "SME نايل" or egxBoard == "غير نشط" ? 5.0 : 10.0
+float luldPctA = egxBoard == "غير نشط" ? 5.0 : (egxBoard == "SME تميّز" or egxBoard == "SME نايل" ? 10.0 : 20.0)
+bool nearLimit = dayPctA >= math.min(9.0, haltPctA - 1.0) or dayPctA >= luldPctA - 0.25
+
+f_sig() =>
+    float ema50 = ta.ema(close, 50)
+    float rsi = ta.rsi(close, 14)
+    [macdL, macdS, macdH] = ta.macd(close, 12, 26, 9)
+    float volMa = ta.sma(volume, 20)
+    float rvol = volume / math.max(volMa, 1.0)
+    bool liqOk = volMa >= minVol
+    float rng = math.max(high - low, syminfo.mintick)
+    float cmf = ta.sma(((close - low) - (high - close)) / rng * volume, 20) / ta.sma(volume, 20)
+    float obvSl = ta.linreg(ta.obv, 10, 0) - ta.linreg(ta.obv, 10, 1)
+    [stLine, stDir] = ta.supertrend(3.0, 10)
+    bool bosUp = close > ta.highest(high, 20)[1]
+    float lookHi = ta.highest(high, 80)
+    float lookLo = ta.lowest(low, 80)
+    bool inDem = close <= lookHi - 0.618 * (lookHi - lookLo) and close >= lookLo
+    float hi52 = ta.highest(high, 250)
+    bool chase = hi52 > 0 and (close - hi52) / hi52 * 100.0 > -3 and rsi > 72
+    int sc = 0
+    sc += rsi > 50 and rsi < 70 ? 1 : -1
+    sc += macdH > 0 ? 1 : -1
+    sc += close > ema50 ? 1 : -1
+    sc += stDir < 0 ? 1 : -1
+    sc += cmf > 0 ? 1 : -1
+    sc += obvSl > 0 ? 1 : -1
+    sc += bosUp or inDem ? 1 : 0
+    sc += rvol >= 1.0 ? 1 : 0
+    float score = sc / 8.0 * 100.0
+    bool locOK = inDem or bosUp
+    bool moneyOK = cmf > 0 and obvSl > 0
+    bool upTrend = close > ema50 or stDir < 0
+    int hits = (upTrend ? 1 : 0) + (locOK ? 1 : 0) + (score >= sigMin * 0.5 ? 1 : 0) + (moneyOK ? 1 : 0) + (close > open ? 1 : 0) + (rvol >= 0.9 ? 1 : 0)
+    bool buyA = sigOk and liqOk and not nearLimit and not chase and not bearMkt and locOK and moneyOK and hits >= 5 and score >= sigMin
+    bool buyB = sigOk and liqOk and not nearLimit and not chase and not bearMkt and locOK and not buyA and hits >= 4 and score >= sigMin * 0.5
+    bool exitAl = sigOk and (cmf < 0 and obvSl < 0 and close < open) or ta.crossunder(score, -sigMin * 0.5)
+    bool proAl = buyA and sc >= 5
+    [buyA ? 1 : 0, buyB ? 1 : 0, exitAl ? 1 : 0, proAl ? 1 : 0, chase ? 1 : 0, nearLimit ? 1 : 0]
+
+[buyA, buyB, exitAl, proAl, chase, nearLimit] = f_sig()
+bool buyAny = buyA > 0 or buyB > 0
+bool anyAl = buyAny or exitAl > 0 or proAl > 0
+
+var table t = table.new(position.middle_center, 2, 4, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 3)
+    table.cell(t, 0, 0, syminfo.ticker, text_color=color.white, text_size=size.normal)
+    table.cell(t, 1, 0, buyA > 0 ? "BUY A" : buyB > 0 ? "BUY B" : exitAl > 0 ? "EXIT" : "—", text_color=buyA > 0 ? color.lime : buyB > 0 ? color.yellow : exitAl > 0 ? color.red : color.gray, text_size=size.normal)
+    table.cell(t, 0, 1, "Pro / Warn", text_color=color.gray, text_size=size.small)
+    table.cell(t, 1, 1, (proAl > 0 ? "Pro " : "") + (chase > 0 ? "Chase " : "") + (nearLimit > 0 ? "halt" : ""), text_size=size.small)
+
+plot(buyAny ? 1 : 0, "EGXTAl_Buy", display=display.all)
+plot(buyA, "EGXTAl_BuyA", display=display.all)
+plot(buyB, "EGXTAl_BuyB", display=display.all)
+plot(proAl, "EGXTAl_Pro", display=display.all)
+plot(exitAl, "EGXTAl_Exit", display=display.all)
+plot(chase, "EGXTAl_Chase", display=display.all)
+plot(nearLimit, "EGXTAl_Limit", display=display.all)
+plot(anyAl ? 1 : 0, "EGXTAl_Any", display=display.all)
+plot(1, "EGXTAl", display=display.all)
+
+alertcondition(buyA > 0, "EGX T — شراء A", "{{ticker}} EGXTAl BuyA")
+alertcondition(proAl > 0, "EGX T — Pro", "{{ticker}} EGXTAl Pro")
+alertcondition(exitAl > 0, "EGX T — خروج", "{{ticker}} EGXTAl Exit")
+alertcondition(anyAl, "EGX T — أي", "{{ticker}} EGXTAl Any")

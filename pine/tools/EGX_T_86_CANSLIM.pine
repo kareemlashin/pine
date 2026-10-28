@@ -1,0 +1,29 @@
+//@version=6
+indicator("EGX Tool 86 CANSLIM — O'Neil RS+volume", shorttitle="EGX T-CANSLIM", overlay=true, max_labels_count=80, max_lines_count=80, max_boxes_count=40, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة ز أنظمة · #86/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+float roc = ta.roc(close, 63)
+float rs = ta.percentrank(roc, 252)
+float volMa = ta.sma(volume, 50)
+bool volThrust = volume > volMa * 1.4 and close > open
+int dist = 0
+for i = 0 to 24
+    if close[i] < open[i] and volume[i] > ta.sma(volume, 50)[i]
+        dist += 1
+int vote = rs >= 70 and volThrust and dist < 5 and close > ta.sma(close, 50) ? 1 : dist >= 5 ? -1 : rs < 40 ? -1 : 0
+plot(rs, "RS%", display=display.none)
+
+plot(vote, "EGXT_CANSLIM_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_CANSLIM_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_CANSLIM_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "CANSLIM", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-CANSLIM صاعد", "EGX Tool CANSLIM: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-CANSLIM هابط", "EGX Tool CANSLIM: vote هابط")

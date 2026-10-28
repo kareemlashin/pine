@@ -1,0 +1,32 @@
+//@version=6
+indicator("EGX Tool 20 WaveTrend — Market Cipher WT", shorttitle="EGX T-WAVETREND", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة أ الزخم · #20/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+int chLen = input.int(10, "Channel")
+int avgLen = input.int(21, "Average")
+float esa = ta.ema(hlc3, chLen)
+float de = ta.ema(math.abs(hlc3 - esa), chLen)
+float ci = (hlc3 - esa) / (0.015 * math.max(de, syminfo.mintick))
+float wt1 = ta.ema(ci, avgLen)
+float wt2 = ta.sma(wt1, 4)
+int vote = wt1 > wt2 and wt1 < 60 ? 1 : wt1 < wt2 and wt1 > -60 ? -1 : 0
+plot(wt1, "EGXT_WT1", color=color.teal, linewidth=2)
+plot(wt2, "EGXT_WT2", color=color.orange)
+hline(60, "+60", color=color.red)
+hline(-60, "-60", color=color.lime)
+hline(0, "0", color=color.gray)
+
+plot(vote, "EGXT_WAVETREND_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_WAVETREND_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_WAVETREND_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "WAVETREND", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-WAVETREND صاعد", "EGX Tool WAVETREND: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-WAVETREND هابط", "EGX Tool WAVETREND: vote هابط")

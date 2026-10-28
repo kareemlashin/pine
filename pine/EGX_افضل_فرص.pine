@@ -1,0 +1,238 @@
+//@version=6
+indicator("EGX أفضل فرص", shorttitle="أفضل فرص", overlay=false, max_labels_count=1, max_tables_count=1, calc_bars_count=5000)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// جدول ترتيب فرص السوق — 200 سهم سائل
+// على الشارت: EGX_افضل_فرص_BOARD200.pine (200 كامل) · أو BOARD (5 صفحات)
+// السوق كامل: Screener / Watchlist · Filter: EGXOpp_Pro=1 · رتّب EGXOpp_Score↓
+// مرجع: docs/EGX_افضل_فرص.md · docs/EGX_WATCHLIST_200.txt
+// ═══════════════════════════════════════════════════════════════════════════════
+
+string G = "═══ ملف ═══"
+string profile = input.string("EGX قياسي", "الملف", options=["EGX قياسي", "مضاربة 15د", "استثمار يومي"], group=G)
+bool confirmClose = input.bool(true, "إغلاق الشمعة", group=G)
+float minOppIn = input.float(68.0, "حد فرصة Pro", minval=40, maxval=90, group=G)
+float minRankIn = input.float(65.0, "حد Rank", minval=40, maxval=90, group=G)
+int minSetupIn = input.int(7, "حد إعداد /11", minval=0, maxval=11, group=G)
+float minRRIn = input.float(1.5, "حد R/R", minval=1.0, step=0.1, group=G)
+bool showTbl = input.bool(true, "جدول أفضل فرص", group=G)
+
+string G_M = "═══ سوق ═══"
+string bench = input.symbol("EGX:EGX30", "مؤشر", group=G_M)
+bool blockBear = input.bool(true, "منع ضغط EGX30", group=G_M)
+bool blockLimit = input.bool(true, "منع قرب halt اليومي", group=G_M)
+string egxBoard = input.string("نشط (EGX100)", "لوحة", options=["نشط (EGX100)", "EGX30 (بيع مكشوف)", "SME تميّز", "SME نايل", "غير نشط"], group=G_M)
+bool skipSundayBuy = input.bool(false, "لا دخول يوم الأحد", group=G_M)
+bool useMktHalt100 = input.bool(true, "منع إذا EGX100 ≤ −10%", group=G_M)
+bool blockChase = input.bool(true, "منع مطاردة", group=G_M)
+
+float effMinVol = profile == "مضاربة 15د" ? 3000.0 : profile == "استثمار يومي" ? 800.0 : 1500.0
+float effMinRank = profile == "استثمار يومي" ? 60.0 : minRankIn
+float effMinOpp = profile == "استثمار يومي" ? 62.0 : minOppIn
+int effMinSetup = profile == "مضاربة 15د" ? 7 : minSetupIn
+
+bool sigOk = not confirmClose or barstate.isconfirmed
+
+float ema9 = ta.ema(close, 9)
+float ema21 = ta.ema(close, 21)
+float ema50 = ta.ema(close, 50)
+float ema200 = ta.ema(close, 200)
+bool bullStack = ema9 > ema21 and ema21 > ema50
+bool above200 = close > ema200
+
+float wClose = request.security(syminfo.tickerid, "W", close, barmerge.gaps_off, barmerge.lookahead_off)
+float wEma50 = request.security(syminfo.tickerid, "W", ta.ema(close, 50), barmerge.gaps_off, barmerge.lookahead_off)
+bool htfBull = wClose > wEma50
+
+[macdL, macdS, macdH] = ta.macd(close, 12, 26, 9)
+bool macdBull = macdH > 0 and macdL > macdS
+float rsi = ta.rsi(close, 14)
+float atr = ta.atr(14)
+
+float volMa = ta.sma(volume, 20)
+bool liqOk = volMa >= effMinVol
+float rvol = volume / math.max(volMa, 1.0)
+int liqTier = volMa >= 3000 ? 4 : volMa >= 1500 ? 3 : volMa >= 500 ? 2 : 1
+
+float mfm = ((close - low) - (high - close)) / math.max(high - low, syminfo.mintick)
+float cmf = ta.sma(mfm * volume, 14) / ta.sma(volume, 14)
+float obvSl = ta.linreg(ta.obv, 10, 0) - ta.linreg(ta.obv, 10, 1)
+bool accumulating = cmf > 0 and obvSl > 0
+bool distributing = cmf < 0 and obvSl < 0
+float accScore = math.min(100.0, (accumulating ? 40.0 : 0.0) + (cmf > 0 ? 15.0 : 0.0) + (obvSl > 0 ? 15.0 : 0.0) + (rvol >= 1.0 and close > open ? 10.0 : 0.0))
+float distRisk = math.min(100.0, (distributing ? 40.0 : 0.0) + (cmf < 0 ? 15.0 : 0.0) + (obvSl < 0 ? 15.0 : 0.0))
+
+float benchRoc = request.security(bench, timeframe.period, ta.roc(close, 20), barmerge.gaps_off, barmerge.lookahead_off)
+float roc20 = ta.roc(close, 20)
+float rsSpread = roc20 - benchRoc
+bool rsLeader = rsSpread > 0
+
+f_mktTr() =>
+    int sc = 0
+    float e20 = ta.ema(close, 20)
+    float e50 = ta.ema(close, 50)
+    sc += close > e20 ? 1 : -1
+    sc += e20 > e50 ? 1 : -1
+    sc
+
+float mom30 = request.security(bench, timeframe.period, close[20] > 0 ? (close / close[20] - 1.0) * 100.0 : 0.0, barmerge.gaps_off, barmerge.lookahead_off)
+int tr30 = request.security(bench, timeframe.period, f_mktTr(), barmerge.gaps_off, barmerge.lookahead_off)
+bool heavySell = mom30 < -4.0 and tr30 <= -1
+
+float dPrev = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+float dayPct = dPrev > 0 ? (close - dPrev) / dPrev * 100.0 : 0.0
+float haltPct = egxBoard == "SME تميّز" or egxBoard == "SME نايل" or egxBoard == "غير نشط" ? 5.0 : 10.0
+float luldPct = egxBoard == "غير نشط" ? 5.0 : (egxBoard == "SME تميّز" or egxBoard == "SME نايل" ? 10.0 : 20.0)
+bool nearLimit = blockLimit and dPrev > 0 and (dayPct >= math.min(9.0, haltPct - 1.0) or dayPct >= luldPct - 0.25)
+float dayPct100 = useMktHalt100 ? request.security("EGX:EGX100EWI", "D", close[1] > 0 ? (close - close[1]) / close[1] * 100.0 : 0.0, barmerge.gaps_off, barmerge.lookahead_off) : 0.0
+bool mktHalt100 = useMktHalt100 and dayPct100 <= -10.0
+bool sundaySkip = skipSundayBuy and dayofweek == dayofweek.sunday
+
+float pl = ta.pivotlow(low, 8, 8)
+float ph = ta.pivothigh(high, 8, 8)
+var float swingLow = na
+var float swingHigh = na
+if not na(pl)
+    swingLow := pl
+if not na(ph)
+    swingHigh := ph
+
+bool supportBreak = sigOk and not na(swingLow) and close < swingLow and close[1] >= swingLow
+bool retestSupport = sigOk and not na(swingLow) and low <= swingLow * 1.005 and close > swingLow
+float zw = atr * 0.35
+float buyTop = nz(swingLow, low) + zw
+float buyBot = nz(swingLow, low) - zw * 1.2
+bool inZone = low <= buyTop and high >= buyBot
+bool nearSupport = low <= buyTop and close >= buyBot
+
+float phs = ta.pivothigh(high, 5, 5)
+var float actHigh = na
+var int structDir = 0
+if not na(phs)
+    actHigh := phs
+bool bullBreak = sigOk and not na(actHigh) and close > actHigh and close[1] <= actHigh
+if bullBreak
+    structDir := 1
+    actHigh := na
+bool fakeBreak = sigOk and not na(swingHigh) and high > swingHigh and close < swingHigh and rvol > 1.05
+bool breakRetest = retestSupport and structDir == 1 and not fakeBreak
+bool rawBreak = bullBreak and rvol >= 1.2
+var float brkHoldLvl = na
+var int brkHoldBars = 0
+if barstate.isconfirmed
+    if rawBreak
+        brkHoldLvl := nz(swingHigh, close[1])
+        brkHoldBars := 1
+    else if not na(brkHoldLvl) and close > brkHoldLvl
+        brkHoldBars += 1
+    else
+        brkHoldLvl := na
+        brkHoldBars := 0
+bool breakConfirmed = sigOk and not na(brkHoldLvl) and brkHoldBars >= 2 and (rvol >= 1.2 or rvol[1] >= 1.2)
+
+float t1 = na(swingHigh) ? close + atr * 1.5 : swingHigh
+float entryPx = (buyTop + buyBot) / 2.0
+float stopPx = buyBot - atr * 0.5
+float riskPx = math.max(entryPx - stopPx, syminfo.mintick)
+float rr = riskPx > 0 ? (t1 - entryPx) / riskPx : na
+
+float hi252 = ta.highest(high, 252)
+bool chase = hi252 > 0 and (close - hi252) / hi252 * 100.0 > -3.0 and rsi > 72
+
+float score = 0.0
+score += bullStack ? 20.0 : 0.0
+score += above200 ? 15.0 : -5.0
+score += htfBull ? 15.0 : -10.0
+score += macdBull ? 10.0 : 0.0
+score += accumulating ? 15.0 : distributing ? -10.0 : 0.0
+score += rvol >= 1.0 ? 10.0 : 0.0
+score += rsi > 40 and rsi < 70 ? 10.0 : 0.0
+score += rsLeader ? 5.0 : 0.0
+score += accScore >= 55 ? 5.0 : 0.0
+score += distRisk >= 55 ? -8.0 : 0.0
+score := math.max(0.0, math.min(100.0, score))
+
+int setupHits = 0
+setupHits += bullStack ? 1 : 0
+setupHits += htfBull ? 1 : 0
+setupHits += macdBull ? 1 : 0
+setupHits += accumulating ? 1 : 0
+setupHits += rsLeader ? 1 : 0
+setupHits += structDir == 1 ? 1 : 0
+setupHits += inZone ? 1 : 0
+setupHits += not na(rr) and rr >= minRRIn ? 1 : 0
+setupHits += rvol >= 1.0 ? 1 : 0
+setupHits += breakRetest or breakConfirmed ? 1 : 0
+setupHits += accScore >= 50 ? 1 : 0
+
+float rank = math.max(0.0, math.min(100.0, score * 0.55 + setupHits / 11.0 * 30.0 + (rsLeader ? 8.0 : 0.0) + (rvol >= 1.2 ? 7.0 : 0.0)))
+float opportunity = math.max(0.0, math.min(100.0, score * 0.45 + setupHits / 11.0 * 100.0 * 0.35 + math.min(100.0, nz(rr, 0.0) / 3.0 * 100.0) * 0.20))
+
+bool regimeOk = not blockBear or not heavySell
+bool chaseOk = not blockChase or not chase
+bool buyFlag = sigOk and liqOk and not supportBreak and setupHits >= effMinSetup and not na(rr) and rr >= minRRIn and (nearSupport or breakRetest or breakConfirmed) and score >= 55 and regimeOk and chaseOk and not nearLimit and distRisk < 65 and not mktHalt100 and not sundaySkip
+bool pass = buyFlag and rank >= effMinRank and opportunity >= 58
+bool pro = pass and opportunity >= effMinOpp and setupHits >= 7 and accScore >= 50 and distRisk < 50
+
+int cycle12 = distRisk >= 55 ? 9 : supportBreak ? 11 : accScore >= 55 and (inZone or retestSupport) ? 4 : structDir == 1 ? 6 : 3
+int action = supportBreak or heavySell or nearLimit or mktHalt100 ? 0 : pro or buyFlag ? 3 : pass or (setupHits >= 7 and opportunity >= 58) ? 2 : 1
+string stateTxt = pro ? "Pro ✓" : buyFlag ? "شراء" : action == 2 ? "جاهز" : action == 0 ? "تجنب" : supportBreak ? "كسر دعم" : nearLimit ? "حد يومي" : chase ? "مطاردة" : heavySell ? "ضغط سوق" : not liqOk ? "سيولة" : "انتظار"
+color stateCol = pro ? color.lime : buyFlag ? color.aqua : action == 0 ? color.red : action == 2 ? color.yellow : color.gray
+color oppCol = opportunity >= 68 ? color.lime : opportunity >= 55 ? color.yellow : color.gray
+
+var table t = table.new(position.top_right, 2, 13, bgcolor=color.new(#0d1117, 4), border_width=1)
+if showTbl and barstate.islast
+    table.clear(t, 0, 0, 1, 12)
+    table.cell(t, 0, 0, "أفضل فرص", bgcolor=color.new(#0d3b2e, 10), text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, stateTxt, bgcolor=color.new(#0d3b2e, 10), text_color=stateCol, text_size=size.small)
+    table.cell(t, 0, 1, "رمز", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 1, syminfo.ticker, text_color=color.white, text_size=size.small)
+    table.cell(t, 0, 2, "فرصة", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 2, str.tostring(opportunity, "#"), text_color=oppCol, text_size=size.small)
+    table.cell(t, 0, 3, "رتبة", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 3, str.tostring(rank, "#"), text_color=rank >= effMinRank ? color.lime : color.white, text_size=size.tiny)
+    table.cell(t, 0, 4, "إعداد / R/R", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 4, str.tostring(setupHits) + "/11 · " + str.tostring(rr, "#.#"), text_color=color.white, text_size=size.tiny)
+    table.cell(t, 0, 5, "RVOL / RS20", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 5, str.tostring(rvol, "#.##") + " · " + str.tostring(rsSpread, "#.#") + "%", text_color=rsLeader ? color.lime : color.orange, text_size=size.tiny)
+    table.cell(t, 0, 6, "تجميع / تصريف", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 6, str.tostring(accScore, "#") + " / " + str.tostring(distRisk, "#"), text_color=accScore > distRisk ? color.lime : color.orange, text_size=size.tiny)
+    table.cell(t, 0, 7, "يوم% / دورة", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 7, str.tostring(dayPct, "#.#") + "% · " + str.tostring(cycle12), text_color=nearLimit ? color.orange : color.white, text_size=size.tiny)
+    table.cell(t, 0, 8, "سيولة", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 8, "T" + str.tostring(liqTier) + (liqOk ? " ✓" : " ✗"), text_color=liqOk ? color.gray : color.orange, text_size=size.tiny)
+    table.cell(t, 0, 9, "إجراء", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 9, str.tostring(action) + (mktHalt100 ? " · وقف سوق" : ""), text_color=stateCol, text_size=size.tiny)
+    table.cell(t, 0, 10, "200 سهم", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 10, "BOARD200 · WL6 · Screener↓", text_color=color.aqua, text_size=size.tiny)
+    table.cell(t, 0, 11, profile, text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 11, "D · vs EGX30", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 0, 12, "EGXOpp_Score", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 12, "رتّب تنازلي", text_color=color.gray, text_size=size.tiny)
+
+plot(opportunity, "EGXOpp_Score", display=display.all)
+plot(rank, "EGXOpp_Rank", display=display.all)
+plot(buyFlag ? 1 : 0, "EGXOpp_Buy", display=display.all)
+plot(pass ? 1 : 0, "EGXOpp_Pass", display=display.all)
+plot(pro ? 1 : 0, "EGXOpp_Pro", display=display.all)
+plot(setupHits, "EGXOpp_Setup", display=display.all)
+plot(rr, "EGXOpp_RR", display=display.all)
+plot(rvol, "EGXOpp_RVOL", display=display.all)
+plot(rsSpread, "EGXOpp_RS", display=display.all)
+plot(accScore, "EGXOpp_Acc", display=display.all)
+plot(distRisk, "EGXOpp_Dist", display=display.all)
+plot(liqTier, "EGXOpp_LiqTier", display=display.all)
+plot(score, "EGXOpp_Tech", display=display.all)
+plot(dayPct, "EGXOpp_DayPct", display=display.all)
+plot(cycle12, "EGXOpp_Cycle", display=display.all)
+plot(action, "EGXOpp_Action", display=display.all)
+plot(chase ? 1 : 0, "EGXOpp_Chase", display=display.all)
+plot(nearLimit ? 1 : 0, "EGXOpp_Limit", display=display.all)
+plot(regimeOk and not mktHalt100 ? 1 : 0, "EGX_RegimeOk", display=display.all)
+plot(mktHalt100 ? 1 : 0, "EGXOpp_MktHalt100", display=display.all)
+plot(1, "EGXOpp", display=display.all)
+
+alertcondition(pro, "أفضل فرص — Pro", "{{ticker}}: أفضل فرص Pro")
+alertcondition(buyFlag, "أفضل فرص — شراء", "{{ticker}}: أفضل فرص شراء")
+alertcondition(pro and not pro[1], "أفضل فرص — Pro جديد", "{{ticker}}: أفضل فرص Pro جديد")
+alertcondition(action == 0 and action[1] != 0, "أفضل فرص — تجنب", "{{ticker}}: أفضل فرص تجنب")

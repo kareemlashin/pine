@@ -1,0 +1,29 @@
+//@version=6
+indicator("EGX Tool 92 بروكس — Al Brooks Always-In", shorttitle="EGX T-BROOKS", overlay=true, max_labels_count=80, max_lines_count=80, max_boxes_count=40, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة ز أنظمة · #92/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+float ema20 = ta.ema(close, 20)
+bool spikeUp = close > open and (high - low) > ta.atr(14) * 1.2 and close > ema20
+bool spikeDn = close < open and (high - low) > ta.atr(14) * 1.2 and close < ema20
+var int ai = 0
+if spikeUp
+    ai := 1
+if spikeDn
+    ai := -1
+int vote = ai != 0 ? ai : close > ema20 ? 1 : -1
+plot(ema20, "EMA20", color=color.blue)
+
+plot(vote, "EGXT_BROOKS_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_BROOKS_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_BROOKS_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "BROOKS", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-BROOKS صاعد", "EGX Tool BROOKS: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-BROOKS هابط", "EGX Tool BROOKS: vote هابط")

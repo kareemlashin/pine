@@ -1,0 +1,42 @@
+//@version=6
+indicator("EGX Volume Weekly pace", shorttitle="EGX VWk", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// وتيرة حجم الأسبوع (يومي) vs متوسط · docs/EGX_VOLUME.md
+
+string G = "Week"
+string tz = input.string("Africa/Cairo", "TZ", group=G)
+int weekMa = input.int(8, "Weeks MA", minval=4, group=G)
+
+bool newWeek = ta.change(time("W", tz)) != 0
+var float weekVol = 0.0
+var int weekDays = 0
+
+if newWeek
+    weekVol := volume
+    weekDays := 1
+else
+    weekVol += volume
+    weekDays += 1
+
+float avgDaily = weekMa > 0 ? ta.sma(volume, weekMa * 5) : volume
+float pace = weekDays > 0 ? weekVol / weekDays : volume
+float paceRatio = pace / math.max(avgDaily, 1.0)
+float projWeek = pace * 5.0
+float projRatio = projWeek / math.max(avgDaily * 5.0, 1.0)
+
+bool hotWeek = projRatio >= 1.25
+
+plot(paceRatio, "Daily pace", color=color.teal, linewidth=2)
+plot(projRatio, "Proj week", color=color.orange, linewidth=1)
+hline(1.0, "1.0", color=color.gray, linestyle=hline.style_dashed)
+
+var table t = table.new(position.top_left, 2, 4, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 3)
+    table.cell(t, 0, 0, "Week V", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, hotWeek ? "HOT" : "—", text_size=size.tiny)
+    table.cell(t, 0, 1, "Pace/Proj", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 1, str.tostring(paceRatio, "#.##") + " / " + str.tostring(projRatio, "#.##"), text_size=size.tiny)
+
+plot(hotWeek ? 1 : 0, "EGVWk_Hot", display=display.all)
+plot(projRatio, "EGVWk_ProjRatio", display=display.all)

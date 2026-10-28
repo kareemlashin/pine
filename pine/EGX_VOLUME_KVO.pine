@@ -1,0 +1,34 @@
+//@version=6
+indicator("EGX Volume Klinger Oscillator", shorttitle="EGX VKVO", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// KVO تقريبي · docs/EGX_VOLUME.md
+
+string G = "KVO"
+int fast = input.int(34, "Fast", group=G)
+int slow = input.int(55, "Slow", group=G)
+int sig = input.int(13, "Signal", group=G)
+
+float trend = hlc3 > hlc3[1] ? 1.0 : -1.0
+float dm = high - low
+float cm = dm == dm[1] ? 0.0 : dm + (dm > dm[1] ? dm - dm[1] : dm[1] - dm)
+float vf = volume * trend * math.abs(2.0 * dm / math.max(cm, syminfo.mintick) - 1.0) * 100.0
+float kvo = ta.ema(vf, fast) - ta.ema(vf, slow)
+float kvoSig = ta.ema(kvo, sig)
+
+bool bull = ta.crossover(kvo, kvoSig) and kvo > 0
+bool bear = ta.crossunder(kvo, kvoSig) and kvo < 0
+
+plot(kvo, "EGVKVO_Val", color=color.fuchsia, linewidth=2, display=display.all)
+plot(kvoSig, "Signal", color=color.orange, linewidth=1, display=display.none)
+hline(0, "0", color=color.gray)
+plotshape(bull, "Bull", shape.triangleup, location=location.bottom, color=color.lime, size=size.tiny)
+plotshape(bear, "Bear", shape.triangledown, location=location.top, color=color.red, size=size.tiny)
+
+var table t = table.new(position.top_right, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "KVO", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, kvo > kvoSig ? "Bull" : "Bear", text_size=size.tiny)
+
+plot(bull ? 1 : 0, "EGVKVO_Bull", display=display.all)
+plot(bear ? 1 : 0, "EGVKVO_Bear", display=display.all)

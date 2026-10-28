@@ -1,0 +1,31 @@
+//@version=6
+indicator("EGX Volume VWMA — price", shorttitle="EGX VVWMA", overlay=true, max_tables_count=2, calc_bars_count=5000)
+
+// VWMA + SMA · تقاطع · docs/EGX_VOLUME.md
+
+string G = "VWMA"
+int len = input.int(20, "VWMA length", minval=5, group=G)
+int smaLen = input.int(50, "SMA compare", minval=10, group=G)
+
+float vwma = ta.vwma(close, len)
+float sma = ta.sma(close, smaLen)
+float rvol = volume / math.max(ta.sma(volume, 20), 1.0)
+
+bool bull = close > vwma and vwma > vwma[1] and rvol >= 1.0
+bool bear = close < vwma and vwma < vwma[1] and rvol >= 1.0
+bool xUp = ta.crossover(close, vwma) and rvol >= 1.05
+bool xDn = ta.crossunder(close, vwma) and rvol >= 1.05
+
+plot(vwma, "VWMA", color=color.fuchsia, linewidth=2)
+plot(sma, "SMA", color=color.new(color.gray, 40), linewidth=1)
+plotshape(xUp, "X↑", shape.triangleup, location.belowbar, color=color.lime, size=size.tiny)
+plotshape(xDn, "X↓", shape.triangledown, location.abovebar, color=color.red, size=size.tiny)
+
+var table t = table.new(position.top_left, 2, 3, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 2)
+    table.cell(t, 0, 0, "VWMA", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, bull ? "Bull" : bear ? "Bear" : "—", text_size=size.tiny)
+
+plot(bull ? 1 : 0, "EGVVWMA_Bull", display=display.all)
+plot(xUp ? 1 : 0, "EGVVWMA_XUp", display=display.all)

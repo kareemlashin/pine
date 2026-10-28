@@ -1,0 +1,35 @@
+//@version=6
+indicator("EGX Volume UV · DV cumulative", shorttitle="EGX VUV", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// Up-Volume / Down-Volume تراكمي · docs/EGX_VOLUME.md
+
+string G = "UV/DV"
+int maLen = input.int(20, "Smooth", group=G)
+
+float uv = close >= open ? volume : 0.0
+float dv = close < open ? volume : 0.0
+var float cuv = 0.0
+var float cdv = 0.0
+cuv += uv
+cdv += dv
+
+float net = cuv - cdv
+float netMa = ta.sma(net, maLen)
+float spread = cuv + cdv > 0 ? (cuv - cdv) / (cuv + cdv) * 100.0 : 0.0
+
+bool bull = net > netMa and spread > 5
+bool bear = net < netMa and spread < -5
+
+plot(cuv, "Cum UV", color=color.lime, linewidth=1)
+plot(cdv, "Cum DV", color=color.red, linewidth=1)
+plot(net, "Net UV-DV", color=color.yellow, linewidth=2)
+plot(netMa, "Net MA", color=color.new(color.white, 50))
+
+var table t = table.new(position.top_right, 2, 3, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 2)
+    table.cell(t, 0, 0, "UV/DV", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, str.tostring(spread, "#") + "%", text_size=size.tiny)
+
+plot(bull ? 1 : 0, "EGVUV_Bull", display=display.all)
+plot(spread, "EGVUV_SpreadPct", display=display.all)

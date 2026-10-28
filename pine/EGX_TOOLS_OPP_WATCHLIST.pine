@@ -1,0 +1,113 @@
+//@version=6
+indicator("EGX TOOLS Opp — محفظة 6", shorttitle="T Opp WL", overlay=false, max_tables_count=1, calc_bars_count=5000)
+
+// plots: EGXTTOppWL_* · مرآة EGX_TOOLS_OPP على 6 رموز · إطار D
+
+string G = "رموز"
+string s1 = input.symbol("EGX:COMI", "1", group=G)
+string s2 = input.symbol("EGX:SWDY", "2", group=G)
+string s3 = input.symbol("EGX:TMGH", "3", group=G)
+string s4 = input.symbol("EGX:ETEL", "4", group=G)
+string s5 = input.symbol("EGX:FWRY", "5", group=G)
+string s6 = input.symbol("EGX:HRHO", "6", group=G)
+string bench = input.symbol("EGX:EGX30", "EGX30", group=G)
+float minVol = input.float(1500.0, "حد حجم", group=G)
+float sigMin = input.float(20.0, "Score %", group=G)
+float minRankPro = input.float(55.0, "Rank Pro", group=G)
+string egxBoard = input.string("نشط (EGX100)", "لوحة", options=["نشط (EGX100)", "EGX30 (بيع مكشوف)", "SME تميّز", "SME نايل", "غير نشط"], group=G)
+
+f_pack() =>
+    float ema20 = ta.ema(close, 20)
+    float ema50 = ta.ema(close, 50)
+    float ema200 = ta.ema(close, 200)
+    float rsi = ta.rsi(close, 14)
+    [macdL, macdS, macdH] = ta.macd(close, 12, 26, 9)
+    float volMa = ta.sma(volume, 20)
+    bool liq = volMa >= minVol
+    float rvol = volume / math.max(volMa, 1.0)
+    float cmf = ta.sma(((close - low) - (high - close)) / math.max(high - low, syminfo.mintick) * volume, 20) / ta.sma(volume, 20)
+    float obvSl = ta.linreg(ta.obv, 10, 0) - ta.linreg(ta.obv, 10, 1)
+    [diP, diM, adx] = ta.dmi(14, 14)
+    [_, stDir] = ta.supertrend(3.0, 10)
+    float lHi = ta.highest(high, 80)
+    float lLo = ta.lowest(low, 80)
+    bool inDem = close <= lHi - 0.618 * (lHi - lLo) and close >= lLo
+    bool bosUp = close > ta.highest(high, 20)[1]
+    int v01 = rsi > 52 and rsi < 68 ? 1 : rsi >= 68 ? 0 : -1
+    int v02 = macdH > 0 and macdL > macdS ? 1 : macdH < 0 ? -1 : 0
+    int v07 = close > ema20 and ema20 > ema50 and ema50 > ema200 ? 1 : -1
+    int v08 = stDir < 0 ? 1 : -1
+    int v10 = cmf > 0.05 ? 1 : cmf < -0.05 ? -1 : 0
+    int v11 = obvSl > 0 ? 1 : obvSl < 0 ? -1 : 0
+    int v12 = ta.accdist > ta.ema(ta.accdist, 20) ? 1 : -1
+    int v15 = bosUp ? 1 : 0
+    int v16 = inDem ? 1 : 0
+    float score = (v01 + v02 + v07 + v08 + v10 + v11 + v12 + v15 + v16) / 9.0 * 100.0
+    int nG = (v01 == 1 ? 1 : 0) + (v02 == 1 ? 1 : 0) + (v07 == 1 ? 1 : 0) + (v08 == 1 ? 1 : 0) + (v10 == 1 ? 1 : 0) + (v11 == 1 ? 1 : 0) + (v12 == 1 ? 1 : 0) + (v15 == 1 ? 1 : 0) + (v16 == 1 ? 1 : 0)
+    bool locOK = inDem or bosUp
+    bool moneyOK = v10 == 1 and v11 != -1 and v12 == 1
+    int hits = (v07 == 1 or v08 == 1 ? 1 : 0) + (locOK ? 1 : 0) + (score >= sigMin * 0.5 ? 1 : 0) + (moneyOK ? 1 : 0) + (close > open ? 1 : 0) + (rvol >= 0.9 ? 1 : 0)
+    float rank = math.max(0.0, math.min(100.0, score * 0.55 + hits / 6.0 * 100.0 * 0.30 + nG / 13.0 * 100.0 * 0.15))
+    bool buyA = liq and locOK and moneyOK and hits >= 5 and score >= sigMin
+    bool pro = buyA and rank >= minRankPro and hits >= 5 and nG >= 8
+    [score, rank, buyA ? 1.0 : 0.0, pro ? 1.0 : 0.0, rvol]
+
+f_snap(string sym) =>
+    [sc, rk, ba, pr, rv] = request.security(sym, "D", f_pack(), barmerge.gaps_off, barmerge.lookahead_off)
+    [sym, sc, rk, ba, pr, rv]
+
+[s1n, sc1, rk1, ba1, pr1, rv1] = f_snap(s1)
+[s2n, sc2, rk2, ba2, pr2, rv2] = f_snap(s2)
+[s3n, sc3, rk3, ba3, pr3, rv3] = f_snap(s3)
+[s4n, sc4, rk4, ba4, pr4, rv4] = f_snap(s4)
+[s5n, sc5, rk5, ba5, pr5, rv5] = f_snap(s5)
+[s6n, sc6, rk6, ba6, pr6, rv6] = f_snap(s6)
+
+var table wl = table.new(position.top_right, 6, 8, border_width=1)
+if barstate.islast
+    table.clear(wl, 0, 0, 5, 7)
+    table.cell(wl, 0, 0, "رمز", text_color=color.gray, text_size=size.tiny)
+    table.cell(wl, 1, 0, "Rank", text_color=color.gray, text_size=size.tiny)
+    table.cell(wl, 2, 0, "Score", text_color=color.gray, text_size=size.tiny)
+    table.cell(wl, 3, 0, "A", text_color=color.gray, text_size=size.tiny)
+    table.cell(wl, 4, 0, "Pro", text_color=color.gray, text_size=size.tiny)
+    table.cell(wl, 5, 0, "RVOL", text_color=color.gray, text_size=size.tiny)
+    table.cell(wl, 0, 1, s1, text_size=size.tiny)
+    table.cell(wl, 1, 1, str.tostring(rk1, "#"), text_size=size.tiny)
+    table.cell(wl, 2, 1, str.tostring(sc1, "#"), text_size=size.tiny)
+    table.cell(wl, 3, 1, ba1 ? "A" : "—", text_color=ba1 ? color.lime : color.gray, text_size=size.tiny)
+    table.cell(wl, 4, 1, pr1 ? "P" : "—", text_color=pr1 ? color.lime : color.gray, text_size=size.tiny)
+    table.cell(wl, 5, 1, str.tostring(rv1, "#.##"), text_size=size.tiny)
+    table.cell(wl, 0, 2, s2, text_size=size.tiny)
+    table.cell(wl, 1, 2, str.tostring(rk2, "#"), text_size=size.tiny)
+    table.cell(wl, 2, 2, str.tostring(sc2, "#"), text_size=size.tiny)
+    table.cell(wl, 3, 2, ba2 ? "A" : "—", text_color=ba2 ? color.lime : color.gray, text_size=size.tiny)
+    table.cell(wl, 4, 2, pr2 ? "P" : "—", text_color=pr2 ? color.lime : color.gray, text_size=size.tiny)
+    table.cell(wl, 5, 2, str.tostring(rv2, "#.##"), text_size=size.tiny)
+    table.cell(wl, 0, 3, s3, text_size=size.tiny)
+    table.cell(wl, 1, 3, str.tostring(rk3, "#"), text_size=size.tiny)
+    table.cell(wl, 2, 3, str.tostring(sc3, "#"), text_size=size.tiny)
+    table.cell(wl, 3, 3, ba3 ? "A" : "—", text_size=size.tiny)
+    table.cell(wl, 4, 3, pr3 ? "P" : "—", text_size=size.tiny)
+    table.cell(wl, 5, 3, str.tostring(rv3, "#.##"), text_size=size.tiny)
+    table.cell(wl, 0, 4, s4, text_size=size.tiny)
+    table.cell(wl, 1, 4, str.tostring(rk4, "#"), text_size=size.tiny)
+    table.cell(wl, 2, 4, str.tostring(sc4, "#"), text_size=size.tiny)
+    table.cell(wl, 3, 4, ba4 ? "A" : "—", text_size=size.tiny)
+    table.cell(wl, 4, 4, pr4 ? "P" : "—", text_size=size.tiny)
+    table.cell(wl, 5, 4, str.tostring(rv4, "#.##"), text_size=size.tiny)
+    table.cell(wl, 0, 5, s5, text_size=size.tiny)
+    table.cell(wl, 1, 5, str.tostring(rk5, "#"), text_size=size.tiny)
+    table.cell(wl, 2, 5, str.tostring(sc5, "#"), text_size=size.tiny)
+    table.cell(wl, 3, 5, ba5 ? "A" : "—", text_size=size.tiny)
+    table.cell(wl, 4, 5, pr5 ? "P" : "—", text_size=size.tiny)
+    table.cell(wl, 5, 5, str.tostring(rv5, "#.##"), text_size=size.tiny)
+    table.cell(wl, 0, 6, s6, text_size=size.tiny)
+    table.cell(wl, 1, 6, str.tostring(rk6, "#"), text_size=size.tiny)
+    table.cell(wl, 2, 6, str.tostring(sc6, "#"), text_size=size.tiny)
+    table.cell(wl, 3, 6, ba6 ? "A" : "—", text_size=size.tiny)
+    table.cell(wl, 4, 6, pr6 ? "P" : "—", text_size=size.tiny)
+    table.cell(wl, 5, 6, str.tostring(rv6, "#.##"), text_size=size.tiny)
+
+plot(pr1 + pr2 + pr3 + pr4 + pr5 + pr6, "EGXTTOppWL_ProCount", display=display.data_window)
+plot(1, "EGXTTOppWL", display=display.all)

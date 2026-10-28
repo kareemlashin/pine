@@ -1,0 +1,31 @@
+//@version=6
+indicator("EGX Volume Price Trend — VPT", shorttitle="EGX VVPT", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// VPT + MA · docs/EGX_VOLUME.md
+
+string G = "VPT"
+int maLen = input.int(21, "MA VPT", group=G)
+
+float pctChg = close[1] > 0 ? (close - close[1]) / close[1] : 0.0
+var float vpt = 0.0
+vpt += volume * pctChg
+float vptMa = ta.sma(vpt, maLen)
+
+bool acc = vpt > vptMa and close > ta.sma(close, 50)
+bool dist = vpt < vptMa and close < ta.sma(close, 50)
+bool xUp = ta.crossover(vpt, vptMa)
+bool xDn = ta.crossunder(vpt, vptMa)
+
+plot(vpt, "VPT", color=color.teal, linewidth=2)
+plot(vptMa, "VPT MA", color=color.orange, linewidth=1)
+hline(0, "0", color=color.gray)
+
+var table t = table.new(position.top_left, 2, 3, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 2)
+    table.cell(t, 0, 0, "VPT", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, acc ? "Acc" : dist ? "Dist" : "—", text_size=size.tiny)
+
+plot(acc ? 1 : 0, "EGVVPT_Acc", display=display.all)
+plot(xUp ? 1 : 0, "EGVVPT_XUp", display=display.all)
+plot(vpt - vptMa, "EGVVPT_Spread", display=display.all)

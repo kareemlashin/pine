@@ -1,0 +1,56 @@
+//@version=6
+indicator("EGX TOOLS Strip — Score + 8 مجموعات", shorttitle="T Strip", overlay=true, max_tables_count=1, calc_bars_count=5000)
+
+// شريط أعلى الشارت · EGXTStrip_Score · EGXTStrip_BuyA
+// كامل: EGX_TOOLS_MASTER
+
+float sigMin = input.float(20.0, "حد Score %")
+bool showBar = input.bool(true, "شريط Score")
+
+float ema20 = ta.ema(close, 20)
+float ema50 = ta.ema(close, 50)
+float rsi = ta.rsi(close, 14)
+[macdL, macdS, macdH] = ta.macd(close, 12, 26, 9)
+float cmf = ta.sma(((close - low) - (high - close)) / math.max(high - low, syminfo.mintick) * volume, 20) / ta.sma(volume, 20)
+float obvSl = ta.linreg(ta.obv, 10, 0) - ta.linreg(ta.obv, 10, 1)
+[stLine, stDir] = ta.supertrend(3.0, 10)
+
+float pctA = ((rsi > 52 and rsi < 68 ? 1 : -1) + (macdH > 0 ? 1 : -1)) / 2.0 * 100.0
+float pctB = ((close > ema20 and ema20 > ema50 ? 1 : -1) + (stDir < 0 ? 1 : -1)) / 2.0 * 100.0
+float pctC = ((cmf > 0 ? 1 : -1) + (obvSl > 0 ? 1 : -1)) / 2.0 * 100.0
+float total = (pctA * 0.25 + pctB * 0.35 + pctC * 0.40)
+
+float dPrevLim = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+float dayPctLim = dPrevLim > 0 ? (close - dPrevLim) / dPrevLim * 100.0 : 0.0
+float haltPctLim = egxBoardLim == "SME تميّز" or egxBoardLim == "SME نايل" or egxBoardLim == "غير نشط" ? 5.0 : 10.0
+float luldPctLim = egxBoardLim == "غير نشط" ? 5.0 : (egxBoardLim == "SME تميّز" or egxBoardLim == "SME نايل" ? 10.0 : 20.0)
+bool nearLimitLim = blockLimitLim and dPrevLim > 0 and (dayPctLim >= math.min(9.0, haltPctLim - 1.0) or dayPctLim >= luldPctLim - 0.25)
+
+bool buyA = total >= sigMin and cmf > 0 and close > ema50 and close > open and not nearLimitLim
+
+bgcolor(showBar ? (buyA ? color.new(color.lime, 92) : total >= 0 ? color.new(color.teal, 95) : color.new(color.red, 95)) : na, title="Tools mood")
+
+var table s = table.new(position.top_center, 8, 2, bgcolor=color.new(color.black, 75), border_width=1)
+if barstate.islast
+    table.clear(s, 0, 0, 7, 1)
+    table.cell(s, 0, 0, "Score", text_color=color.gray, text_size=size.tiny)
+    table.cell(s, 1, 0, str.tostring(total, "#") + "%", text_color=total >= sigMin ? color.lime : color.white, text_size=size.small)
+    table.cell(s, 2, 0, "أ", text_size=size.tiny)
+    table.cell(s, 3, 0, str.tostring(pctA, "#"), text_size=size.tiny, bgcolor=pctA > 0 ? color.new(color.green, 60) : color.new(color.red, 60))
+    table.cell(s, 4, 0, "ب", text_size=size.tiny)
+    table.cell(s, 5, 0, str.tostring(pctB, "#"), text_size=size.tiny)
+    table.cell(s, 6, 0, "ج", text_size=size.tiny)
+    table.cell(s, 7, 0, str.tostring(pctC, "#"), text_size=size.tiny)
+    table.cell(s, 0, 1, buyA ? "A" : total >= sigMin * 0.5 ? "B?" : "—", text_color=buyA ? color.lime : color.gray, text_size=size.tiny)
+    table.merge_cells(s, 0, 1, 1, 1)
+    table.cell(s, 2, 1, "lite", text_color=color.gray, text_size=size.tiny)
+    table.merge_cells(s, 2, 1, 7, 1)
+
+plot(total, "EGXTStrip_Score", display=display.data_window)
+plot(buyA ? 1 : 0, "EGXTStrip_BuyA", display=display.data_window)
+plot(pctA, "EGXTStrip_A", display=display.data_window)
+plot(pctB, "EGXTStrip_B", display=display.data_window)
+plot(pctC, "EGXTStrip_C", display=display.data_window)
+plot(1, "EGXTStrip", display=display.data_window)
+
+plot(nearLimitLim ? 1 : 0, "EGX_NearLimit", display=display.data_window)

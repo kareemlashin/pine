@@ -1,0 +1,33 @@
+//@version=6
+indicator("EGX Volume Zone Oscillator", shorttitle="EGX VVZO", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// موقع الحום داخل نطاق N · docs/EGX_VOLUME.md
+
+string G = "VZO"
+int len = input.int(14, "Range", group=G)
+float hiZone = input.float(80.0, "High zone", group=G)
+float loZone = input.float(20.0, "Low zone", group=G)
+
+float vHi = ta.highest(volume, len)
+float vLo = ta.lowest(volume, len)
+float vzo = vHi > vLo ? (volume - vLo) / (vHi - vLo) * 100.0 : 50.0
+float vzoMa = ta.sma(vzo, 5)
+
+bool highZ = vzo >= hiZone
+bool lowZ = vzo <= loZone
+bool xUp = ta.crossover(vzo, hiZone)
+
+plot(vzo, "EGVVZO_Val", color=color.fuchsia, linewidth=2, display=display.all)
+plot(vzoMa, "MA", color=color.gray, linewidth=1, display=display.none)
+hline(hiZone, "High", color=color.red, linestyle=hline.style_dashed)
+hline(loZone, "Low", color=color.lime, linestyle=hline.style_dashed)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "VZO", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, str.tostring(vzo, "#") + "%", text_size=size.tiny)
+
+plot(highZ ? 1 : 0, "EGVVZO_High", display=display.all)
+plot(lowZ ? 1 : 0, "EGVVZO_Low", display=display.all)
+plot(xUp ? 1 : 0, "EGVVZO_XHigh", display=display.all)

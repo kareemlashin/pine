@@ -1,0 +1,28 @@
+//@version=6
+indicator("EGX Tool 48 CVD — Cumulative Volume Delta", shorttitle="EGX T-CVD", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة ج الحجم · #48/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+float rng = math.max(high - low, syminfo.mintick)
+float buyV = volume * (close - low) / rng
+float sellV = volume - buyV
+float delta = buyV - sellV
+var float cvd = 0.0
+cvd += delta
+float sl = ta.linreg(cvd, 10, 0) - ta.linreg(cvd, 10, 1)
+int vote = sl > 0 ? 1 : -1
+plot(cvd, "EGXT_CVD", color=sl >= 0 ? color.lime : color.red, linewidth=2)
+
+plot(vote, "EGXT_CVD_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_CVD_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_CVD_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "CVD", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-CVD صاعد", "EGX Tool CVD: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-CVD هابط", "EGX Tool CVD: vote هابط")

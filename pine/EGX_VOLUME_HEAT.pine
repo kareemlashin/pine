@@ -1,0 +1,36 @@
+//@version=6
+indicator("EGX Volume Heat — bar intensity", shorttitle="EGX VHeat", overlay=true, max_tables_count=2, calc_bars_count=5000)
+
+// شدة حجم + اتجاه buy% على الشموع · docs/EGX_VOLUME.md
+
+string G = "Heat"
+int rankLen = input.int(120, "Rank %", minval=30, group=G)
+float hotPct = input.float(80.0, "Hot %", group=G)
+bool colorBars = input.bool(true, "تلوين الشموع", group=G)
+
+float pct = ta.percentrank(volume, rankLen)
+float vma = ta.sma(volume, 20)
+float rvol = volume / math.max(vma, 1.0)
+float rng = math.max(high - low, syminfo.mintick)
+float buyPct = (close - low) / rng * 100.0
+
+bool hot = pct >= hotPct
+bool hotBuy = hot and buyPct >= 55 and close >= open
+bool hotSell = hot and buyPct <= 45 and close <= open
+
+int transp = int(100.0 - math.min(pct, 100.0) * 0.45)
+bgcolor(colorBars ? color.new(hotBuy ? color.lime : hotSell ? color.red : hot ? color.orange : color.gray, transp) : na)
+
+var table t = table.new(position.bottom_right, 2, 4, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 3)
+    table.cell(t, 0, 0, "Heat", bgcolor=color.black, text_color=color.orange, text_size=size.small)
+    table.cell(t, 1, 0, str.tostring(pct, "#") + "%", text_size=size.small)
+    table.cell(t, 0, 1, "RVOL", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 1, str.tostring(rvol, "#.##"), text_size=size.tiny)
+    table.cell(t, 0, 2, "Buy%", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 2, str.tostring(buyPct, "#"), text_size=size.tiny)
+
+plot(pct, "EGVHeat_Pct", display=display.all)
+plot(hotBuy ? 1 : 0, "EGVHeat_HotBuy", display=display.all)
+plot(hotSell ? 1 : 0, "EGVHeat_HotSell", display=display.all)

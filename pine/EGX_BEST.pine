@@ -1,0 +1,382 @@
+//@version=6
+indicator("EGX BEST — شراء/بيع · حجم · مناطق", shorttitle="EGX BEST", overlay=true, max_labels_count=200, max_lines_count=200, max_boxes_count=50, calc_bars_count=5000)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// EGX BEST — أفضل ما يُوثَّق لـ EGX في ملف واحد واضح
+// Trend (EMA/HTF) + Volume (RVOL/CMF/OBV) + Zones (S/R, demand/supply)
+// + Breakout retest + EGX30 regime + حد +10% + R/R + أهداف
+// Strategy backtest: pine/EGX_BEST_STRATEGY.pine
+// Screener: EGXB_Buy = 1 · EGXB_Rank ≥ 65 · EGXB_RR ≥ 1.5 · EGXB_Setup ≥ 7
+// Vol Rank plots: EGXB_VolRank · EGXB_VolPass (mirror EGX_Core)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+string G_PROF = "═══ ملف EGX ═══"
+string profile = input.string("EGX قياسي", "الملف", options=["EGX قياسي", "مضاربة 15د", "استثمار يومي", "مخصص"], group=G_PROF)
+
+string G_CORE = "═══ أساسيات ═══"
+int pivotLen = input.int(8, "محور swing", minval=3, maxval=15, group=G_CORE)
+int volMaLen = input.int(20, "متوسط حجم", minval=5, group=G_CORE)
+float minAvgVolIn = input.float(1500.0, "حد أدنى متوسط حجم", minval=0, group=G_CORE)
+float minRRIn = input.float(1.5, "حد R/R للشراء", minval=1.0, step=0.1, group=G_CORE)
+float minScoreIn = input.float(58.0, "حد التقييم /100", minval=40, maxval=90, group=G_CORE)
+int minSetupIn = input.int(7, "حد إعداد (/11)", minval=0, maxval=11, group=G_CORE)
+bool confirmClose = input.bool(true, "إشارة عند إغلاق الشمعة", group=G_CORE)
+float zoneAtr = input.float(0.35, "عرض منطقة × ATR", minval=0.15, step=0.05, group=G_CORE)
+float atrMultSL = input.float(1.5, "وقف × ATR من الدعم", minval=0.5, step=0.1, group=G_CORE)
+
+string G_EGX = "═══ بورصة EGX ═══"
+string mktSym = input.symbol("EGX:EGX30", "مؤشر EGX30", group=G_EGX)
+bool blockBearMkt = input.bool(true, "منع شراء ضغط بيعي على المؤشر", group=G_EGX)
+bool blockLimitUp = input.bool(true, "منع شراء قرب halt اليومي", group=G_EGX)
+float limitPct = input.float(9.0, "تحذير halt %", minval=3, maxval=10, step=0.5, group=G_EGX)
+string egxBoard = input.string("نشط (EGX100)", "لوحة", options=["نشط (EGX100)", "EGX30 (بيع مكشوف)", "SME تميّز", "SME نايل", "غير نشط"], group=G_EGX)
+bool skipSundayBuy = input.bool(false, "لا دخول يوم الأحد", group=G_EGX)
+int breakConfirmBars = input.int(2, "إغلاقات لتأكيد الاختراق", minval=1, maxval=5, group=G_EGX)
+bool skipOffHours = input.bool(false, "لا دخول خارج المستمر", group=G_EGX)
+string egxTz = input.string("Africa/Cairo", "المنطقة الزمنية", group=G_EGX)
+bool useMktHalt100 = input.bool(true, "منع شراء إذا EGX100 ≤ −10%", group=G_EGX)
+string mkt100 = input.symbol("EGX:EGX100EWI", "EGX100", group=G_EGX)
+float riskPctEq = input.float(1.5, "مخاطرة % محفظة", minval=0.5, maxval=3.0, step=0.1, group=G_EGX)
+float tBillAfterTax = input.float(20.0, "عقبة أذون بعد الضريبة %", minval=0, maxval=40, group=G_EGX)
+int holdDaysHurdle = input.int(30, "أفق الاحتفاظ (يوم)", minval=5, maxval=365, group=G_EGX)
+bool usdEarner = input.bool(false, "إيراد بالدولار", group=G_EGX)
+bool gateHurdle = input.bool(false, "منع إن T1 < أذون", group=G_EGX)
+int earningsBars = input.int(0, "أرباح خلال N شموع (0=إيقاف)", minval=0, maxval=60, group=G_EGX)
+bool blockEarnings = input.bool(true, "منع قرب الأرباح", group=G_EGX)
+float brokerTp = input.float(0.0, "هدف وسيط (0=إيقاف)", minval=0, group=G_EGX)
+bool blockAboveTp = input.bool(true, "منع فوق هدف الوسيط", group=G_EGX)
+bool useSessionVwap = input.bool(true, "VWAP جلسة (داخل اليوم)", group=G_EGX)
+
+string G_UI = "═══ عرض ═══"
+bool showZones = input.bool(true, "صناديق شراء / بيع", group=G_UI)
+bool showLevels = input.bool(true, "دخول · وقف · أهداف", group=G_UI)
+bool showTable = input.bool(true, "جدول ملخص (يمين)", group=G_UI)
+bool showBanner = input.bool(false, "بانر قرار (أسفل يمين)", group=G_UI)
+bool uiClearBest = input.bool(true, "تخطيط واضح", group=G_UI)
+bool effBestBanner = showBanner and (not uiClearBest or not showTable)
+bool showMarks = input.bool(true, "علامات BUY/SELL", group=G_UI)
+bool showEma = input.bool(true, "EMA 9/21/50/200", group=G_UI)
+
+bool profCustom = profile == "مخصص"
+float effMinVol = profCustom ? minAvgVolIn : profile == "مضاربة 15د" ? 3000.0 : profile == "استثمار يومي" ? 800.0 : 1500.0
+float effMinRR = profCustom ? minRRIn : 1.5
+float effMinScore = profCustom ? minScoreIn : profile == "مضاربة 15د" ? 60.0 : 58.0
+int effMinSetup = profCustom ? minSetupIn : 7
+
+bool sigOk = not confirmClose or barstate.isconfirmed
+
+// ─── Trend & oscillators ───
+float ema9 = ta.ema(close, 9)
+float ema21 = ta.ema(close, 21)
+float ema50 = ta.ema(close, 50)
+float ema200 = ta.ema(close, 200)
+bool bullStack = ema9 > ema21 and ema21 > ema50
+bool bearStack = ema9 < ema21 and ema21 < ema50
+bool above200 = close > ema200
+
+float wClose = request.security(syminfo.tickerid, "W", close, barmerge.gaps_off, barmerge.lookahead_off)
+float wEma50 = request.security(syminfo.tickerid, "W", ta.ema(close, 50), barmerge.gaps_off, barmerge.lookahead_off)
+float wEma200 = request.security(syminfo.tickerid, "W", ta.ema(close, 200), barmerge.gaps_off, barmerge.lookahead_off)
+bool htfBull = wClose > wEma50 and wEma50 > wEma200
+
+f_tfBull(string tf) =>
+    request.security(syminfo.tickerid, tf, close > ta.ema(close, 21), barmerge.gaps_off, barmerge.lookahead_off)
+
+int mtfScore = 0
+mtfScore += f_tfBull("15") ? 1 : -1
+mtfScore += f_tfBull("60") ? 1 : -1
+mtfScore += f_tfBull("D") ? 1 : -1
+mtfScore += f_tfBull("W") ? 1 : -1
+bool mtfOk = mtfScore >= 1
+
+[macdL, macdS, macdH] = ta.macd(close, 12, 26, 9)
+bool macdBull = macdH > 0 and macdL > macdS
+float rsi = ta.rsi(close, 14)
+float atr = ta.atr(14)
+
+// ─── Volume & money flow ───
+float volMa = ta.sma(volume, volMaLen)
+bool liqOk = volMa >= effMinVol
+float rvol = volume / math.max(volMa, 1.0)
+bool rvolStrong = rvol >= 1.5
+
+float mfm = ((close - low) - (high - close)) / math.max(high - low, syminfo.mintick)
+float cmf = ta.sma(mfm * volume, 14) / ta.sma(volume, 14)
+float obv = ta.obv
+float obvSlope = ta.linreg(obv, 10, 0) - ta.linreg(obv, 10, 1)
+bool accumulating = cmf > 0 and obvSlope > 0
+bool distributing = cmf < 0 and obvSlope < 0
+
+float accPts = 0.0
+accPts += accumulating ? 15.0 : 0.0
+accPts += cmf > 0.05 ? 10.0 : 0.0
+accPts += obvSlope > 0 ? 10.0 : 0.0
+accPts += rvol >= 1.0 and close > open ? 10.0 : 0.0
+float accumScore = math.min(100.0, accPts)
+
+float distPts = 0.0
+distPts += distributing ? 15.0 : 0.0
+distPts += cmf < -0.05 ? 10.0 : 0.0
+distPts += obvSlope < 0 ? 10.0 : 0.0
+float distRisk = math.min(100.0, distPts)
+
+// ─── EGX market & RS ───
+f_mktTr() =>
+    int sc = 0
+    float e20 = ta.ema(close, 20)
+    float e50 = ta.ema(close, 50)
+    sc += close > e20 ? 1 : -1
+    sc += e20 > e50 ? 1 : -1
+    sc
+
+f_mktMom() =>
+    close[20] > 0 ? (close / close[20] - 1.0) * 100.0 : 0.0
+
+int tr30 = request.security(mktSym, timeframe.period, f_mktTr(), barmerge.gaps_off, barmerge.lookahead_off)
+float mom30 = request.security(mktSym, timeframe.period, f_mktMom(), barmerge.gaps_off, barmerge.lookahead_off)
+float benchRoc = request.security(mktSym, timeframe.period, ta.roc(close, 20), barmerge.gaps_off, barmerge.lookahead_off)
+bool rsLeader = ta.roc(close, 20) - benchRoc > 0
+bool heavySell = mom30 < -4.0 and tr30 <= -1
+bool bearBlock = blockBearMkt and heavySell
+
+float dPrev = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+float dayPct = dPrev > 0 ? (close - dPrev) / dPrev * 100.0 : 0.0
+float haltPct = egxBoard == "SME تميّز" or egxBoard == "SME نايل" or egxBoard == "غير نشط" ? 5.0 : 10.0
+float luldPct = egxBoard == "غير نشط" ? 5.0 : (egxBoard == "SME تميّز" or egxBoard == "SME نايل" ? 10.0 : 20.0)
+float haltWarnPct = math.min(limitPct, math.max(haltPct - 1.0, haltPct * 0.9))
+bool nearHaltUp = blockLimitUp and dPrev > 0 and dayPct >= haltWarnPct
+bool atLuldUp = dPrev > 0 and dayPct >= luldPct - 0.25
+bool nearLimit = nearHaltUp or atLuldUp
+float dayPct100 = useMktHalt100 ? request.security(mkt100, "D", close[1] > 0 ? (close - close[1]) / close[1] * 100.0 : 0.0, barmerge.gaps_off, barmerge.lookahead_off) : 0.0
+bool mktHalt100 = useMktHalt100 and dayPct100 <= -10.0
+bool regimeOkBest = not bearBlock and not mktHalt100
+int egxSessId = 0
+if not na(time(timeframe.period, "0830-1000:23456", egxTz))
+    egxSessId := 1
+if not na(time(timeframe.period, "1000-1415:23456", egxTz))
+    egxSessId := 2
+if not na(time(timeframe.period, "1415-1425:23456", egxTz))
+    egxSessId := 3
+if not na(time(timeframe.period, "1425-1430:23456", egxTz))
+    egxSessId := 4
+bool sessionEntryOk = not skipOffHours or not timeframe.isintraday or egxSessId == 2
+bool sundaySkip = skipSundayBuy and dayofweek == dayofweek.sunday
+
+float dHi = request.security(syminfo.tickerid, "D", high[1], barmerge.gaps_off, barmerge.lookahead_off)
+float dLo = request.security(syminfo.tickerid, "D", low[1], barmerge.gaps_off, barmerge.lookahead_off)
+float dCl = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+float pp = (dHi + dLo + dCl) / 3.0
+float r1 = 2.0 * pp - dLo
+float s1 = 2.0 * pp - dHi
+
+// ─── Structure & zones ───
+float pl = ta.pivotlow(low, pivotLen, pivotLen)
+float ph = ta.pivothigh(high, pivotLen, pivotLen)
+var float swingLow = na
+var float swingHigh = na
+if not na(pl)
+    swingLow := pl
+if not na(ph)
+    swingHigh := ph
+
+int structP = 5
+float phs = ta.pivothigh(high, structP, structP)
+var float actHigh = na
+var int structDir = 0
+if not na(phs)
+    actHigh := phs
+bool bullBreak = sigOk and not na(actHigh) and close > actHigh and close[1] <= actHigh
+if bullBreak
+    structDir := 1
+    actHigh := na
+
+bool supportBreak = sigOk and not na(swingLow) and close < swingLow and close[1] >= swingLow
+bool retestSupport = sigOk and not na(swingLow) and low <= swingLow * 1.005 and close > swingLow
+bool fakeBreakUp = sigOk and not na(swingHigh) and high > swingHigh and close < swingHigh and rvol > 1.05
+bool rawBreak = bullBreak and rvol >= 1.2
+var float brkHoldLvl = na
+var int brkHoldBars = 0
+if barstate.isconfirmed
+    if rawBreak
+        brkHoldLvl := nz(swingHigh, close[1])
+        brkHoldBars := 1
+    else if not na(brkHoldLvl) and close > brkHoldLvl
+        brkHoldBars += 1
+    else
+        brkHoldLvl := na
+        brkHoldBars := 0
+bool breakConfirmed = sigOk and not na(brkHoldLvl) and brkHoldBars >= breakConfirmBars and (rvol >= 1.2 or rvol[1] >= 1.2)
+bool breakRetest = retestSupport and structDir == 1 and not fakeBreakUp
+
+float zw = atr * zoneAtr
+float buyTop = nz(swingLow, low) + zw
+float buyBot = nz(swingLow, low) - zw * 1.2
+float sellBot = nz(swingHigh, high) - zw
+float sellTop = nz(swingHigh, high) + zw * 1.2
+bool inBuyZone = low <= buyTop and high >= buyBot
+bool inSellZone = high >= sellBot and close <= sellTop
+bool nearSupport = low <= buyTop and close >= buyBot
+bool nearResist = high >= sellBot and close <= sellTop
+
+float swingRange = nz(swingHigh - swingLow, atr * 3)
+float t1 = na(swingHigh) ? close + atr * atrMultSL : swingHigh
+float t2 = nz(swingLow, close) + swingRange * 1.618
+float t3 = nz(swingLow, close) + swingRange * 2.618
+float entryPx = (buyTop + buyBot) / 2.0
+float stopPx = buyBot - atr * 0.5
+float riskPx = math.max(entryPx - stopPx, syminfo.mintick)
+float rr = riskPx > 0 ? (t1 - entryPx) / riskPx : na
+float tHalf = entryPx + (t1 - entryPx) * 0.5
+
+float hi252 = ta.highest(high, 252)
+float pctFromHi = hi252 > 0 ? (close - hi252) / hi252 * 100.0 : na
+bool chase = not na(pctFromHi) and pctFromHi > -3 and rsi > 72 and not na(rr) and rr < 1.0
+
+// ─── Score & setup (11 hits) ───
+float score = 0.0
+score += bullStack ? 20.0 : bearStack ? -10.0 : 0.0
+score += above200 ? 15.0 : -5.0
+score += htfBull ? 15.0 : -10.0
+score += macdBull ? 10.0 : 0.0
+score += accumulating ? 15.0 : distributing ? -10.0 : 0.0
+score += rvol >= 1.0 ? 10.0 : 0.0
+score += rsi > 40 and rsi < 70 ? 10.0 : 0.0
+score += mtfOk ? 5.0 : -4.0
+score += rsLeader ? 5.0 : 0.0
+score += accumScore >= 35 ? 5.0 : 0.0
+score += distRisk >= 35 ? -8.0 : 0.0
+score := math.max(0.0, math.min(100.0, score))
+
+int setupHits = 0
+setupHits += bullStack ? 1 : 0
+setupHits += htfBull ? 1 : 0
+setupHits += macdBull ? 1 : 0
+setupHits += accumulating ? 1 : 0
+setupHits += rsLeader ? 1 : 0
+setupHits += structDir == 1 ? 1 : 0
+setupHits += inBuyZone ? 1 : 0
+setupHits += retestSupport ? 1 : 0
+setupHits += not na(rr) and rr >= effMinRR ? 1 : 0
+setupHits += mtfOk ? 1 : 0
+setupHits += rvolStrong or rvol >= 1.0 ? 1 : 0
+setupHits += breakRetest or breakConfirmed ? 1 : 0
+
+string setupTier = setupHits >= 9 ? "A" : setupHits >= 7 ? "B" : setupHits >= 5 ? "C" : "D"
+bool setupOk = effMinSetup <= 0 or setupHits >= effMinSetup
+
+float rank = math.max(0.0, math.min(100.0, score * 0.6 + setupHits / 11.0 * 40.0))
+
+float t1PctH = close > 0 ? (t1 - close) / close * 100.0 : 0.0
+bool hurdleOk = not gateHurdle or usdEarner or t1PctH >= tBillAfterTax * holdDaysHurdle / 365.0
+bool earningsOk = not blockEarnings or earningsBars <= 0 or earningsBars > 5
+bool tpOk = not blockAboveTp or brokerTp <= 0 or close < brokerTp * 0.98
+bool microOk = sessionEntryOk and not sundaySkip and not mktHalt100 and hurdleOk and earningsOk and tpOk
+bool zoneReady = score >= effMinScore and not na(rr) and rr >= effMinRR and liqOk and not supportBreak and not bearBlock and not nearLimit and not chase and distRisk < 65 and microOk
+bool buySignal = sigOk and zoneReady and setupOk and (nearSupport or breakRetest or (inBuyZone and retestSupport))
+bool sellSignal = sigOk and score <= 42 and bearStack and (nearResist or distributing) and distRisk >= 40
+
+// ─── Plots ───
+plot(showEma ? ema9 : na, "EMA9", color=color.teal)
+plot(showEma ? ema21 : na, "EMA21", color=color.blue)
+plot(showEma ? ema50 : na, "EMA50", color=color.orange)
+plot(showEma ? ema200 : na, "EMA200", color=color.new(color.purple, 35), linewidth=2)
+plot(useSessionVwap and timeframe.isintraday ? ta.vwap(hlc3) : na, "VWAP", color=color.new(color.yellow, 25), linewidth=2)
+
+plot(showLevels ? entryPx : na, "Entry", color=color.new(color.lime, 40), linewidth=1, style=plot.style_linebr)
+plot(showLevels ? stopPx : na, "Stop", color=color.new(color.red, 30), linewidth=2, style=plot.style_linebr)
+plot(showLevels ? t1 : na, "T1", color=color.new(color.aqua, 20), linewidth=1, style=plot.style_linebr)
+plot(showLevels ? t2 : na, "T2", color=color.new(color.aqua, 45), linewidth=1, style=plot.style_linebr)
+plot(showLevels ? tHalf : na, "50%→T1", color=color.new(color.yellow, 50), style=plot.style_circles)
+
+var box buyBox = na
+var box sellBox = na
+if showZones and barstate.islast and zoneReady
+    box.delete(buyBox)
+    buyBox := box.new(bar_index - 30, buyTop, bar_index + 8, buyBot, bgcolor=color.new(color.lime, 88), border_color=color.lime, border_width=2, text="شراء", text_size=size.small, text_color=color.lime)
+if showZones and barstate.islast and (sellSignal or (bearStack and nearResist))
+    box.delete(sellBox)
+    sellBox := box.new(bar_index - 30, sellTop, bar_index + 8, sellBot, bgcolor=color.new(color.red, 88), border_color=color.red, border_width=2, text="بيع/مقاومة", text_size=size.small, text_color=color.red)
+
+plotshape(showMarks and buySignal, "BUY", shape.triangleup, location.belowbar, color.lime, size=size.normal, text="BUY")
+plotshape(showMarks and sellSignal, "SELL", shape.triangledown, location.abovebar, color.orange, size=size.small, text="EXIT?")
+
+string decision = supportBreak ? "🔴 كسر دعم — اخرج" : nearLimit ? "🟠 قرب halt — لا تشتري" : mktHalt100 ? "🟠 halt EGX100" : chase ? "🟠 مطاردة — انتظر" : buySignal ? "🟢 شراء — منطقة + تأكيد" : breakConfirmed ? "🟢 اختراق مؤكد" : sellSignal ? "🟠 بيع/مقاومة" : zoneReady ? "🟡 جاهز — انتظر لمس المنطقة" : score >= 50 ? "⚪ راقب" : "⚪ ضعيف"
+color decCol = supportBreak ? color.red : buySignal ? color.lime : sellSignal ? color.orange : zoneReady ? color.yellow : color.gray
+
+var table tbl = table.new(position.top_right, 2, 16, bgcolor=color.new(color.black, 82), border_width=1)
+if showTable and barstate.islast
+    table.clear(tbl, 0, 0, 1, 15)
+    table.cell(tbl, 0, 0, "EGX BEST", text_color=color.white, text_size=size.normal)
+    table.cell(tbl, 1, 0, profile, text_color=color.yellow, text_size=size.small)
+    table.cell(tbl, 0, 1, "قرار", text_color=color.gray, text_size=size.small)
+    table.cell(tbl, 1, 1, decision, text_color=decCol, text_size=size.small)
+    table.cell(tbl, 0, 2, "تقييم / رتبة", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl, 1, 2, str.tostring(score, "#") + " · R" + str.tostring(rank, "#"), text_color=score >= 60 ? color.lime : color.yellow, text_size=size.tiny)
+    table.cell(tbl, 0, 3, "إعداد", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl, 1, 3, setupTier + " " + str.tostring(setupHits) + "/11", text_color=setupTier == "A" or setupTier == "B" ? color.lime : color.gray, text_size=size.tiny)
+    table.cell(tbl, 0, 4, "R/R → T1", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl, 1, 4, str.tostring(rr, "#.##") + "x", text_color=not na(rr) and rr >= effMinRR ? color.lime : color.orange, text_size=size.tiny)
+    table.cell(tbl, 0, 5, "فوليوم", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl, 1, 5, "RVOL " + str.tostring(rvol, "#.##") + " · تجم " + str.tostring(accumScore, "#") + " · تص " + str.tostring(distRisk, "#"), text_color=rvolStrong ? color.fuchsia : color.white, text_size=size.tiny)
+    table.cell(tbl, 0, 6, "MTF", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl, 1, 6, str.tostring(mtfScore) + "/4", text_color=mtfOk ? color.lime : color.red, text_size=size.tiny)
+    table.cell(tbl, 0, 7, "EGX30", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl, 1, 7, heavySell ? "ضغط بيع" : tr30 >= 1 ? "صاعد" : "محايد", text_color=heavySell ? color.red : color.gray, text_size=size.tiny)
+    table.cell(tbl, 0, 8, "دخول", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl, 1, 8, str.tostring(entryPx, format.mintick), text_color=color.lime, text_size=size.tiny)
+    table.cell(tbl, 0, 9, "وقف", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl, 1, 9, str.tostring(stopPx, format.mintick), text_color=color.red, text_size=size.tiny)
+    table.cell(tbl, 0, 10, "T1 / T2 / T3", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl, 1, 10, str.tostring(t1, format.mintick) + " · " + str.tostring(t2, format.mintick) + " · " + str.tostring(t3, format.mintick), text_color=color.aqua, text_size=size.tiny)
+    table.cell(tbl, 0, 11, "Pivot S1/R1", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl, 1, 11, str.tostring(s1, format.mintick) + " | " + str.tostring(r1, format.mintick), text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl, 0, 12, "اختراق", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl, 1, 12, breakConfirmed ? "مؤكد" : breakRetest ? "retest" : fakeBreakUp ? "وهمي!" : "—", text_color=breakConfirmed ? color.lime : fakeBreakUp ? color.red : color.gray, text_size=size.tiny)
+    table.cell(tbl, 0, 13, "RS vs 30", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl, 1, 13, rsLeader ? "أقوى من المؤشر" : "أضعف", text_color=rsLeader ? color.lime : color.orange, text_size=size.tiny)
+    table.cell(tbl, 0, 14, "يوم %", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl, 1, 14, str.tostring(dayPct, "#.#") + "%", text_color=nearLimit ? color.red : color.gray, text_size=size.tiny)
+    table.cell(tbl, 0, 15, "سيولة", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl, 1, 15, liqOk ? "OK" : "ضعيفة", text_color=liqOk ? color.lime : color.orange, text_size=size.tiny)
+
+var table banner = table.new(position.bottom_right, 1, 4, bgcolor=color.new(color.black, 8), border_width=2)
+if effBestBanner and barstate.islast
+    table.clear(banner, 0, 0, 0, 3)
+    table.cell(banner, 0, 0, decision, bgcolor=color.new(decCol, 78), text_color=color.white, text_size=size.large)
+    table.cell(banner, 0, 1, "دخول " + str.tostring(entryPx, format.mintick) + " · وقف " + str.tostring(stopPx, format.mintick) + " · R/R " + str.tostring(rr, "#.#"), bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
+    table.cell(banner, 0, 2, "T1 " + str.tostring(t1, format.mintick) + " · جزئي 50% " + str.tostring(tHalf, format.mintick), bgcolor=color.new(color.green, 88), text_color=color.white, text_size=size.tiny)
+    table.cell(banner, 0, 3, "RVOL " + str.tostring(rvol, "#.#") + " · " + setupTier + " " + str.tostring(setupHits) + "/11 · RSI " + str.tostring(rsi, "#"), bgcolor=color.new(color.gray, 90), text_color=color.white, text_size=size.tiny)
+
+float pctB = ta.percentrank(volume, 500)
+float zB = (volume - volMa) / math.max(ta.stdev(volume, volMaLen), 1.0)
+float bRvolB = request.security(mktSym, timeframe.period, volume / math.max(ta.sma(volume, volMaLen), 1.0), barmerge.gaps_off, barmerge.lookahead_off)
+float rsVB = bRvolB > 0 ? rvol / bRvolB : 1.0
+float rngB = math.max(high - low, syminfo.mintick)
+float buyPctB = (close - low) / rngB * 100.0
+float volRankBest = math.min(pctB, 100.0) * 0.22 + math.min(rvol, 3.0) / 3.0 * 100.0 * 0.18 + math.min(math.max(zB, 0), 4.0) / 4.0 * 100.0 * 0.12 + math.min(rsVB, 2.0) / 2.0 * 100.0 * 0.15 + buyPctB * 0.12 + (accumulating ? 10.0 : -5.0) + (volMa >= 1000 ? 5.0 : -10.0)
+volRankBest := math.max(0.0, math.min(100.0, volRankBest))
+bool volPassBest = volRankBest >= 60.0 and volMa >= 500
+
+// Screener / data window
+bool screenerPass = buySignal and rank >= 65 and setupHits >= 7 and not na(rr) and rr >= effMinRR and liqOk
+plot(buySignal ? 1 : 0, "EGXB_Buy", display=display.data_window)
+plot(rank, "EGXB_Rank", display=display.data_window)
+plot(rr, "EGXB_RR", display=display.data_window)
+plot(setupHits, "EGXB_Setup", display=display.data_window)
+plot(screenerPass ? 1 : 0, "EGXB_Screener", display=display.data_window)
+plot(accumScore, "EGXB_Acc", display=display.data_window)
+plot(distRisk, "EGXB_Dist", display=display.data_window)
+plot(volRankBest, "EGXB_VolRank", display=display.data_window)
+plot(volPassBest ? 1 : 0, "EGXB_VolPass", display=display.data_window)
+plot(screenerPass and volPassBest ? 1 : 0, "EGXB_ScreenerVol", display=display.data_window)
+plot(nearLimit ? 1 : 0, "EGXB_LimitBlock", display=display.data_window)
+plot(mktHalt100 ? 1 : 0, "EGXB_MktHalt100", display=display.data_window)
+plot(regimeOkBest ? 1 : 0, "EGX_RegimeOk", display=display.all)
+plot(egxSessId, "EGXB_SessId", display=display.data_window)
+plot(hurdleOk ? 1 : 0, "EGXB_HurdleOk", display=display.data_window)
+plot(math.min(15.0, riskPctEq * close / math.max(close - stopPx, syminfo.mintick)), "EGXB_PosPctRisk", display=display.data_window)
+
+alertcondition(buySignal, "EGX BEST — شراء", "EGX BEST: إشارة شراء — راجع الدخول والوقف على الشارت")
+alertcondition(supportBreak, "EGX BEST — كسر دعم", "EGX BEST: كسر دعم — خروج")
+alertcondition(breakConfirmed, "EGX BEST — اختراق", "EGX BEST: اختراق مؤكد بحجم")
+alertcondition(screenerPass, "EGX BEST — Screener", "EGX BEST: نجاح فلتر الماسح")

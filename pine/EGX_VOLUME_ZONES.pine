@@ -1,0 +1,577 @@
+//@version=6
+indicator("EGX Volume Zones PRO — buy · sell · battle", shorttitle="EGX VZ", overlay=true, max_labels_count=300, max_lines_count=150, max_boxes_count=100, max_tables_count=8, calc_bars_count=5000)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// EGX Volume Zones PRO — أكبر/أفضل مناطق شراء وبيع + صراع + B1/S1 + قوة + لمسات
+// توزيع حجم: buy→إغلاق · sell→افتتاح (proxy) · HVN · شموع كبرى · POC net
+// pine/EGX_VOLUME.pine · pine/EGX_VOLUME_MM.pine
+// ═══════════════════════════════════════════════════════════════════════════════
+
+string G_PROF = "═══ EGX ═══"
+string profile = input.string("EGX يومي", "الملف", options=["EGX يومي", "مضاربة", "مخصص"], group=G_PROF)
+
+string G_ZONE = "═══ مناطق الحجم ═══"
+int zoneLook = input.int(400, "نافذة مسح", minval=50, maxval=2000, group=G_ZONE)
+int vpBins = input.int(32, "مستويات سعر", minval=12, maxval=50, group=G_ZONE)
+int topBuyZones = input.int(6, "أكبر مناطق شراء", minval=1, maxval=10, group=G_ZONE)
+int topSellZones = input.int(6, "أكبر مناطق بيع", minval=1, maxval=10, group=G_ZONE)
+int topBuyBars = input.int(6, "أكبر شموع شراء", minval=2, maxval=12, group=G_ZONE)
+int topSellBars = input.int(6, "أكبر شموع بيع", minval=2, maxval=12, group=G_ZONE)
+float zonePadAtr = input.float(0.28, "توسيع منطقة × ATR", minval=0.05, step=0.05, group=G_ZONE)
+float minBuyShare = input.float(0.52, "حد نسبة شراء/shm", minval=0.5, step=0.01, group=G_ZONE)
+float minSellShare = input.float(0.52, "حد نسبة بيع/shm", minval=0.5, step=0.01, group=G_ZONE)
+int volMaLen = input.int(20, "متوسط حجم", minval=5, group=G_ZONE)
+float minRvolBar = input.float(1.2, "RVOL أدنى شموع كبرى", minval=0.8, step=0.1, group=G_ZONE)
+float battleMin = input.float(0.35, "صراع: % من max buy & sell", minval=0.2, maxval=0.8, step=0.05, group=G_ZONE)
+
+string G_UI = "═══ عرض ═══"
+bool showHvnBoxes = input.bool(true, "HVN B1–Bn / S1–Sn", group=G_UI)
+bool showMegaB1S1 = input.bool(true, "تمييز B1 و S1 (أكبر)", group=G_UI)
+bool showBarBoxes = input.bool(true, "صناديق ▲/▼ شموع", group=G_UI)
+bool showBattle = input.bool(true, "صناديق صراع (buy+sell)", group=G_UI)
+bool showBestLines = input.bool(true, "خط أفضل buy/sell", group=G_UI)
+bool showNetPoc = input.bool(true, "POC net (buy−sell)", group=G_UI)
+bool showVaFill = input.bool(true, "نطاق VA net 70%", group=G_UI)
+bool showTbl = input.bool(true, "جدول يسار", group=G_UI)
+bool showTbl2 = input.bool(true, "جدول يمين (قرار)", group=G_UI)
+bool showBanner = input.bool(true, "بانر", group=G_UI)
+bool extendRight = input.bool(true, "مد لليمين", group=G_UI)
+bool markRetest = input.bool(true, "علامة دخول B1/S1", group=G_UI)
+int pivotLen = input.int(5, "Pivot دعم (ت convergent)", minval=2, maxval=12, group=G_UI)
+bool showLvn = input.bool(true, "LVN — فجوات حجم ضعيف", group=G_UI)
+int topLvn = input.int(3, "عدد LVN", minval=1, maxval=6, group=G_UI)
+bool showMtfPoc = input.bool(true, "POC حجم يومي (60ج)", group=G_UI)
+bool showShelf = input.bool(true, "رف B1/S1 (خط أفقي)", group=G_UI)
+bool showBounce = input.bool(true, "إشارة B1 bounce / S1 reject", group=G_UI)
+bool showScreenerOut = input.bool(true, "مخرجات ماسح (Data Window)", group=G_UI)
+bool showTradePlan = input.bool(true, "خط خطة: دخول/وقف/T1", group=G_UI)
+float trSlAtr = input.float(1.1, "وقف × ATR", minval=0.5, step=0.1, group=G_UI)
+
+string G_MKT = "═══ EGX30 ═══"
+string mktSym = input.symbol("EGX:EGX30", "مؤشر", group=G_MKT)
+bool useMktVol = input.bool(true, "RVOL vs EGX30 في الجدول", group=G_MKT)
+
+bool profCustom = profile == "مخصص"
+int effLook = profCustom ? zoneLook : profile == "مضاربة" ? 200 : 400
+
+float atr = ta.atr(14)
+float pad = atr * zonePadAtr
+float volMa = ta.sma(volume, volMaLen)
+
+f_buyShare(int off) =>
+    float rng = math.max(high[off] - low[off], syminfo.mintick)
+    volume[off] > 0 ? (close[off] - low[off]) / rng : 0.5
+
+f_buyVol(int off) =>
+    volume[off] * f_buyShare(off)
+
+f_sellVol(int off) =>
+    volume[off] - f_buyVol(off)
+
+f_pxBin(float px, float lo, float step) =>
+    int bx = int(math.floor((px - lo) / step))
+    math.max(0, math.min(vpBins - 1, bx))
+
+f_zoneProfile() =>
+    int n = math.min(effLook, bar_index)
+    float hi = ta.highest(high, n)
+    float lo = ta.lowest(low, n)
+    float step = (hi - lo) / math.max(vpBins, 1)
+    step := step <= syminfo.mintick ? syminfo.mintick : step
+    array<float> buyB = array.new_float(vpBins, 0.0)
+    array<float> sellB = array.new_float(vpBins, 0.0)
+    array<float> netB = array.new_float(vpBins, 0.0)
+    float totBuy = 0.0
+    float totSell = 0.0
+    for i = 0 to n - 1
+        float bV = f_buyVol(i)
+        float sV = f_sellVol(i)
+        totBuy += bV
+        totSell += sV
+        int bIdx = f_pxBin(close[i], lo, step)
+        int sIdx = f_pxBin(open[i], lo, step)
+        array.set(buyB, bIdx, array.get(buyB, bIdx) + bV)
+        array.set(sellB, sIdx, array.get(sellB, sIdx) + sV)
+        array.set(netB, bIdx, array.get(netB, bIdx) + bV)
+        array.set(netB, sIdx, array.get(netB, sIdx) - sV)
+    [buyB, sellB, netB, lo, step, totBuy, totSell]
+
+f_binMid(float lo, float step, int idx) =>
+    lo + (idx + 0.5) * step
+
+f_binLoHi(float lo, float step, int idx) =>
+    [lo + idx * step - pad, lo + (idx + 1) * step + pad]
+
+f_pickTopBins(array<float> bins, int k) =>
+    array<int> picked = array.new_int()
+    int nb = array.size(bins)
+    for rank = 0 to k - 1
+        float best = -1.0
+        int bestI = -1
+        for b = 0 to nb - 1
+            bool used = false
+            for u = 0 to array.size(picked) - 1
+                if array.get(picked, u) == b
+                    used := true
+            float v = array.get(bins, b)
+            if not used and v > best
+                best := v
+                bestI := b
+        if bestI >= 0 and best > 0
+            array.push(picked, bestI)
+    picked
+
+f_pickTopBars(bool wantBuy, int k) =>
+    array<int> picked = array.new_int()
+    int scan = math.min(effLook, bar_index - 1)
+    for rank = 0 to k - 1
+        float best = -1.0
+        int bestOff = -1
+        for off = 1 to scan
+            bool used = false
+            for u = 0 to array.size(picked) - 1
+                if array.get(picked, u) == off
+                    used := true
+            if used
+                continue
+            float sh = f_buyShare(off)
+            bool sideOk = wantBuy ? sh >= minBuyShare : sh <= 1.0 - minSellShare
+            float rAt = volMa[off] > 0 ? volume[off] / volMa[off] : 0.0
+            if not sideOk or rAt < minRvolBar
+                continue
+            float metric = wantBuy ? f_buyVol(off) : f_sellVol(off)
+            if metric > best
+                best := metric
+                bestOff := off
+        if bestOff > 0
+            array.push(picked, bestOff)
+    picked
+
+f_bestBin(array<float> bins, float lo, float step, bool wantBelow) =>
+    int nb = array.size(bins)
+    float bestV = -1.0
+    int bestI = -1
+    for b = 0 to nb - 1
+        float mid = f_binMid(lo, step, b)
+        bool locOk = wantBelow ? mid <= close : mid >= close
+        float v = array.get(bins, b)
+        if locOk and v > bestV
+            bestV := v
+            bestI := b
+    if bestI < 0
+        for b = 0 to nb - 1
+            float v = array.get(bins, b)
+            if v > bestV
+                bestV := v
+                bestI := b
+    [bestI, bestV]
+
+f_countTouches(float zLo, float zHi) =>
+    int n = math.min(effLook, bar_index)
+    int t = 0
+    for i = 0 to n - 1
+        if low[i] <= zHi and high[i] >= zLo
+            t += 1
+    t
+
+f_strengthPct(float v, float maxV) =>
+    maxV > 0 ? v / maxV * 100.0 : 0.0
+
+f_inZone(float zLo, float zHi) =>
+    low <= zHi and high >= zLo
+
+f_totalBin(array<float> buyB, array<float> sellB, int idx) =>
+    array.get(buyB, idx) + array.get(sellB, idx)
+
+f_pickLvn(array<float> buyB, array<float> sellB, array<int> skipIdx, int k) =>
+    array<int> picked = array.new_int()
+    int nb = array.size(buyB)
+    for rank = 0 to k - 1
+        float best = 1e10
+        int bestI = -1
+        for b = 0 to nb - 1
+            bool skip = false
+            for u = 0 to array.size(skipIdx) - 1
+                if array.get(skipIdx, u) == b
+                    skip := true
+            for u = 0 to array.size(picked) - 1
+                if array.get(picked, u) == b
+                    skip := true
+            float tv = f_totalBin(buyB, sellB, b)
+            if not skip and tv < best and tv > 0
+                best := tv
+                bestI := b
+        if bestI >= 0
+            array.push(picked, bestI)
+    picked
+
+f_zoneGrade(float strPct, int touches, float netPct, bool confl, bool wantBuy) =>
+    int g = 1
+    if strPct >= 70 and touches >= 2
+        g := 2
+    if strPct >= 85 and touches >= 3
+        g := 3
+    if wantBuy and netPct >= 55 and confl
+        g := math.min(3, g + 1)
+    if not wantBuy and netPct <= 45
+        g := math.min(3, g + 1)
+    g
+
+f_gradeTxt(int g) =>
+    g >= 3 ? "A" : g >= 2 ? "B" : "C"
+
+f_dVolPoc(int len) =>
+    int off = ta.highestbars(volume, len)
+    off >= 0 ? hlc3[off] : hlc3
+
+f_vaFromPoc(array<float> bins, int pocIdx, float targetPct) =>
+    float totalV = 0.0
+    for b = 0 to array.size(bins) - 1
+        totalV += math.abs(array.get(bins, b))
+    float target = totalV * targetPct
+    float accV = math.abs(array.get(bins, pocIdx))
+    int loIdx = pocIdx
+    int hiIdx = pocIdx
+    while accV < target and (loIdx > 0 or hiIdx < array.size(bins) - 1)
+        float vLo = loIdx > 0 ? math.abs(array.get(bins, loIdx - 1)) : 0.0
+        float vHi = hiIdx < array.size(bins) - 1 ? math.abs(array.get(bins, hiIdx + 1)) : 0.0
+        if vLo >= vHi and loIdx > 0
+            loIdx -= 1
+            accV += vLo
+        else if hiIdx < array.size(bins) - 1
+            hiIdx += 1
+            accV += vHi
+        else if loIdx > 0
+            loIdx -= 1
+            accV += math.abs(array.get(bins, loIdx))
+        else
+            break
+    [loIdx, hiIdx]
+
+[buyBins, sellBins, netBins, vpLo, vpStep, totalBuyVol, totalSellVol] = f_zoneProfile()
+
+float maxBuy = 0.0
+float maxSell = 0.0
+int pocBuyIdx = 0
+int pocSellIdx = 0
+int pocNetIdx = 0
+float maxNetAbs = 0.0
+for b = 0 to vpBins - 1
+    float vb = array.get(buyBins, b)
+    float vs = array.get(sellBins, b)
+    float vn = array.get(netBins, b)
+    if vb > maxBuy
+        maxBuy := vb
+        pocBuyIdx := b
+    if vs > maxSell
+        maxSell := vs
+        pocSellIdx := b
+    if math.abs(vn) > maxNetAbs
+        maxNetAbs := math.abs(vn)
+        pocNetIdx := b
+
+array<int> topBuyIdx = f_pickTopBins(buyBins, topBuyZones)
+array<int> topSellIdx = f_pickTopBins(sellBins, topSellZones)
+
+int b1Idx = array.size(topBuyIdx) > 0 ? array.get(topBuyIdx, 0) : pocBuyIdx
+int s1Idx = array.size(topSellIdx) > 0 ? array.get(topSellIdx, 0) : pocSellIdx
+
+[b1Lo, b1Hi] = f_binLoHi(vpLo, vpStep, b1Idx)
+[s1Lo, s1Hi] = f_binLoHi(vpLo, vpStep, s1Idx)
+float b1Mid = f_binMid(vpLo, vpStep, b1Idx)
+float s1Mid = f_binMid(vpLo, vpStep, s1Idx)
+
+[bestBuyIdx, bestBuyV] = f_bestBin(buyBins, vpLo, vpStep, true)
+[bestSellIdx, bestSellV] = f_bestBin(sellBins, vpLo, vpStep, false)
+[bestBuyLo, bestBuyHi] = f_binLoHi(vpLo, vpStep, bestBuyIdx)
+[bestSellLo, bestSellHi] = f_binLoHi(vpLo, vpStep, bestSellIdx)
+float bestBuyMid = (bestBuyLo + bestBuyHi) / 2.0
+float bestSellMid = (bestSellLo + bestSellHi) / 2.0
+
+bool inB1 = f_inZone(b1Lo, b1Hi)
+bool inS1 = f_inZone(s1Lo, s1Hi)
+bool inBestBuy = f_inZone(bestBuyLo, bestBuyHi)
+bool inBestSell = f_inZone(bestSellLo, bestSellHi)
+
+int touchesB1 = f_countTouches(b1Lo, b1Hi)
+int touchesS1 = f_countTouches(s1Lo, s1Hi)
+float strB1 = f_strengthPct(array.get(buyBins, b1Idx), maxBuy)
+float strS1 = f_strengthPct(array.get(sellBins, s1Idx), maxSell)
+
+float netBuyPct = totalBuyVol + totalSellVol > 0 ? totalBuyVol / (totalBuyVol + totalSellVol) * 100.0 : 50.0
+float distBuyAtr = (close - bestBuyMid) / math.max(atr, syminfo.mintick)
+float distSellAtr = (bestSellMid - close) / math.max(atr, syminfo.mintick)
+
+float pl = ta.pivotlow(low, pivotLen, pivotLen)
+var float swingLow = na
+if not na(pl)
+    swingLow := pl
+bool supConfl = not na(swingLow) and swingLow >= b1Lo - pad and swingLow <= b1Hi + pad
+
+int gradeB1 = f_zoneGrade(strB1, touchesB1, netBuyPct, supConfl, true)
+int gradeS1 = f_zoneGrade(strS1, touchesS1, netBuyPct, false, false)
+string gradeB1Txt = f_gradeTxt(gradeB1)
+string gradeS1Txt = f_gradeTxt(gradeS1)
+
+float rvol = volume / math.max(volMa, 1.0)
+float mktVolMa = request.security(mktSym, timeframe.period, ta.sma(volume, volMaLen), barmerge.gaps_off, barmerge.lookahead_off)
+float mktRvol = useMktVol and mktVolMa > 0 ? volume / mktVolMa : na
+float rsVol = useMktVol and not na(mktRvol) and mktRvol > 0 ? rvol / mktRvol : na
+
+float dPoc = showMtfPoc ? request.security(syminfo.tickerid, "D", f_dVolPoc(60), barmerge.gaps_off, barmerge.lookahead_off) : na
+
+bool b1Bounce = showBounce and inB1 and close > open and rvol >= 1.0 and close > b1Mid
+bool s1Reject = showBounce and inS1 and close < open and rvol >= 1.0 and close < s1Mid
+
+float trEntry = b1Mid
+float trStop = b1Lo - atr * trSlAtr
+float trT1 = s1Mid
+float trRisk = math.max(trEntry - trStop, syminfo.mintick)
+float trRR = trRisk > 0 ? (trT1 - trEntry) / trRisk : na
+
+array<int> skipForLvn = array.new_int()
+for i = 0 to array.size(topBuyIdx) - 1
+    array.push(skipForLvn, array.get(topBuyIdx, i))
+for i = 0 to array.size(topSellIdx) - 1
+    array.push(skipForLvn, array.get(topSellIdx, i))
+array<int> lvnIdx = f_pickLvn(buyBins, sellBins, skipForLvn, topLvn)
+
+[vaNetLoIdx, vaNetHiIdx] = f_vaFromPoc(netBins, pocNetIdx, 0.70)
+float vaNetLo = vpLo + vaNetLoIdx * vpStep
+float vaNetHi = vpLo + (vaNetHiIdx + 1) * vpStep
+float pocNetPx = f_binMid(vpLo, vpStep, pocNetIdx)
+
+string verdict = netBuyPct >= 58 and inB1 ? "🟢 شراء B1" : netBuyPct <= 42 and inS1 ? "🔴 بيع S1" : inB1 ? "🟡 داخل B1" : inS1 ? "🟡 داخل S1" : netBuyPct >= 55 ? "↗ ميل شراء" : netBuyPct <= 45 ? "↘ ميل بيع" : "⚪ محايد"
+
+// ─── Draw ────────────────────────────────────────────────────────────────────
+var array<box> hvnBuyBoxes = array.new_box()
+var array<box> hvnSellBoxes = array.new_box()
+var array<box> barBuyBoxes = array.new_box()
+var array<box> barSellBoxes = array.new_box()
+var array<box> battleBoxes = array.new_box()
+var array<line> lvnLines = array.new_line()
+var line shelfB1 = na
+var line shelfS1 = na
+var box vaBox = na
+
+int x2 = extendRight ? bar_index + 15 : bar_index
+int xLeft = bar_index - effLook
+
+if barstate.islast
+    for i = 0 to array.size(hvnBuyBoxes) - 1
+        box.delete(array.get(hvnBuyBoxes, i))
+    array.clear(hvnBuyBoxes)
+    for i = 0 to array.size(hvnSellBoxes) - 1
+        box.delete(array.get(hvnSellBoxes, i))
+    array.clear(hvnSellBoxes)
+    for i = 0 to array.size(barBuyBoxes) - 1
+        box.delete(array.get(barBuyBoxes, i))
+    array.clear(barBuyBoxes)
+    for i = 0 to array.size(barSellBoxes) - 1
+        box.delete(array.get(barSellBoxes, i))
+    array.clear(barSellBoxes)
+    for i = 0 to array.size(battleBoxes) - 1
+        box.delete(array.get(battleBoxes, i))
+    array.clear(battleBoxes)
+    for i = 0 to array.size(lvnLines) - 1
+        line.delete(array.get(lvnLines, i))
+    array.clear(lvnLines)
+    line.delete(shelfB1)
+    line.delete(shelfS1)
+    box.delete(vaBox)
+
+    if showHvnBoxes
+        for i = 0 to array.size(topBuyIdx) - 1
+            int idx = array.get(topBuyIdx, i)
+            [zLo, zHi] = f_binLoHi(vpLo, vpStep, idx)
+            float st = f_strengthPct(array.get(buyBins, idx), maxBuy)
+            int tc = f_countTouches(zLo, zHi)
+            bool mega = showMegaB1S1 and i == 0
+            string rk = "B" + str.tostring(i + 1) + " " + str.tostring(st, "#") + "% ·" + str.tostring(tc)
+            array.push(hvnBuyBoxes, box.new(xLeft, zHi, x2, zLo, border_color=color.new(color.lime, mega ? 0 : 25), border_width=mega ? 2 : 1, bgcolor=color.new(color.lime, mega ? 82 : 88), text=rk, text_size=size.tiny, text_color=color.lime))
+        for i = 0 to array.size(topSellIdx) - 1
+            int idx = array.get(topSellIdx, i)
+            [zLo, zHi] = f_binLoHi(vpLo, vpStep, idx)
+            float st = f_strengthPct(array.get(sellBins, idx), maxSell)
+            int tc = f_countTouches(zLo, zHi)
+            bool mega = showMegaB1S1 and i == 0
+            string rk = "S" + str.tostring(i + 1) + " " + str.tostring(st, "#") + "% ·" + str.tostring(tc)
+            array.push(hvnSellBoxes, box.new(xLeft, zHi, x2, zLo, border_color=color.new(color.red, mega ? 0 : 25), border_width=mega ? 2 : 1, bgcolor=color.new(color.red, mega ? 82 : 88), text=rk, text_size=size.tiny, text_color=color.red))
+
+    if showBattle
+        array<int> battlePicked = array.new_int()
+        for rank = 0 to 5
+            float bestScore = -1.0
+            int bestB = -1
+            for b = 0 to vpBins - 1
+                bool dup = false
+                for u = 0 to array.size(battlePicked) - 1
+                    if array.get(battlePicked, u) == b
+                        dup := true
+                if dup
+                    continue
+                float bStr = f_strengthPct(array.get(buyBins, b), maxBuy)
+                float sStr = f_strengthPct(array.get(sellBins, b), maxSell)
+                if bStr < battleMin * 100 or sStr < battleMin * 100
+                    continue
+                float score = math.min(bStr, sStr)
+                if score > bestScore
+                    bestScore := score
+                    bestB := b
+            if bestB >= 0
+                array.push(battlePicked, bestB)
+                [zLo, zHi] = f_binLoHi(vpLo, vpStep, bestB)
+                array.push(battleBoxes, box.new(xLeft, zHi, x2, zLo, border_color=color.new(color.orange, 40), bgcolor=color.new(color.orange, 92), text="⚔", text_size=size.tiny))
+
+    if showBarBoxes
+        array<int> bb = f_pickTopBars(true, topBuyBars)
+        for i = 0 to array.size(bb) - 1
+            int off = array.get(bb, i)
+            array.push(barBuyBoxes, box.new(bar_index - off, high[off] + pad, bar_index - off + 10, low[off] - pad, border_color=color.new(color.teal, 35), bgcolor=color.new(color.teal, 90), text="▲" + str.tostring(i + 1), text_size=size.tiny))
+        array<int> sb = f_pickTopBars(false, topSellBars)
+        for i = 0 to array.size(sb) - 1
+            int off = array.get(sb, i)
+            array.push(barSellBoxes, box.new(bar_index - off, high[off] + pad, bar_index - off + 10, low[off] - pad, border_color=color.new(color.maroon, 35), bgcolor=color.new(color.maroon, 90), text="▼" + str.tostring(i + 1), text_size=size.tiny))
+
+    if showVaFill
+        vaBox := box.new(xLeft, vaNetHi, x2, vaNetLo, border_color=color.new(color.blue, 70), bgcolor=color.new(color.blue, 94), text="VA net", text_size=size.tiny)
+
+    if showLvn
+        for i = 0 to array.size(lvnIdx) - 1
+            int idx = array.get(lvnIdx, i)
+            float lvnPx = f_binMid(vpLo, vpStep, idx)
+            array.push(lvnLines, line.new(xLeft, lvnPx, x2, lvnPx, color=color.new(color.gray, 50), style=line.style_dotted, width=1))
+
+    if showShelf
+        shelfB1 := line.new(xLeft, b1Mid, x2, b1Mid, color=color.new(color.lime, 30), width=2)
+        shelfS1 := line.new(xLeft, s1Mid, x2, s1Mid, color=color.new(color.red, 30), width=2)
+
+plot(showBestLines ? bestBuyMid : na, "Best buy", color=color.new(color.lime, 0), linewidth=2, style=plot.style_linebr)
+plot(showBestLines ? bestSellMid : na, "Best sell", color=color.new(color.red, 0), linewidth=2, style=plot.style_linebr)
+plot(showMegaB1S1 ? b1Mid : na, "B1 mid", color=color.new(color.lime, 50), linewidth=1, style=plot.style_cross)
+plot(showMegaB1S1 ? s1Mid : na, "S1 mid", color=color.new(color.red, 50), linewidth=1, style=plot.style_cross)
+plot(showNetPoc ? pocNetPx : na, "POC net", color=color.new(color.yellow, 0), linewidth=2, style=plot.style_linebr)
+plot(showMtfPoc ? dPoc : na, "Daily vol POC", color=color.new(color.aqua, 35), linewidth=1, style=plot.style_linebr)
+plot(showTradePlan ? trEntry : na, "Plan entry", color=color.new(color.aqua, 0), linewidth=2, style=plot.style_linebr)
+plot(showTradePlan ? trStop : na, "Plan stop", color=color.new(color.red, 35), linewidth=1, style=plot.style_linebr)
+plot(showTradePlan ? trT1 : na, "Plan T1", color=color.new(color.lime, 35), linewidth=1, style=plot.style_linebr)
+
+bgcolor(inB1 ? color.new(color.lime, 92) : inS1 ? color.new(color.red, 92) : inBestBuy ? color.new(color.teal, 94) : inBestSell ? color.new(color.maroon, 94) : na)
+
+plotshape(markRetest and inB1 and not inB1[1], title="Enter B1", style=shape.triangleup, location=location.belowbar, color=color.lime, size=size.small, text="B1")
+plotshape(markRetest and inS1 and not inS1[1], title="Enter S1", style=shape.triangledown, location=location.abovebar, color=color.red, size=size.small, text="S1")
+plotshape(b1Bounce, title="B1 bounce", style=shape.labelup, location=location.belowbar, color=color.new(color.lime, 0), size=size.small, text="B1↑")
+plotshape(s1Reject, title="S1 reject", style=shape.labeldown, location=location.abovebar, color=color.new(color.red, 0), size=size.small, text="S1↓")
+
+f_fmtZone(float lo, float hi) =>
+    str.tostring(lo, format.mintick) + "–" + str.tostring(hi, format.mintick)
+
+var table tbl = table.new(position.top_left, 5, 22, border_width=1)
+var table tbl2 = table.new(position.top_right, 2, 14, border_width=1)
+
+if showTbl and barstate.islast
+    table.clear(tbl, 0, 0, 4, 21)
+    color hdr = color.new(color.black, 0)
+    table.cell(tbl, 0, 0, "V-Zones PRO", bgcolor=hdr, text_color=color.yellow, text_size=size.small)
+    table.merge_cells(tbl, 1, 0, 4, 0)
+    table.cell(tbl, 1, 0, str.tostring(effLook) + "b · " + str.tostring(netBuyPct, "#") + "% buy", bgcolor=hdr, text_size=size.tiny)
+
+    table.cell(tbl, 0, 1, "B1 ★ " + gradeB1Txt, text_color=color.lime, text_size=size.tiny)
+    table.cell(tbl, 1, 1, f_fmtZone(b1Lo, b1Hi), text_size=size.tiny)
+    table.cell(tbl, 2, 1, str.tostring(strB1, "#") + "%", text_size=size.tiny)
+    table.cell(tbl, 3, 1, "T:" + str.tostring(touchesB1), text_size=size.tiny)
+    table.cell(tbl, 4, 1, str.tostring(b1Mid, format.mintick), text_size=size.tiny)
+
+    table.cell(tbl, 0, 2, "S1 ★ " + gradeS1Txt, text_color=color.red, text_size=size.tiny)
+    table.cell(tbl, 1, 2, f_fmtZone(s1Lo, s1Hi), text_size=size.tiny)
+    table.cell(tbl, 2, 2, str.tostring(strS1, "#") + "%", text_size=size.tiny)
+    table.cell(tbl, 3, 2, "T:" + str.tostring(touchesS1), text_size=size.tiny)
+    table.cell(tbl, 4, 2, str.tostring(s1Mid, format.mintick), text_size=size.tiny)
+
+    table.cell(tbl, 0, 3, "Best B", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl, 1, 3, f_fmtZone(bestBuyLo, bestBuyHi), text_size=size.tiny)
+    table.cell(tbl, 4, 3, str.tostring(bestBuyMid, format.mintick), text_size=size.tiny)
+    table.cell(tbl, 0, 4, "Best S", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl, 1, 4, f_fmtZone(bestSellLo, bestSellHi), text_size=size.tiny)
+    table.cell(tbl, 4, 4, str.tostring(bestSellMid, format.mintick), text_size=size.tiny)
+
+    table.cell(tbl, 0, 5, "— BUY HVN —", bgcolor=color.new(color.teal, 75), text_size=size.tiny)
+    table.merge_cells(tbl, 0, 5, 4, 5)
+    for i = 0 to math.min(topBuyZones - 1, array.size(topBuyIdx) - 1)
+        int idx = array.get(topBuyIdx, i)
+        int row = 6 + i
+        [zLo, zHi] = f_binLoHi(vpLo, vpStep, idx)
+        table.cell(tbl, 0, row, "B" + str.tostring(i + 1), text_color=color.lime, text_size=size.tiny)
+        table.cell(tbl, 1, row, f_fmtZone(zLo, zHi), text_size=size.tiny)
+        table.cell(tbl, 2, row, str.tostring(f_strengthPct(array.get(buyBins, idx), maxBuy), "#") + "%", text_size=size.tiny)
+        table.cell(tbl, 3, row, "T" + str.tostring(f_countTouches(zLo, zHi)), text_size=size.tiny)
+        table.cell(tbl, 4, row, str.tostring(f_binMid(vpLo, vpStep, idx), format.mintick), text_size=size.tiny)
+
+    int rs = 6 + topBuyZones
+    table.cell(tbl, 0, rs, "— SELL HVN —", bgcolor=color.new(color.maroon, 75), text_size=size.tiny)
+    table.merge_cells(tbl, 0, rs, 4, rs)
+    for i = 0 to math.min(topSellZones - 1, array.size(topSellIdx) - 1)
+        int idx = array.get(topSellIdx, i)
+        int row = rs + 1 + i
+        [zLo, zHi] = f_binLoHi(vpLo, vpStep, idx)
+        table.cell(tbl, 0, row, "S" + str.tostring(i + 1), text_color=color.red, text_size=size.tiny)
+        table.cell(tbl, 1, row, f_fmtZone(zLo, zHi), text_size=size.tiny)
+        table.cell(tbl, 2, row, str.tostring(f_strengthPct(array.get(sellBins, idx), maxSell), "#") + "%", text_size=size.tiny)
+        table.cell(tbl, 3, row, "T" + str.tostring(f_countTouches(zLo, zHi)), text_size=size.tiny)
+        table.cell(tbl, 4, row, str.tostring(f_binMid(vpLo, vpStep, idx), format.mintick), text_size=size.tiny)
+
+if showTbl2 and barstate.islast
+    table.clear(tbl2, 0, 0, 1, 13)
+    table.cell(tbl2, 0, 0, "قرار", bgcolor=color.new(color.black, 0), text_color=color.white, text_size=size.small)
+    table.cell(tbl2, 1, 0, verdict, text_size=size.tiny)
+    table.cell(tbl2, 0, 1, "Net buy %", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl2, 1, 1, str.tostring(netBuyPct, "#.#"), text_color=netBuyPct >= 55 ? color.lime : netBuyPct <= 45 ? color.red : color.white, text_size=size.tiny)
+    table.cell(tbl2, 0, 2, "Δ buy ATR", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl2, 1, 2, str.tostring(distBuyAtr, "#.##"), text_size=size.tiny)
+    table.cell(tbl2, 0, 3, "Δ sell ATR", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl2, 1, 3, str.tostring(distSellAtr, "#.##"), text_size=size.tiny)
+    table.cell(tbl2, 0, 4, "POC net", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl2, 1, 4, str.tostring(pocNetPx, format.mintick), text_size=size.tiny)
+    table.cell(tbl2, 0, 5, "VA net", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl2, 1, 5, f_fmtZone(vaNetLo, vaNetHi), text_size=size.tiny)
+    table.cell(tbl2, 0, 6, "In B1/S1", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl2, 1, 6, (inB1 ? "B1" : "—") + " / " + (inS1 ? "S1" : "—"), text_size=size.tiny)
+    table.cell(tbl2, 0, 7, "دعم+B1", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl2, 1, 7, supConfl ? "✓" : "—", text_color=supConfl ? color.lime : color.gray, text_size=size.tiny)
+    table.cell(tbl2, 0, 8, "Total buy V", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl2, 1, 8, str.tostring(totalBuyVol, "#"), text_size=size.tiny)
+    table.cell(tbl2, 0, 9, "Total sell V", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl2, 1, 9, str.tostring(totalSellVol, "#"), text_size=size.tiny)
+    table.cell(tbl2, 0, 10, "Grade B1/S1", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl2, 1, 10, gradeB1Txt + " / " + gradeS1Txt, text_size=size.tiny)
+    if useMktVol
+        table.cell(tbl2, 0, 11, "RS vol", text_color=color.gray, text_size=size.tiny)
+        table.cell(tbl2, 1, 11, str.tostring(rsVol, "#.##"), text_color=not na(rsVol) and rsVol >= 1.1 ? color.lime : color.white, text_size=size.tiny)
+    if showTradePlan
+        table.cell(tbl2, 0, 12, "Plan R/R", text_color=color.gray, text_size=size.tiny)
+        table.cell(tbl2, 1, 12, str.tostring(trRR, "#.##") + " → " + str.tostring(trT1, format.mintick), text_size=size.tiny)
+
+var label ban = na
+if showBanner and barstate.islast
+    label.delete(ban)
+    string txt = verdict + "\nB1 " + str.tostring(b1Mid, format.mintick) + " · S1 " + str.tostring(s1Mid, format.mintick) + " · Net " + str.tostring(netBuyPct, "#") + "% buy"
+    ban := label.new(bar_index, high, txt, style=label.style_label_down, color=color.new(color.black, 25), textcolor=color.white, size=size.small)
+
+alertcondition(inB1 and not inB1[1], title="EGX VZ enter B1", message="EGX VZ: entered biggest BUY zone B1")
+alertcondition(inS1 and not inS1[1], title="EGX VZ enter S1", message="EGX VZ: entered biggest SELL zone S1")
+alertcondition(supConfl and inB1, title="EGX VZ B1+support", message="EGX VZ: B1 with pivot support")
+alertcondition(netBuyPct >= 58, title="EGX VZ net buy", message="EGX VZ: net buy dominance")
+alertcondition(netBuyPct <= 42, title="EGX VZ net sell", message="EGX VZ: net sell dominance")
+alertcondition(b1Bounce, title="EGX VZ B1 bounce", message="EGX VZ: B1 bounce signal")
+alertcondition(s1Reject, title="EGX VZ S1 reject", message="EGX VZ: S1 reject signal")
+
+plot(showScreenerOut ? (inB1 ? 1 : 0) : na, "EGVZ_InB1", display=display.data_window)
+plot(showScreenerOut ? (inS1 ? 1 : 0) : na, "EGVZ_InS1", display=display.data_window)
+plot(showScreenerOut ? float(gradeB1) : na, "EGVZ_GradeB1", display=display.data_window)
+plot(showScreenerOut ? float(gradeS1) : na, "EGVZ_GradeS1", display=display.data_window)
+plot(showScreenerOut ? netBuyPct : na, "EGVZ_NetBuyPct", display=display.data_window)
+plot(showScreenerOut ? strB1 : na, "EGVZ_B1Strength", display=display.data_window)
+plot(showScreenerOut ? (b1Bounce ? 1 : 0) : na, "EGVZ_B1Bounce", display=display.data_window)
+plot(showScreenerOut ? (supConfl ? 1 : 0) : na, "EGVZ_B1Support", display=display.data_window)
+plot(showScreenerOut ? (gradeB1 >= 2 and inB1 and netBuyPct >= 52 ? 1 : 0) : na, "EGVZ_BuyPass", display=display.data_window)
+plot(showScreenerOut ? (gradeS1 >= 2 and inS1 and netBuyPct <= 48 ? 1 : 0) : na, "EGVZ_SellPass", display=display.data_window)

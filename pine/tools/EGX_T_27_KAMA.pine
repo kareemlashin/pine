@@ -1,0 +1,30 @@
+//@version=6
+indicator("EGX Tool 27 KAMA — Kaufman AMA", shorttitle="EGX T-KAMA", overlay=true, max_labels_count=80, max_lines_count=80, max_boxes_count=40, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة ب الاتجاه · #27/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+int erLen = input.int(10, "ER")
+int fast = input.int(2, "Fast")
+int slow = input.int(30, "Slow")
+float change = math.abs(close - close[erLen])
+float volat = math.sum(math.abs(close - close[1]), erLen)
+float er = volat > 0 ? change / volat : 0.0
+float sc = math.pow(er * (2.0 / (fast + 1.0) - 2.0 / (slow + 1.0)) + 2.0 / (slow + 1.0), 2.0)
+var float kama = na
+kama := na(kama[1]) ? close : nz(kama[1]) + sc * (close - nz(kama[1]))
+int vote = close > kama and kama > kama[1] ? 1 : close < kama and kama < kama[1] ? -1 : 0
+plot(kama, "EGXT_KAMA", color=color.orange, linewidth=2)
+
+plot(vote, "EGXT_KAMA_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_KAMA_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_KAMA_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "KAMA", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-KAMA صاعد", "EGX Tool KAMA: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-KAMA هابط", "EGX Tool KAMA: vote هابط")

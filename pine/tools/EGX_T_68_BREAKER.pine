@@ -1,0 +1,38 @@
+//@version=6
+indicator("EGX Tool 68 بريكر — Breaker Block", shorttitle="EGX T-BREAKER", overlay=true, max_labels_count=80, max_lines_count=80, max_boxes_count=40, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة ه SMC · #68/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+int len = input.int(8, "Swing")
+float ph = ta.pivothigh(high, len, len)
+float pl = ta.pivotlow(low, len, len)
+var float brkHi = na
+var float brkLo = na
+var int side = 0
+if not na(pl) and close < low[len]
+    brkLo := low[len]
+    brkHi := high[len]
+    side := -1
+if not na(ph) and close > high[len]
+    brkLo := low[len]
+    brkHi := high[len]
+    side := 1
+bool retestBull = side == 1 and not na(brkHi) and low <= brkHi and close > brkLo
+bool retestBear = side == -1 and not na(brkLo) and high >= brkLo and close < brkHi
+int vote = retestBull ? 1 : retestBear ? -1 : side
+plot(brkHi, "BrkHi", color=color.new(color.orange, 40), style=plot.style_linebr)
+plot(brkLo, "BrkLo", color=color.new(color.orange, 40), style=plot.style_linebr)
+
+plot(vote, "EGXT_BREAKER_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_BREAKER_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_BREAKER_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "BREAKER", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-BREAKER صاعد", "EGX Tool BREAKER: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-BREAKER هابط", "EGX Tool BREAKER: vote هابط")

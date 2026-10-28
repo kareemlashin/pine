@@ -1,0 +1,29 @@
+//@version=6
+indicator("EGX Tool 17 KST — Know Sure Thing", shorttitle="EGX T-KST", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة أ الزخم · #17/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+float rcma1 = ta.sma(ta.roc(close, 10), 10)
+float rcma2 = ta.sma(ta.roc(close, 15), 10)
+float rcma3 = ta.sma(ta.roc(close, 20), 10)
+float rcma4 = ta.sma(ta.roc(close, 30), 15)
+float v = rcma1 + 2.0 * rcma2 + 3.0 * rcma3 + 4.0 * rcma4
+float sig = ta.sma(v, 9)
+int vote = v > sig and v > 0 ? 1 : v < sig and v < 0 ? -1 : 0
+plot(v, "EGXT_KST_Val", color=color.teal, linewidth=2)
+plot(sig, "EGXT_KST_Sig", color=color.orange)
+hline(0, "0", color=color.gray)
+
+plot(vote, "EGXT_KST_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_KST_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_KST_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "KST", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-KST صاعد", "EGX Tool KST: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-KST هابط", "EGX Tool KST: vote هابط")

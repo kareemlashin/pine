@@ -1,0 +1,134 @@
+//@version=6
+indicator("EGX ماسح — بدون overlay", shorttitle="EGX ماسح", overlay=false, max_labels_count=1, max_lines_count=1)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// مخرجات Screener فقط — ضع على كل سهم في Watchlist (إطار D موصى)
+// Pro: EGXScr_Pro = 1 · Pass: EGXScr_Pass = 1 · تمييز: EGXScr = 1
+// Vol Rank: EGXScr_VolRank · EGXScr_VolPass — mirror EGX_Core.f_volRankScore
+// ماسح موحّد: pine/EGX_UNIFIED_SCREENER.pine
+// ═══════════════════════════════════════════════════════════════════════════════
+
+string G = "فلتر"
+string profile = input.string("EGX قياسي", "ملف", options=["EGX قياسي", "مضاربة 15د", "استثمار يومي"], group=G)
+float minRankIn = input.float(65.0, "حد Rank", group=G)
+float minRRIn = input.float(1.5, "حد R/R", group=G)
+int minSetupIn = input.int(7, "حد إعداد /11", group=G)
+float minOppIn = input.float(68.0, "حد Opp Pro", group=G)
+bool confirmClose = input.bool(true, "عند إغلاق الشمعة", group=G)
+string egxBoard = input.string("نشط (EGX100)", "لوحة", options=["نشط (EGX100)", "EGX30 (بيع مكشوف)", "SME تميّز", "SME نايل", "غير نشط"], group=G)
+bool blockLimit = input.bool(true, "منع قرب halt/LULD", group=G)
+bool useMktHalt100 = input.bool(true, "منع إذا EGX100 ≤ −10%", group=G)
+
+float effMinVol = profile == "مضاربة 15د" ? 3000.0 : profile == "استثمار يومي" ? 800.0 : 1500.0
+float effMinRank = profile == "استثمار يومي" ? 60.0 : minRankIn
+float effMinOpp = profile == "استثمار يومي" ? 62.0 : minOppIn
+
+bool sigOk = not confirmClose or barstate.isconfirmed
+
+float ema9 = ta.ema(close, 9)
+float ema21 = ta.ema(close, 21)
+float ema50 = ta.ema(close, 50)
+bool bullStack = ema9 > ema21 and ema21 > ema50
+float wClose = request.security(syminfo.tickerid, "W", close, barmerge.gaps_off, barmerge.lookahead_off)
+float wEma50 = request.security(syminfo.tickerid, "W", ta.ema(close, 50), barmerge.gaps_off, barmerge.lookahead_off)
+bool htfBull = wClose > wEma50
+[macdL, macdS, macdH] = ta.macd(close, 12, 26, 9)
+bool macdBull = macdH > 0 and macdL > macdS
+float volMa = ta.sma(volume, 20)
+bool liqOk = volMa >= effMinVol
+float rvol = volume / math.max(volMa, 1.0)
+float mfm = ((close - low) - (high - close)) / math.max(high - low, syminfo.mintick)
+float cmf = ta.sma(mfm * volume, 14) / ta.sma(volume, 14)
+float obv = ta.obv
+float obvSlope = ta.linreg(obv, 10, 0) - ta.linreg(obv, 10, 1)
+bool accumulating = cmf > 0 and obvSlope > 0
+float benchRoc = request.security("EGX:EGX30", timeframe.period, ta.roc(close, 20), barmerge.gaps_off, barmerge.lookahead_off)
+bool rsLeader = ta.roc(close, 20) - benchRoc > 0
+
+float pl = ta.pivotlow(low, 8, 8)
+var float swingLow = na
+if not na(pl)
+    swingLow := pl
+bool supportBreak = sigOk and not na(swingLow) and close < swingLow and close[1] >= swingLow
+
+float atr = ta.atr(14)
+float zw = atr * 0.35
+float buyTop = nz(swingLow, low) + zw
+float buyBot = nz(swingLow, low) - zw * 1.2
+float ph = ta.pivothigh(high, 8, 8)
+var float swingHigh = na
+if not na(ph)
+    swingHigh := ph
+float t1 = na(swingHigh) ? close + atr * 1.5 : swingHigh
+float entryPx = (buyTop + buyBot) / 2.0
+float stopPx = buyBot - atr * 0.5
+float rr = math.max(entryPx - stopPx, syminfo.mintick) > 0 ? (t1 - entryPx) / math.max(entryPx - stopPx, syminfo.mintick) : na
+
+float score = math.max(0.0, math.min(100.0, (bullStack ? 20.0 : 0.0) + (htfBull ? 15.0 : 0.0) + (macdBull ? 10.0 : 0.0) + (accumulating ? 15.0 : 0.0) + (rvol >= 1.0 ? 10.0 : 0.0) + (rsLeader ? 5.0 : 0.0)))
+int setupHits = (bullStack ? 1 : 0) + (htfBull ? 1 : 0) + (macdBull ? 1 : 0) + (accumulating ? 1 : 0) + (rsLeader ? 1 : 0) + (not na(rr) and rr >= minRRIn ? 1 : 0) + (rvol >= 1.0 ? 1 : 0)
+float rank = score * 0.6 + setupHits / 11.0 * 40.0
+float opp = score * 0.5 + setupHits / 11.0 * 50.0
+
+bool nearSupport = low <= buyTop and close >= buyBot
+float dPrev = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+float dayPct = dPrev > 0 ? (close - dPrev) / dPrev * 100.0 : 0.0
+float haltPct = egxBoard == "SME تميّز" or egxBoard == "SME نايل" or egxBoard == "غير نشط" ? 5.0 : 10.0
+float luldPct = egxBoard == "غير نشط" ? 5.0 : (egxBoard == "SME تميّز" or egxBoard == "SME نايل" ? 10.0 : 20.0)
+bool nearLimit = blockLimit and dPrev > 0 and (dayPct >= math.min(9.0, haltPct - 1.0) or dayPct >= luldPct - 0.25)
+f_mktTrS() =>
+    int sc = 0
+    float e20 = ta.ema(close, 20)
+    float e50 = ta.ema(close, 50)
+    sc += close > e20 ? 1 : -1
+    sc += e20 > e50 ? 1 : -1
+    sc
+float mom30S = request.security("EGX:EGX30", timeframe.period, close[20] > 0 ? (close / close[20] - 1.0) * 100.0 : 0.0, barmerge.gaps_off, barmerge.lookahead_off)
+int tr30S = request.security("EGX:EGX30", timeframe.period, f_mktTrS(), barmerge.gaps_off, barmerge.lookahead_off)
+bool heavySellS = mom30S < -4.0 and tr30S <= -1
+float dayPct100S = useMktHalt100 ? request.security("EGX:EGX100EWI", "D", close[1] > 0 ? (close - close[1]) / close[1] * 100.0 : 0.0, barmerge.gaps_off, barmerge.lookahead_off) : 0.0
+bool mktHalt100S = useMktHalt100 and dayPct100S <= -10.0
+bool regimeOk = not heavySellS and not mktHalt100S
+bool buyFlag = sigOk and liqOk and not supportBreak and not nearLimit and regimeOk and setupHits >= minSetupIn and not na(rr) and rr >= minRRIn and nearSupport and score >= 55
+bool pass = buyFlag and rank >= effMinRank
+bool pro = pass and opp >= effMinOpp and setupHits >= 7
+
+float pctV = ta.percentrank(volume, 500)
+float zV = (volume - volMa) / math.max(ta.stdev(volume, 20), 1.0)
+float bRvolV = request.security("EGX:EGX30", timeframe.period, volume / math.max(ta.sma(volume, 20), 1.0), barmerge.gaps_off, barmerge.lookahead_off)
+float rsVV = bRvolV > 0 ? rvol / bRvolV : 1.0
+float rngV = math.max(high - low, syminfo.mintick)
+float buyPctV = (close - low) / rngV * 100.0
+float volRankScr = math.min(pctV, 100.0) * 0.22 + math.min(rvol, 3.0) / 3.0 * 100.0 * 0.18 + math.min(math.max(zV, 0), 4.0) / 4.0 * 100.0 * 0.12 + math.min(rsVV, 2.0) / 2.0 * 100.0 * 0.15 + buyPctV * 0.12 + (cmf > 0 ? 10.0 : cmf < 0 ? -5.0 : 0.0) + (obvSlope > 0 ? 8.0 : -4.0) + (volMa >= 1000 ? 5.0 : -10.0)
+volRankScr := math.max(0.0, math.min(100.0, volRankScr))
+bool volRankPass = volRankScr >= 60.0 and volMa >= 500
+
+var table t = table.new(position.middle_center, 2, 6, bgcolor=color.new(color.black, 10), border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 5)
+    table.cell(t, 0, 0, syminfo.ticker, text_color=color.white, text_size=size.normal)
+    table.cell(t, 1, 0, pro ? "Pro ✓" : pass ? "Pass" : "—", text_color=pro ? color.lime : pass ? color.yellow : color.gray, text_size=size.normal)
+    table.cell(t, 0, 1, "Rank / Opp", text_color=color.gray, text_size=size.small)
+    table.cell(t, 1, 1, str.tostring(rank, "#") + " / " + str.tostring(opp, "#"), text_color=color.white, text_size=size.small)
+    table.cell(t, 0, 2, "Setup / R/R", text_color=color.gray, text_size=size.small)
+    table.cell(t, 1, 2, str.tostring(setupHits) + "/11 · " + str.tostring(rr, "#.#"), text_color=color.white, text_size=size.small)
+    table.cell(t, 0, 3, "Buy", text_color=color.gray, text_size=size.small)
+    table.cell(t, 1, 3, buyFlag ? "1" : "0", text_color=buyFlag ? color.lime : color.gray, text_size=size.small)
+    table.cell(t, 0, 4, "Veto", text_color=color.gray, text_size=size.small)
+    table.cell(t, 1, 4, supportBreak ? "كسر" : nearLimit ? "halt" : liqOk ? "—" : "حجم", text_color=color.orange, text_size=size.small)
+    table.cell(t, 0, 5, profile, text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 5, "EGX ماسح", text_color=color.gray, text_size=size.tiny)
+
+plot(buyFlag ? 1 : 0, "EGXScr_BuyFlag", display=display.all)
+plot(rank, "EGXScr_Rank", display=display.all)
+plot(rr, "EGXScr_RR", display=display.all)
+plot(setupHits, "EGXScr_Setup", display=display.all)
+plot(opp, "EGXScr_Opp", display=display.all)
+plot(pass ? 1 : 0, "EGXScr_Pass", display=display.all)
+plot(pro ? 1 : 0, "EGXScr_Pro", display=display.all)
+plot(volRankScr, "EGXScr_VolRank", display=display.all)
+plot(volRankPass ? 1 : 0, "EGXScr_VolPass", display=display.all)
+plot(pro and volRankPass ? 1 : 0, "EGXScr_ProVol", display=display.all)
+plot(nearLimit ? 1 : 0, "EGXScr_Limit", display=display.all)
+plot(dayPct, "EGXScr_DayPct", display=display.data_window)
+plot(regimeOk ? 1 : 0, "EGX_RegimeOk", display=display.all)
+plot(1, "EGXScr", display=display.all)

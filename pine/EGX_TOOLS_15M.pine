@@ -1,0 +1,72 @@
+//@version=6
+indicator("EGX TOOLS — 15د intraday", shorttitle="T 15m", overlay=true, calc_bars_count=5000)
+
+// lite13 على إطار الشارت (15m/60m) · جلسة القاهرة · plots: EGXT15_*
+// قرار يومي: EGX_TOOLS_MASTER على D
+
+string G = "═══ EGX ═══"
+bool useSession = input.bool(true, "مستمر 10:00–14:15 فقط", group=G)
+bool blockLimit = input.bool(true, "منع قرب halt (D)", group=G)
+string egxBoard = input.string("نشط (EGX100)", "لوحة", options=["نشط (EGX100)", "EGX30 (بيع مكشوف)", "SME تميّز", "SME نايل", "غير نشط"], group=G)
+float minVol = input.float(1500.0, "حد حجم", group=G)
+float sigMin = input.float(18.0, "Score %", minval=10, maxval=40, group=G)
+bool onClose = input.bool(true, "إغلاق الشمعة", group=G)
+string bench = input.symbol("EGX:EGX30", "EGX30", group=G)
+
+bool sigOk = not onClose or barstate.isconfirmed
+
+f_sess() =>
+    int id = 0
+    if not na(time(timeframe.period, "1000-1415:23456", "Africa/Cairo"))
+        id := 2
+    id
+bool sessionOk = not useSession or f_sess() == 2
+
+f_mktTr() =>
+    int sc = 0
+    float e20 = ta.ema(close, 20)
+    float e50 = ta.ema(close, 50)
+    sc += close > e20 ? 1 : -1
+    sc += e20 > e50 ? 1 : -1
+    sc
+float mom30 = request.security(bench, timeframe.period, close[20] > 0 ? (close / close[20] - 1.0) * 100.0 : 0.0, barmerge.gaps_off, barmerge.lookahead_off)
+int tr30 = request.security(bench, timeframe.period, f_mktTr(), barmerge.gaps_off, barmerge.lookahead_off)
+bool bearMkt = mom30 < -4.0 and tr30 <= -1
+
+float dPrev = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+float dayPct = dPrev > 0 ? (close - dPrev) / dPrev * 100.0 : 0.0
+float haltPct = egxBoard == "SME تميّز" or egxBoard == "SME نايل" or egxBoard == "غير نشط" ? 5.0 : 10.0
+float luldPct = egxBoard == "غير نشط" ? 5.0 : (egxBoard == "SME تميّز" or egxBoard == "SME نايل" ? 10.0 : 20.0)
+bool nearLimit = blockLimit and dPrev > 0 and (dayPct >= math.min(9.0, haltPct - 1.0) or dayPct >= luldPct - 0.25)
+
+float ema20 = ta.ema(close, 20)
+float ema50 = ta.ema(close, 50)
+float rsi = ta.rsi(close, 14)
+[macdL, macdS, macdH] = ta.macd(close, 12, 26, 9)
+float volMa = ta.sma(volume, 20)
+bool liqOk = volMa >= minVol
+float rvol = volume / math.max(volMa, 1.0)
+float cmf = ta.sma(((close - low) - (high - close)) / math.max(high - low, syminfo.mintick) * volume, 20) / ta.sma(volume, 20)
+float obvSl = ta.linreg(ta.obv, 10, 0) - ta.linreg(ta.obv, 10, 1)
+[_, stDir] = ta.supertrend(3.0, 10)
+bool bosUp = close > ta.highest(high, 20)[1]
+bool inDem = close <= ta.highest(high, 80) - 0.618 * (ta.highest(high, 80) - ta.lowest(low, 80)) and close >= ta.lowest(low, 80)
+
+int sc = (rsi > 50 and rsi < 70 ? 1 : -1) + (macdH > 0 ? 1 : -1) + (close > ema50 ? 1 : -1) + (stDir < 0 ? 1 : -1) + (cmf > 0 ? 1 : -1) + (obvSl > 0 ? 1 : -1) + (bosUp or inDem ? 1 : 0)
+float score = sc / 7.0 * 100.0
+bool locOK = inDem or bosUp
+bool moneyOK = cmf > 0 and obvSl > 0
+int hits = (close > ema50 ? 1 : 0) + (locOK ? 1 : 0) + (score >= sigMin * 0.5 ? 1 : 0) + (moneyOK ? 1 : 0) + (close > open ? 1 : 0) + (rvol >= 0.9 ? 1 : 0)
+bool egxOK = liqOk and sessionOk and not nearLimit and not bearMkt
+bool buyA = sigOk and egxOK and locOK and moneyOK and hits >= 5 and score >= sigMin
+bool buyB = sigOk and egxOK and locOK and not buyA and hits >= 4 and score >= sigMin * 0.5
+
+plotshape(buyA, "A", shape.triangleup, location.belowbar, color.lime, size=size.tiny)
+plotshape(buyB, "B", shape.circle, location.belowbar, color.green, size=size.tiny)
+plot(buyA ? 1 : 0, "EGXT15_BuyA", display=display.all)
+plot(buyB ? 1 : 0, "EGXT15_BuyB", display=display.all)
+plot(score, "EGXT15_Score", display=display.all)
+plot(sessionOk ? 1 : 0, "EGXT15_SessionOk", display=display.data_window)
+plot(1, "EGXT15", display=display.all)
+
+alertcondition(buyA, "T 15m — A", "{{ticker}} EGXT15 BuyA")

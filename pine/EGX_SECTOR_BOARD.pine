@@ -1,0 +1,118 @@
+//@version=6
+indicator("EGX قطاعات — RS لوحة", shorttitle="EGX Sector", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// 10 رموز قطاع/مؤشر — Rank RS20 vs EGX30 · ثبات قيادة 3 أيام
+// plots: EGXSec_LeaderRank · EGXSec_LeaderOk · EGXSec_LeadPersist · EGXSec_Lead3d
+
+string G = "═══ قطاعات (رموز TV) ═══"
+string s01 = input.symbol("EGX:EGX30", "01", group=G)
+string s02 = input.symbol("EGX:EGX70EWI", "02", group=G)
+string s03 = input.symbol("EGX:EGX100EWI", "03", group=G)
+string s04 = input.symbol("", "04", group=G)
+string s05 = input.symbol("", "05", group=G)
+string s06 = input.symbol("", "06", group=G)
+string s07 = input.symbol("", "07", group=G)
+string s08 = input.symbol("", "08", group=G)
+string s09 = input.symbol("", "09", group=G)
+string s10 = input.symbol("", "10", group=G)
+string bench = input.symbol("EGX:EGX30", "Benchmark", group=G)
+int rsLen = input.int(20, "RS فترة", minval=5, group=G)
+int persistNeed = input.int(3, "أيام ثبات القيادة", minval=2, maxval=10, group=G)
+float leadMin = input.float(55.0, "حد Rank للقائد", minval=40, maxval=80, group=G)
+
+f_rsRank() =>
+    float b = request.security(bench, timeframe.period, ta.roc(close, rsLen), barmerge.gaps_off, barmerge.lookahead_off)
+    float sp = ta.roc(close, rsLen) - b
+    float volMa = ta.sma(volume, 20)
+    float rvol = volume / math.max(volMa, 1.0)
+    math.max(0.0, math.min(100.0, 50.0 + sp * 3.0 + (rvol >= 1.0 ? 8.0 : 0.0)))
+
+f_sec(string sym) =>
+    str.length(sym) > 0 ? request.security(sym, timeframe.period, f_rsRank(), barmerge.gaps_off, barmerge.lookahead_off) : float(na)
+
+float s01r = f_sec(s01)
+float s02r = f_sec(s02)
+float s03r = f_sec(s03)
+float s04r = f_sec(s04)
+float s05r = f_sec(s05)
+float s06r = f_sec(s06)
+float s07r = f_sec(s07)
+float s08r = f_sec(s08)
+float s09r = f_sec(s09)
+float s10r = f_sec(s10)
+
+f_mx2(float a, float b) =>
+    math.max(a, b)
+
+float leaderRank = f_mx2(nz(s01r, 0), f_mx2(nz(s02r, 0), f_mx2(nz(s03r, 0), f_mx2(nz(s04r, 0), f_mx2(nz(s05r, 0), f_mx2(nz(s06r, 0), f_mx2(nz(s07r, 0), f_mx2(nz(s08r, 0), f_mx2(nz(s09r, 0), nz(s10r, 0))))))))))
+
+int leadId = 0
+if nz(s01r, 0) >= leaderRank and not na(s01r)
+    leadId := 1
+else if nz(s02r, 0) >= leaderRank and not na(s02r)
+    leadId := 2
+else if nz(s03r, 0) >= leaderRank and not na(s03r)
+    leadId := 3
+else if nz(s04r, 0) >= leaderRank and not na(s04r)
+    leadId := 4
+else if nz(s05r, 0) >= leaderRank and not na(s05r)
+    leadId := 5
+else if nz(s06r, 0) >= leaderRank and not na(s06r)
+    leadId := 6
+else if nz(s07r, 0) >= leaderRank and not na(s07r)
+    leadId := 7
+else if nz(s08r, 0) >= leaderRank and not na(s08r)
+    leadId := 8
+else if nz(s09r, 0) >= leaderRank and not na(s09r)
+    leadId := 9
+else if nz(s10r, 0) >= leaderRank and not na(s10r)
+    leadId := 10
+
+var int persistId = 0
+var int persistBars = 0
+if barstate.isconfirmed
+    if leadId == persistId and leadId > 0
+        persistBars += 1
+    else
+        persistId := leadId
+        persistBars := leadId > 0 ? 1 : 0
+
+bool leaderOk = leaderRank >= leadMin
+bool lead3d = persistBars >= persistNeed and leaderOk
+
+f_row(table tb, int row, string name, float rk) =>
+    table.cell(tb, 0, row, str.tostring(row), text_size=size.tiny, text_color=row == persistId ? color.yellow : color.gray)
+    table.cell(tb, 1, row, str.length(name) > 0 ? name : "—", text_size=size.tiny, text_color=color.white)
+    table.cell(tb, 2, row, na(rk) ? "—" : str.tostring(rk, "#"), text_size=size.tiny, text_color=not na(rk) and rk >= leadMin ? color.lime : color.gray)
+
+var table t = table.new(position.top_right, 3, 13, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 2, 12)
+    table.cell(t, 0, 0, "#", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 0, "Symbol", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 2, 0, "Rank", text_color=color.gray, text_size=size.tiny)
+    f_row(t, 1, s01, s01r)
+    f_row(t, 2, s02, s02r)
+    f_row(t, 3, s03, s03r)
+    f_row(t, 4, s04, s04r)
+    f_row(t, 5, s05, s05r)
+    f_row(t, 6, s06, s06r)
+    f_row(t, 7, s07, s07r)
+    f_row(t, 8, s08, s08r)
+    f_row(t, 9, s09, s09r)
+    f_row(t, 10, s10, s10r)
+    table.cell(t, 0, 11, "Leader", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 11, "#" + str.tostring(persistId), text_size=size.tiny, text_color=color.white)
+    table.cell(t, 2, 11, str.tostring(leaderRank, "#"), text_color=leaderOk ? color.lime : color.white, text_size=size.small)
+    table.cell(t, 0, 12, "ثبات", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 12, str.tostring(persistBars) + "/" + str.tostring(persistNeed), text_size=size.tiny, text_color=lead3d ? color.lime : color.orange)
+    table.cell(t, 2, 12, lead3d ? "3d ✓" : "انتظر", text_size=size.tiny, text_color=lead3d ? color.lime : color.gray)
+
+plot(leaderRank, "EGXSec_LeaderRank", display=display.all)
+plot(leaderOk ? 1 : 0, "EGXSec_LeaderOk", display=display.all)
+plot(persistBars, "EGXSec_LeadPersist", display=display.all)
+plot(lead3d ? 1 : 0, "EGXSec_Lead3d", display=display.all)
+plot(s01r, "EGXSec_R01", display=display.all)
+plot(s02r, "EGXSec_R02", display=display.all)
+plot(s03r, "EGXSec_R03", display=display.all)
+plot(1, "EGXSec", display=display.all)

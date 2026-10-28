@@ -1,0 +1,30 @@
+//@version=6
+indicator("EGX Volume Ratio — vs prior", shorttitle="EGX VVR", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// V / V[1] و V / avg · docs/EGX_VOLUME.md
+
+string G = "Ratio"
+int avgLen = input.int(5, "Avg days", group=G)
+float minDay = input.float(1.35, "Hot vs yesterday", group=G)
+
+float v1 = volume[1] > 0 ? volume / volume[1] : 1.0
+float vAvg = ta.sma(volume, avgLen)
+float v5 = volume / math.max(vAvg, 1.0)
+
+bool hotDay = v1 >= minDay and close >= open
+bool hotVsAvg = v5 >= minDay
+
+plot(v1, "V/V1", color=color.fuchsia, linewidth=2)
+plot(v5, "V/Avg", color=color.teal, linewidth=1)
+hline(1.0, "1", color=color.gray)
+hline(minDay, "Hot", color=color.lime, linestyle=hline.style_dashed)
+
+var table t = table.new(position.top_right, 2, 3, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 2)
+    table.cell(t, 0, 0, "Vol ratio", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, str.tostring(v1, "#.##") + " / " + str.tostring(v5, "#.##"), text_size=size.tiny)
+
+plot(hotDay ? 1 : 0, "EGVVR_HotDay", display=display.all)
+plot(hotVsAvg ? 1 : 0, "EGVVR_HotAvg", display=display.all)
+plot(v5, "EGVVR_VAvg", display=display.all)

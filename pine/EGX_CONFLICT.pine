@@ -1,0 +1,72 @@
+//@version=6
+indicator("EGX Conflict — Buy vs Exit", shorttitle="EGX CF", overlay=false, calc_bars_count=5000)
+
+// يكتشف تعارض: Akhir/Hub شراء vs Tools خروج vs MASTER خروج
+// Filter: EGXCF_Conflict=1 · docs/EGX_DAILY_RUNBOOK.md
+
+bool onClose = input.bool(true, "إغلاق")
+string bench = input.symbol("EGX:EGX30", "EGX30")
+float minVol = input.float(1200.0, "حد حجم")
+string egxBoard = input.string("نشط (EGX100)", "لوحة", options=["نشط (EGX100)", "EGX30 (بيع مكشوف)", "SME تميّز", "SME نايل", "غير نشط"])
+bool blockLimit = input.bool(true, "منع قرب halt/LULD", group="EGX")
+
+bool sigOk = not onClose or barstate.isconfirmed
+
+float dPrevCf = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+float dayPctCf = dPrevCf > 0 ? (close - dPrevCf) / dPrevCf * 100.0 : 0.0
+float haltPctCf = egxBoard == "SME تميّز" or egxBoard == "SME نايل" or egxBoard == "غير نشط" ? 5.0 : 10.0
+float luldPctCf = egxBoard == "غير نشط" ? 5.0 : (egxBoard == "SME تميّز" or egxBoard == "SME نايل" ? 10.0 : 20.0)
+bool nearLimitCf = blockLimit and dPrevCf > 0 and (dayPctCf >= math.min(9.0, haltPctCf - 1.0) or dayPctCf >= luldPctCf - 0.25)
+
+// Hub-style buy (Akhir zone / retest)
+var float slH = na
+if not na(ta.pivotlow(low, 8, 8))
+    slH := ta.pivotlow(low, 8, 8)
+float atr = ta.atr(14)
+bool atZ = low <= nz(slH, low) + atr * 0.35 and close >= nz(slH, low) - atr * 0.42
+bool ret = sigOk and not na(slH) and low <= slH * 1.006 and close > slH
+float volMa = ta.sma(volume, 20)
+bool liqOk = volMa >= minVol
+float cmf = ta.sma(((close - low) - (high - close)) / math.max(high - low, syminfo.mintick) * volume, 20) / ta.sma(volume, 20)
+float obvSl = ta.linreg(ta.obv, 10, 0) - ta.linreg(ta.obv, 10, 1)
+bool acc = cmf > 0 and obvSl > 0
+bool supBr = sigOk and not na(slH) and close < slH and close[1] >= slH
+bool hubBuy = sigOk and liqOk and acc and (atZ or ret) and not supBr and not nearLimitCf
+
+// Tools lite exit (distribution + score flip)
+float rsi = ta.rsi(close, 14)
+[macdL, macdS, macdH] = ta.macd(close, 12, 26, 9)
+int tSc = (rsi > 50 ? 1 : -1) + (macdH > 0 ? 1 : -1) + (close > ta.ema(close, 50) ? 1 : -1) + (cmf > 0 ? 1 : -1) + (obvSl > 0 ? 1 : -1)
+float toolScore = tSc / 5.0 * 100.0
+bool toolsExit = sigOk and (cmf < 0 and obvSl < 0 and close < open and volume / math.max(volMa, 1.0) >= 1.2 or ta.crossunder(toolScore, -15))
+
+// MASTER-style exit (CHoCH / DV / support)
+bool chFlip = ta.crossunder(ta.ema(close, 21), ta.ema(close, 50))
+bool scoreDn = ta.crossunder(toolScore, 0)
+bool masterExit = sigOk and (supBr or chFlip or scoreDn or (cmf < -0.05 and obvSl < 0 and rsi > 65))
+
+bool buySide = hubBuy
+bool exitSide = toolsExit or masterExit
+bool conflict = sigOk and buySide and exitSide
+
+var table t = table.new(position.top_center, 2, 5, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 4)
+    table.cell(t, 0, 0, syminfo.ticker, text_color=color.white)
+    table.cell(t, 1, 0, conflict ? "تعارض" : buySide ? "Buy" : exitSide ? "Exit" : "—", bgcolor=conflict ? color.orange : color.new(color.gray, 60))
+    table.cell(t, 0, 1, "Hub/Akh", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 1, hubBuy ? "✓" : "—", text_size=size.tiny)
+    table.cell(t, 0, 2, "T-Exit", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 2, toolsExit ? "✓" : "—", text_size=size.tiny)
+    table.cell(t, 0, 3, "M-Exit", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 3, masterExit ? "✓" : "—", text_size=size.tiny)
+
+plot(conflict ? 1 : 0, "EGXCF_Conflict", display=display.all)
+plot(buySide ? 1 : 0, "EGXCF_BuyLane", display=display.all)
+plot(exitSide ? 1 : 0, "EGXCF_ExitLane", display=display.all)
+plot(toolsExit ? 1 : 0, "EGXCF_ToolsExit", display=display.all)
+plot(masterExit ? 1 : 0, "EGXCF_MasterExit", display=display.all)
+plot(nearLimitCf ? 1 : 0, "EGX_NearLimit", display=display.data_window)
+plot(1, "EGXCF", display=display.all)
+
+alertcondition(conflict, "EGX Conflict", "{{ticker}} buy vs exit conflict")

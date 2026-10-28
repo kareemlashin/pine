@@ -1,0 +1,24 @@
+//@version=6
+indicator("EGX Tool 40 Force — Elder Force Index", shorttitle="EGX T-EFI", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة ج الحجم · #40/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+int len = input.int(13, "EMA")
+float v = ta.ema(ta.change(close) * volume, len)
+int vote = v > 0 ? 1 : -1
+plot(v, "EGXT_EFI", color=v >= 0 ? color.lime : color.red, linewidth=2)
+hline(0, "0", color=color.gray)
+
+plot(vote, "EGXT_EFI_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_EFI_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_EFI_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "EFI", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-EFI صاعد", "EGX Tool EFI: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-EFI هابط", "EGX Tool EFI: vote هابط")

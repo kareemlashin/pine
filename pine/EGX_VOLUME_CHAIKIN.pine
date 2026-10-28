@@ -1,0 +1,27 @@
+//@version=6
+indicator("EGX Volume Chaikin Oscillator", shorttitle="EGX VChk", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// Chaikin = EMA3(AD) - EMA10(AD) · docs/EGX_VOLUME.md
+
+string G = "Chaikin"
+int fast = input.int(3, "Fast", group=G)
+int slow = input.int(10, "Slow", group=G)
+
+float mfm = ((close - low) - (high - close)) / math.max(high - low, syminfo.mintick)
+var float ad = 0.0
+ad += mfm * volume
+
+float co = ta.ema(ad, fast) - ta.ema(ad, slow)
+float coMa = ta.ema(co, 5)
+
+bool bull = ta.crossover(co, coMa) and co > 0
+bool bear = ta.crossunder(co, coMa) and co < 0
+
+plot(co, "EGVChk_Val", color=color.fuchsia, linewidth=2, display=display.all)
+plot(coMa, "Signal", color=color.gray, linewidth=1, display=display.none)
+hline(0, "0", color=color.gray)
+plotshape(bull, "Bull", shape.triangleup, location=location.bottom, color=color.lime, size=size.tiny)
+plotshape(bear, "Bear", shape.triangledown, location=location.top, color=color.red, size=size.tiny)
+
+plot(bull ? 1 : 0, "EGVChk_Bull", display=display.all)
+plot(bear ? 1 : 0, "EGVChk_Bear", display=display.all)

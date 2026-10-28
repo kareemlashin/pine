@@ -1,0 +1,38 @@
+//@version=6
+indicator("EGX Volume Touch — S/R + RVOL", shorttitle="EGX VTch", overlay=true, max_labels_count=100, max_tables_count=2, calc_bars_count=5000)
+
+// لمس دعم/مقاومة مع حجم · docs/EGX_VOLUME.md
+
+string G = "Touch"
+int srLen = input.int(20, "S/R lookback", minval=10, group=G)
+float padPct = input.float(0.35, "ATR pad", step=0.05, group=G)
+float minRvol = input.float(1.2, "RVOL", group=G)
+
+float sup = ta.lowest(low, srLen)[1]
+float res = ta.highest(high, srLen)[1]
+float pad = ta.atr(14) * padPct
+float vma = ta.sma(volume, 20)
+float rvol = volume / math.max(vma, 1.0)
+
+bool touchSup = low <= sup + pad and close > sup and rvol >= minRvol
+bool touchRes = high >= res - pad and close < res and rvol >= minRvol
+bool bounce = touchSup and close > open
+bool reject = touchRes and close < open
+
+plot(sup, "Support", color=color.new(color.lime, 50), linewidth=1, style=plot.style_linebr)
+plot(res, "Resistance", color=color.new(color.red, 50), linewidth=1, style=plot.style_linebr)
+
+plotshape(bounce, "Sup+V", shape.triangleup, location.belowbar, color=color.lime, size=size.small, text="S+V")
+plotshape(reject, "Res+V", shape.triangledown, location.abovebar, color=color.red, size=size.small, text="R+V")
+
+var table t = table.new(position.bottom_left, 2, 3, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 2)
+    table.cell(t, 0, 0, "Touch", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, bounce ? "Sup bounce" : reject ? "Res reject" : "—", text_size=size.tiny)
+
+plot(bounce ? 1 : 0, "EGVTch_SupBounce", display=display.all)
+plot(reject ? 1 : 0, "EGVTch_ResReject", display=display.all)
+plot(touchSup ? rvol : na, "EGVTch_SupRVOL", display=display.all)
+
+alertcondition(bounce, "Sup bounce V", "Support bounce with volume")

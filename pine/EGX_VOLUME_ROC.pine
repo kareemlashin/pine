@@ -1,0 +1,35 @@
+//@version=6
+indicator("EGX Volume ROC — momentum", shorttitle="EGX VROC", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// معدل تغيّر الحجم · docs/EGX_VOLUME.md
+
+string G = "ROC"
+int len = input.int(10, "ROC length", minval=3, group=G)
+int sigLen = input.int(9, "Signal EMA", group=G)
+float minRoc = input.float(25.0, "Hot ROC %", group=G)
+
+float roc = ta.roc(volume, len)
+float sig = ta.ema(roc, sigLen)
+float vma = ta.sma(volume, 20)
+bool hot = roc >= minRoc and volume > vma
+bool crossUp = ta.crossover(roc, sig) and roc > 0
+bool crossDn = ta.crossunder(roc, sig) and roc < 0
+
+plot(roc, "Vol ROC%", color=color.fuchsia, linewidth=2)
+plot(sig, "Signal", color=color.orange, linewidth=1)
+hline(0, "0", color=color.gray)
+hline(minRoc, "Hot", color=color.lime, linestyle=hline.style_dashed)
+
+bgcolor(hot ? color.new(color.orange, 88) : na)
+plotshape(crossUp, "↑", shape.triangleup, location=location.bottom, color=color.lime, size=size.tiny)
+plotshape(crossDn, "↓", shape.triangledown, location=location.top, color=color.red, size=size.tiny)
+
+var table t = table.new(position.top_right, 2, 3, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 2)
+    table.cell(t, 0, 0, "Vol ROC", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, str.tostring(roc, "#") + "%", text_size=size.tiny)
+
+plot(roc, "EGVROC_Val", display=display.all)
+plot(hot ? 1 : 0, "EGVROC_Hot", display=display.all)
+plot(crossUp ? 1 : 0, "EGVROC_XUp", display=display.all)

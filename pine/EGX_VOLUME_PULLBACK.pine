@@ -1,0 +1,32 @@
+//@version=6
+indicator("EGX Volume Pullback — low V dip", shorttitle="EGX VPb", overlay=true, max_tables_count=2, calc_bars_count=5000)
+
+// تراجع بحركة منخفضة الحجم في اتجاه · docs/EGX_VOLUME.md
+
+string G = "Pullback"
+int trendLen = input.int(50, "Trend MA", group=G)
+float maxRvol = input.float(0.85, "Max RVOL", group=G)
+int minTrend = input.int(5, "Min trend bars", group=G)
+
+float vma = ta.sma(volume, 20)
+float rvol = volume / math.max(vma, 1.0)
+float ma = ta.sma(close, trendLen)
+
+bool upTrend = close > ma and ta.rising(ma, minTrend)
+bool dnTrend = close < ma and ta.falling(ma, minTrend)
+
+bool bullPb = upTrend and close < close[1] and rvol <= maxRvol and low > ma
+bool bearPb = dnTrend and close > close[1] and rvol <= maxRvol and high < ma
+
+plot(ma, "Trend MA", color=color.new(color.blue, 30), linewidth=2)
+plotshape(bullPb, "Bull PB", shape.circle, location.belowbar, color=color.lime, size=size.small, text="pb")
+plotshape(bearPb, "Bear PB", shape.circle, location.abovebar, color=color.red, size=size.small, text="pb")
+
+var table t = table.new(position.bottom_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "Low-V PB", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, bullPb ? "Buy dip" : bearPb ? "Sell rip" : "—", text_size=size.tiny)
+
+plot(bullPb ? 1 : 0, "EGVPb_Bull", display=display.all)
+plot(bearPb ? 1 : 0, "EGVPb_Bear", display=display.all)

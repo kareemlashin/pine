@@ -1,0 +1,48 @@
+//@version=6
+indicator("EGX Tool 72 إليوت — Elliott Impulse", shorttitle="EGX T-ELLIOTT", overlay=true, max_labels_count=80, max_lines_count=80, max_boxes_count=40, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة و موجات · #72/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+int len = input.int(8, "Swing")
+float ph = ta.pivothigh(high, len, len)
+float pl = ta.pivotlow(low, len, len)
+var array<float> pr = array.new_float()
+var array<int> ty = array.new_int()
+if not na(ph)
+    array.push(pr, ph)
+    array.push(ty, 1)
+    if array.size(ty) > 12
+        array.shift(pr)
+        array.shift(ty)
+if not na(pl)
+    array.push(pr, pl)
+    array.push(ty, -1)
+    if array.size(ty) > 12
+        array.shift(pr)
+        array.shift(ty)
+int n = array.size(ty)
+int vote = 0
+if n >= 5
+    float a = array.get(pr, n - 5)
+    float b = array.get(pr, n - 4)
+    float c = array.get(pr, n - 3)
+    float d = array.get(pr, n - 2)
+    float e = array.get(pr, n - 1)
+    bool impUp = array.get(ty, n - 5) == -1 and b > a and c > a and d > b and e > b
+    bool impDn = array.get(ty, n - 5) == 1 and b < a and c < a and d < b and e < b
+    vote := impUp ? 1 : impDn ? -1 : 0
+plot(close, "Close", display=display.none)
+
+plot(vote, "EGXT_ELLIOTT_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_ELLIOTT_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_ELLIOTT_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "ELLIOTT", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-ELLIOTT صاعد", "EGX Tool ELLIOTT: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-ELLIOTT هابط", "EGX Tool ELLIOTT: vote هابط")

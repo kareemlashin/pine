@@ -1,0 +1,164 @@
+//@version=6
+indicator("EGX قرar — لوحة 20 (Rank)", shorttitle="EGX Q B20", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// 20 رمز · أعلى N في الجدول · EGXQBD20_* · إطار D
+
+int N = 20
+string egxBoard = input.string("نشط (EGX100)", "لوحة", options=["نشط (EGX100)", "EGX30 (بيع مكشوف)", "SME تميّز", "SME نايل", "غير نشط"], group=G)
+string G = "رموز EGX"
+string s01 = input.symbol("EGX:COMI", "01", group=G)
+string s02 = input.symbol("EGX:SWDY", "02", group=G)
+string s03 = input.symbol("EGX:TMGH", "03", group=G)
+string s04 = input.symbol("EGX:HRHO", "04", group=G)
+string s05 = input.symbol("EGX:FWRY", "05", group=G)
+string s06 = input.symbol("EGX:UNIP", "06", group=G)
+string s07 = input.symbol("EGX:ETEL", "07", group=G)
+string s08 = input.symbol("EGX:OCDI", "08", group=G)
+string s09 = input.symbol("EGX:SKPC", "09", group=G)
+string s10 = input.symbol("EGX:PHDC", "10", group=G)
+string s11 = input.symbol("EGX:ACGC", "11", group=G)
+string s12 = input.symbol("EGX:CNIN", "12", group=G)
+string s13 = input.symbol("EGX:AMER", "13", group=G)
+string s14 = input.symbol("EGX:CIRA", "14", group=G)
+string s15 = input.symbol("EGX:ESRS", "15", group=G)
+string s16 = input.symbol("EGX:MFPC", "16", group=G)
+string s17 = input.symbol("EGX:ORWE", "17", group=G)
+string s18 = input.symbol("EGX:MNHD", "18", group=G)
+string s19 = input.symbol("EGX:EGTS", "19", group=G)
+string s20 = input.symbol("EGX:ABUK", "20", group=G)
+string bench = input.symbol("EGX:EGX30", "EGX30", group=G)
+float minVol = input.float(800.0, "حد حجم", group=G)
+int showTop = input.int(12, "عرض أعلى N", minval=5, maxval=20, group=G)
+float minRankPass = input.float(52.0, "Pass — Rank", minval=40, maxval=80, group=G)
+
+f_decision() =>
+    float atr = ta.atr(14)
+    float volMa = ta.sma(volume, 20)
+    bool liq = volMa >= minVol
+    float cmf = ta.sma(((close - low) - (high - close)) / math.max(high - low, syminfo.mintick) * volume, 20) / ta.sma(volume, 20)
+    float obvSl = ta.linreg(ta.obv, 10, 0) - ta.linreg(ta.obv, 10, 1)
+    float acc = math.min(100.0, (cmf > 0 and obvSl > 0 ? 40.0 : 0.0) + (cmf > 0 ? 15.0 : 0.0))
+    float dist = math.min(100.0, (cmf < 0 and obvSl < 0 ? 35.0 : 0.0))
+    float hi = ta.highest(high, 252)
+    float lo = ta.lowest(low, 252)
+    float pctHi = hi > 0 ? (close - hi) / hi * 100.0 : 0.0
+    float rocB = lo > 0 ? (close / lo - 1.0) * 100.0 : 0.0
+    bool trap = rocB > 100 and pctHi < -28 and dist >= 38
+    float rsi = ta.rsi(close, 14)
+    bool chase = pctHi > -3 and rsi > 72
+    float dPrevL = close[1]
+    float dayPctL = dPrevL > 0 ? (close - dPrevL) / dPrevL * 100.0 : 0.0
+    float haltPctL = egxBoard == "SME تميّز" or egxBoard == "SME نايل" or egxBoard == "غير نشط" ? 5.0 : 10.0
+    float luldPctL = egxBoard == "غير نشط" ? 5.0 : (egxBoard == "SME تميّز" or egxBoard == "SME نايل" ? 10.0 : 20.0)
+    bool nearLimit = dayPctL >= math.min(9.0, haltPctL - 1.0) or dayPctL >= luldPctL - 0.25
+    float pl = ta.pivotlow(low, 8, 8)
+    var float sl = na
+    if not na(pl)
+        sl := pl
+    bool supBr = not na(sl) and close < sl and close[1] >= sl
+    float zw = atr * 0.35
+    float bTop = nz(sl, low) + zw
+    float bBot = nz(sl, low) - zw * 1.2
+    bool atZ = low <= bTop and close >= bBot
+    bool ret = not na(sl) and low <= sl * 1.006 and close > sl
+    int cyc = acc >= 55 ? 4 : 3
+    if dist >= 55
+        cyc := 9
+    if supBr
+        cyc := 11
+    float br = request.security(bench, timeframe.period, ta.roc(close, 20), barmerge.gaps_off, barmerge.lookahead_off)
+    bool rs = ta.roc(close, 20) - br > 0
+    float rk = math.min(100.0, acc * 0.45 + (100.0 - dist) * 0.25 + (rs ? 12.0 : 0.0) + (atZ ? 8.0 : 0.0))
+    bool squeeze = atr < ta.sma(atr, 14) * 0.85
+    float dna = math.min(100.0, (cyc <= 7 ? 15.0 : 0.0) + (acc >= 55 ? 25.0 : 0.0) + (dist < 45 ? 15.0 : 0.0) + (squeeze ? 10.0 : 0.0) + (rs ? 10.0 : 0.0))
+    bool buy = liq and acc >= 55 and dist < 50 and cyc >= 4 and cyc <= 7 and (atZ or ret) and not supBr and not chase and not trap and not nearLimit
+    bool exit = supBr or dist >= 65 or trap or cyc == 9
+    int act = exit ? 0 : buy ? 4 : cyc <= 4 and acc >= 48 ? 2 : 1
+    [act, rk, buy ? 1.0 : 0.0, acc, dist, cyc, dna]
+
+f_sym(int i) =>
+    i == 0 ? s01 : i == 1 ? s02 : i == 2 ? s03 : i == 3 ? s04 : i == 4 ? s05 : i == 5 ? s06 : i == 6 ? s07 : i == 7 ? s08 : i == 8 ? s09 : i == 9 ? s10 : i == 10 ? s11 : i == 11 ? s12 : i == 12 ? s13 : i == 13 ? s14 : i == 14 ? s15 : i == 15 ? s16 : i == 16 ? s17 : i == 17 ? s18 : i == 18 ? s19 : s20
+
+f_row(int i) =>
+    request.security(f_sym(i), "D", f_decision(), barmerge.gaps_off, barmerge.lookahead_off)
+
+float[] rkA = array.new_float(N, 0.0)
+int[] actA = array.new_int(N, 0)
+float[] buyA = array.new_float(N, 0.0)
+float[] dnaA = array.new_float(N, 0.0)
+
+for i = 0 to N - 1
+    [ac, rk, bu, _a, _d, _c, dn] = f_row(i)
+    array.set(rkA, i, rk)
+    array.set(actA, i, int(ac))
+    array.set(buyA, i, bu)
+    array.set(dnaA, i, dn)
+
+var int[] ord = array.new_int(N, 0)
+if barstate.isfirst
+    for k = 0 to N - 1
+        array.set(ord, k, k)
+
+int[] sorted = array.copy(ord)
+for i = 0 to N - 2
+    for j = 0 to N - 2 - i
+        int ia = array.get(sorted, j)
+        int ib = array.get(sorted, j + 1)
+        if array.get(rkA, ia) < array.get(rkA, ib)
+            array.set(sorted, j, ib)
+            array.set(sorted, j + 1, ia)
+
+int leader = array.get(sorted, 0)
+float leaderRank = array.get(rkA, leader)
+int leaderAct = array.get(actA, leader)
+bool leaderBuy = array.get(buyA, leader) > 0
+float leaderDna = array.get(dnaA, leader)
+string leaderSym = f_sym(leader)
+
+int buyCnt = 0
+for i = 0 to N - 1
+    buyCnt := buyCnt + (array.get(buyA, i) > 0 ? 1 : 0)
+
+bool ultraLeader = leaderBuy and leaderDna >= 55
+bool b20Pass = leaderRank >= minRankPass and (leaderBuy or leaderAct >= 2)
+
+f_actTxt(int act) =>
+    act == 4 ? "✅" : act == 3 ? "📌" : act == 2 ? "⏳" : act == 0 ? "🛑" : "⛔"
+
+int rows = math.min(showTop, N)
+var table tb = table.new(position.top_right, 6, 24, bgcolor=color.new(#0d1117, 5), border_width=1)
+if barstate.islast
+    table.clear(tb, 0, 0, 5, rows + 2)
+    table.cell(tb, 0, 0, "#", text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 1, 0, "رمز", text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 2, 0, "Rk", text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 3, 0, "Q", text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 4, 0, "DNA", text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 5, 0, "Act", text_color=color.gray, text_size=size.tiny)
+    for row = 0 to rows - 1
+        int ix = array.get(sorted, row)
+        float rk = array.get(rkA, ix)
+        int act = array.get(actA, ix)
+        table.cell(tb, 0, row + 1, str.tostring(row + 1), text_size=size.tiny, text_color=row == 0 ? color.lime : color.gray)
+        table.cell(tb, 1, row + 1, f_sym(ix), text_size=size.tiny, text_color=color.white)
+        table.cell(tb, 2, row + 1, str.tostring(rk, "#"), text_size=size.tiny, text_color=rk >= 58 ? color.lime : color.gray)
+        table.cell(tb, 3, row + 1, f_actTxt(act), text_size=size.tiny, text_color=act == 4 ? color.lime : color.yellow)
+        table.cell(tb, 4, row + 1, str.tostring(array.get(dnaA, ix), "#"), text_size=size.tiny)
+        table.cell(tb, 5, row + 1, str.tostring(act), text_size=size.tiny)
+    table.cell(tb, 0, rows + 1, "★", text_color=color.lime, text_size=size.small)
+    table.cell(tb, 1, rows + 1, leaderSym, text_color=color.white, text_size=size.small)
+    table.cell(tb, 2, rows + 1, str.tostring(leaderRank, "#"), text_color=color.lime, text_size=size.small)
+    table.cell(tb, 3, rows + 1, leaderBuy ? "BUY" : "—", text_color=leaderBuy ? color.lime : color.gray, text_size=size.tiny)
+    table.cell(tb, 4, rows + 1, "n=" + str.tostring(buyCnt), text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 0, rows + 2, "B20", text_color=color.gray, text_size=size.tiny)
+
+plot(leaderRank, "EGXQBD20_LeaderRank", display=display.data_window)
+plot(leaderBuy ? 1 : 0, "EGXQBD20_LeaderBuy", display=display.data_window)
+plot(leaderDna, "EGXQBD20_LeaderDNA", display=display.data_window)
+plot(buyCnt, "EGXQBD20_BuyCount", display=display.data_window)
+plot(b20Pass ? 1 : 0, "EGXQBD20_Pass", display=display.data_window)
+plot(ultraLeader ? 1 : 0, "EGXQBD20_UltraLeader", display=display.data_window)
+plot(1, "EGXQBD20", display=display.data_window)
+
+alertcondition(leaderBuy, "EGX B20 — شراء الأول", "{{ticker}} B20 leader BUY")
+alertcondition(ultraLeader, "EGX B20 — Ultra الأول", "{{ticker}} B20 Ultra leader")

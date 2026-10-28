@@ -1,0 +1,32 @@
+//@version=6
+indicator("EGX Volume Avg size proxy", shorttitle="EGX VAvg", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// متوسط «حجم صفقة» تقريبي = V / range · docs/EGX_VOLUME.md
+
+string G = "Proxy"
+int maLen = input.int(20, "MA", group=G)
+float minR = input.float(1.3, "Hot vs MA", group=G)
+
+float ticks = math.max((high - low) / syminfo.mintick, 1.0)
+float avgSize = volume / ticks
+float avgMa = ta.sma(avgSize, maLen)
+float rel = avgSize / math.max(avgMa, 1.0)
+float rvol = volume / math.max(ta.sma(volume, 20), 1.0)
+
+bool block = rel >= minR and rvol >= 1.2
+bool thin = rel <= 1.0 / minR and rvol < 0.9
+
+plot(avgSize, "Avg size proxy", color=color.orange, linewidth=2)
+plot(avgMa, "MA", color=color.gray, linewidth=1)
+plot(rel, "Rel", color=color.teal, linewidth=1)
+
+var table t = table.new(position.top_left, 2, 3, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 2)
+    table.cell(t, 0, 0, "Avg size", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, block ? "BLOCK" : thin ? "thin" : "—", text_size=size.tiny)
+    table.cell(t, 0, 1, "Rel/RVOL", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 1, str.tostring(rel, "#.##") + " / " + str.tostring(rvol, "#.##"), text_size=size.tiny)
+
+plot(block ? 1 : 0, "EGVAvg_Block", display=display.all)
+plot(rel, "EGVAvg_Rel", display=display.all)

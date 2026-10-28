@@ -1,0 +1,24 @@
+//@version=6
+indicator("EGX Tool 50 نصيب الشراء — Buy Share proxy", shorttitle="EGX T-BUYSHARE", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة ج الحجم · #50/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+float rng = math.max(high - low, syminfo.mintick)
+float v = (close - low) / rng * 100.0
+int vote = v >= 60 ? 1 : v <= 40 ? -1 : 0
+plot(v, "EGXT_BUYSH", color=v >= 50 ? color.lime : color.red, linewidth=2)
+hline(50, "50", color=color.gray)
+
+plot(vote, "EGXT_BUYSHARE_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_BUYSHARE_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_BUYSHARE_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "BUYSHARE", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-BUYSHARE صاعد", "EGX Tool BUYSHARE: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-BUYSHARE هابط", "EGX Tool BUYSHARE: vote هابط")

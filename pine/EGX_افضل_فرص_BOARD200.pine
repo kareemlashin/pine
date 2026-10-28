@@ -1,0 +1,1363 @@
+//@version=6
+indicator("EGX أفضل فرص — لوحة 200/294", shorttitle="أفضل فرص", overlay=false, max_tables_count=4, calc_bars_count=5000)
+
+// 8★ مثبتة + 32 دوّار = 40/bar (EGX30) · 294≈10 bars · Top100 · 3 جداول
+// فوري: EGX_افضل_فرص.pine + Screener + EGX_WATCHLIST_200.txt
+// 200 سائل = أول 200 · 294 = 200 + باقي WATCHLIST_270
+// plots: EGXOppB200_* · LeaderRank · HotProCount · playbook في docs/EGX_افضل_فرص.md
+
+int MAX = 294
+string G = "═══ لوحة ═══"
+string preset = input.string("مخصص", "Preset", options=["مخصص", "كبار 294", "عدّاء 200", "Desk قرar", "فلسي / سيولة", "فلاتر off"], group=G)
+string uniS = input.string("200", "الكون", options=["200", "294"], group=G)
+int TOTAL = int(str.tonumber(uniS))
+string bench = input.symbol("EGX:EGX30", "EGX30", group=G)
+bool chartIs30 = input.bool(true, "الشارت EGX30 (=40 مسح/bar)", group=G)
+float minVol = input.float(800.0, "حد حجم", group=G)
+int showTop = input.int(50, "عرض Top N", minval=5, maxval=100, group=G)
+float minRR = input.float(1.5, "حد R/R للعرض", minval=1.0, maxval=4.0, step=0.1, group=G)
+bool useRRFlt = input.bool(true, "فلتر R/R", group=G)
+bool useDistFlt = input.bool(true, "فلتر Dist<55", group=G)
+float minRVOL = input.float(1.0, "حد RVOL للعرض", minval=0.5, maxval=3.0, step=0.1, group=G)
+bool useRvolFlt = input.bool(false, "فلتر RVOL", group=G)
+int showBuy = input.int(25, "جدول شراء/حار", minval=0, maxval=40, group=G)
+int showProTbl = input.int(12, "جدول Pro", minval=0, maxval=20, group=G)
+int showRS = input.int(10, "جدول RS20", minval=0, maxval=20, group=G)
+bool sortBuyOnly = input.bool(true, "الجانبي = Buy فقط (إلا حار)", group=G)
+string sortMode = input.string("فرصة", "ترتيب الرئيسي", options=["فرصة", "Rank", "RS20", "RVOL", "R/R"], group=G)
+bool alertLeadChg = input.bool(true, "تنبيه تغيّر ★", group=G)
+float minLeadOppDelta = input.float(0.0, "★: حد فرق Opp للتبديل (0=إيقاف)", minval=0, maxval=15, step=1, group=G)
+float minOppShow = input.float(55.0, "حد فرصة", minval=0, maxval=80, group=G)
+float minProOpp = input.float(68.0, "حد Pro", minval=55, maxval=85, group=G)
+bool hideWeak = input.bool(false, "إخفاء تحت حد الفرصة", group=G)
+bool onlyBuy = input.bool(false, "شراء فقط", group=G)
+bool onlyPro = input.bool(false, "Pro فقط (Pass+Pro)", group=G)
+bool onlyPass = input.bool(false, "Pass فقط", group=G)
+bool onlyHotPro = input.bool(false, "HotPro فقط", group=G)
+string egxBoard = input.string("نشط (EGX100)", "لوحة", options=["نشط (EGX100)", "EGX30 (بيع مكشوف)", "SME تميّز", "SME نايل", "غير نشط"], group=G)
+bool blockBear = input.bool(true, "منع ضغط EGX30 على Buy", group=G)
+bool useMktHalt100 = input.bool(true, "منع شراء إذا EGX100 ≤ −10%", group=G)
+bool resetDaily = input.bool(false, "مسح كاش عند يوم جديد", group=G)
+bool showPinInPro = input.bool(true, "★ المثبتة في جدول Pro", group=G)
+
+string Gexp = "═══ Top10 / قطاع ═══"
+bool top10Diversify = input.bool(true, "Top10 تنويع قطاع (≤2)", group=Gexp)
+int maxPerSector = input.int(2, "حد/قطاع", minval=1, maxval=5, group=Gexp)
+string sectorFlt = input.string("الكل", "فلتر قطاع", options=["الكل", "بنوك", "عقار", "اتصالات", "صناعة", "غذاء/زراعة", "أدوية", "طاقة", "خدمات"], group=Gexp)
+bool highlightStale = input.bool(true, "تمييز Age قديم", group=Gexp)
+int staleAgeWarn = input.int(0, "Age تحذير (0=BATCHES)", minval=0, maxval=50, group=Gexp)
+string profile = input.string("EGX قياسي", "ملف (≈ Screener)", options=["EGX قياسي", "مضاربة 15د", "استثمار يومي"], group=G)
+bool confirmClose = input.bool(true, "كاش عند إغلاق الشمعة", group=G)
+float minRankIn = input.float(65.0, "حد Rank", minval=40, maxval=90, group=G)
+int minSetupIn = input.int(7, "حد إعداد /11", minval=0, maxval=11, group=G)
+bool blockLimit = input.bool(true, "منع قرب halt (Buy)", group=G)
+bool blockChase = input.bool(true, "منع مطاردة", group=G)
+bool skipSundayBuy = input.bool(false, "لا شراء يوم الأحد", group=G)
+bool compactUI = input.bool(false, "واجهة مدمجة (جدول رئيسي+Pro)", group=G)
+bool showSector = input.bool(false, "عمود قطاع", group=G)
+bool showTop10Copy = input.bool(true, "صف نسخ Top10", group=G)
+int minReadyAlert = input.int(88, "حد Ready% للتنبيه", minval=50, maxval=100, group=G)
+int batchOffset = input.int(0, "إزاحة دفعة (شارت 2)", minval=0, maxval=15, group=G)
+string tfHint = input.string("15", "إطار الشارت (المنطق D)", options=["D", "240", "60", "15"], group=G)
+
+float effMinVol = preset == "عدّاء 200" ? 400.0 : preset == "فلسي / سيولة" ? 350.0 : preset == "كبار 294" ? 1500.0 : preset == "Desk قرar" ? 1500.0 : profile == "مضاربة 15د" ? 3000.0 : profile == "استثمار يومي" ? 800.0 : minVol
+float effMinRank = preset == "Desk قرar" ? 65.0 : profile == "استثمار يومي" ? 60.0 : minRankIn
+float effMinOppScr = preset == "Desk قرar" ? 68.0 : profile == "استثمار يومي" ? 62.0 : minProOpp
+float effMinOppShow = preset == "فلسي / سيولة" ? 48.0 : minOppShow
+int effMinSetup = profile == "مضاربة 15د" ? 7 : minSetupIn
+bool effRRFlt = preset == "فلاتر off" or preset == "فلسي / سيولة" ? false : useRRFlt
+bool effDistFlt = preset == "فلاتر off" or preset == "فلسي / سيولة" ? false : useDistFlt
+bool effRvolFlt = preset == "فلاتر off" ? false : useRvolFlt
+
+string Gpin = "═══ مثبتة (كل bar) ═══"
+int pinN = input.int(6, "عدد ★ المثبتة", minval=0, maxval=8, group=Gpin)
+string p01 = input.symbol("EGX:COMI", "★01", group=Gpin)
+string p02 = input.symbol("EGX:SWDY", "★02", group=Gpin)
+string p03 = input.symbol("EGX:UNIP", "★03", group=Gpin)
+string p04 = input.symbol("EGX:CNIN", "★04", group=Gpin)
+string p05 = input.symbol("EGX:TMGH", "★05", group=Gpin)
+string p06 = input.symbol("EGX:HRHO", "★06", group=Gpin)
+string p07 = input.symbol("EGX:FWRY", "★07", group=Gpin)
+string p08 = input.symbol("EGX:ETEL", "★08", group=Gpin)
+
+int PIN_SLOTS = 8
+int pinUse = math.min(pinN, PIN_SLOTS)
+int SLOTMAX = chartIs30 ? 40 : 39
+int ROT = math.max(0, SLOTMAX - PIN_SLOTS)
+int BATCHES = ROT > 0 ? int(math.ceil(TOTAL / ROT)) : 1
+int staleMaxAge = math.max(BATCHES * 2, 8)
+
+f_pin(int p) =>
+    p == 0 ? p01 : p == 1 ? p02 : p == 2 ? p03 : p == 3 ? p04 : p == 4 ? p05 : p == 5 ? p06 : p == 6 ? p07 : p08
+
+f_mktTr() =>
+    int sc = 0
+    float e20 = ta.ema(close, 20)
+    float e50 = ta.ema(close, 50)
+    sc += close > e20 ? 1 : -1
+    sc += e20 > e50 ? 1 : -1
+    sc
+
+float mom30 = chartIs30 ? (close[20] > 0 ? (close / close[20] - 1.0) * 100.0 : 0.0) : request.security(bench, "D", close[20] > 0 ? (close / close[20] - 1.0) * 100.0 : 0.0, barmerge.gaps_off, barmerge.lookahead_off)
+int tr30 = chartIs30 ? f_mktTr() : request.security(bench, "D", f_mktTr(), barmerge.gaps_off, barmerge.lookahead_off)
+bool heavySell = mom30 < -4.0 and tr30 <= -1
+float dayPct100 = useMktHalt100 ? request.security("EGX:EGX100EWI", "D", close[1] > 0 ? (close - close[1]) / close[1] * 100.0 : 0.0, barmerge.gaps_off, barmerge.lookahead_off) : 0.0
+bool mktHalt100 = useMktHalt100 and dayPct100 <= -10.0
+bool regimeOk = (not blockBear or not heavySell) and not mktHalt100
+
+f_b0(int i) =>
+    switch i
+        0 => "EGX:COMI"
+        1 => "EGX:SWDY"
+        2 => "EGX:ETEL"
+        3 => "EGX:TMGH"
+        4 => "EGX:MFPC"
+        5 => "EGX:EGAL"
+        6 => "EGX:ABUK"
+        7 => "EGX:QNBE"
+        8 => "EGX:HDBK"
+        9 => "EGX:ALCN"
+        10 => "EGX:EAST"
+        11 => "EGX:ORAS"
+        12 => "EGX:EFIH"
+        13 => "EGX:ADIB"
+        14 => "EGX:EMFD"
+        15 => "EGX:FWRY"
+        16 => "EGX:SCTS"
+        17 => "EGX:GPPL"
+        18 => "EGX:VLMR"
+        19 => "EGX:CANA"
+        20 => "EGX:HALN"
+        21 => "EGX:EFID"
+        22 => "EGX:HRHO"
+        23 => "EGX:ORHD"
+        24 => "EGX:PHDC"
+        25 => "EGX:FAIT"
+        26 => "EGX:JUFO"
+        27 => "EGX:OCDI"
+        28 => "EGX:CIEB"
+        29 => "EGX:GBCO"
+        30 => "EGX:HELI"
+        31 => "EGX:CCAP"
+        32 => "EGX:EXPA"
+        33 => "EGX:IRON"
+        34 => "EGX:BTFH"
+        35 => "EGX:ARCC"
+        36 => "EGX:RAYA"
+        37 => "EGX:FERC"
+        => ""
+
+f_b1(int i) =>
+    switch i
+        0 => "EGX:VALU"
+        1 => "EGX:EGCH"
+        2 => "EGX:SCEM"
+        3 => "EGX:CIRA"
+        4 => "EGX:BIOC"
+        5 => "EGX:CLHO"
+        6 => "EGX:TAQA"
+        7 => "EGX:EGSA"
+        8 => "EGX:AMOC"
+        9 => "EGX:MOIL"
+        10 => "EGX:SKPC"
+        11 => "EGX:POUL"
+        12 => "EGX:PHAR"
+        13 => "EGX:ORWE"
+        14 => "EGX:UBEE"
+        15 => "EGX:MTIE"
+        16 => "EGX:MBSC"
+        17 => "EGX:SAUD"
+        18 => "EGX:MCQE"
+        19 => "EGX:EGBE"
+        20 => "EGX:TALM"
+        21 => "EGX:MASR"
+        22 => "EGX:EFIC"
+        23 => "EGX:BINV"
+        24 => "EGX:NIPH"
+        25 => "EGX:EGTS"
+        26 => "EGX:MHOT"
+        27 => "EGX:ATQA"
+        28 => "EGX:CICH"
+        29 => "EGX:NAPR"
+        30 => "EGX:RMDA"
+        31 => "EGX:ISPH"
+        32 => "EGX:CSAG"
+        33 => "EGX:CPCI"
+        34 => "EGX:MIPH"
+        35 => "EGX:AMIA"
+        36 => "EGX:IFAP"
+        37 => "EGX:OIH"
+        => ""
+
+f_b2(int i) =>
+    switch i
+        0 => "EGX:OLFI"
+        1 => "EGX:PHTV"
+        2 => "EGX:AMES"
+        3 => "EGX:BONY"
+        4 => "EGX:SUGR"
+        5 => "EGX:MOIN"
+        6 => "EGX:SPHT"
+        7 => "EGX:EGAS"
+        8 => "EGX:MPRC"
+        9 => "EGX:PRDC"
+        10 => "EGX:ISMQ"
+        11 => "EGX:ZMID"
+        12 => "EGX:DOMT"
+        13 => "EGX:AXPH"
+        14 => "EGX:GOUR"
+        15 => "EGX:MPCI"
+        16 => "EGX:ARAB"
+        17 => "EGX:SPIN"
+        18 => "EGX:SAIB"
+        19 => "EGX:ELEC"
+        20 => "EGX:SDTI"
+        21 => "EGX:MICH"
+        22 => "EGX:ACAP"
+        23 => "EGX:CNFN"
+        24 => "EGX:ENGC"
+        25 => "EGX:GSSC"
+        26 => "EGX:MCRO"
+        27 => "EGX:AJWA"
+        28 => "EGX:SVCE"
+        29 => "EGX:NINH"
+        30 => "EGX:KABO"
+        31 => "EGX:KORA"
+        32 => "EGX:DSCW"
+        33 => "EGX:UNIT"
+        34 => "EGX:OCPH"
+        35 => "EGX:WCDF"
+        36 => "EGX:ACGC"
+        37 => "EGX:KZPC"
+        => ""
+
+f_b3(int i) =>
+    switch i
+        0 => "EGX:AFMC"
+        1 => "EGX:AMER"
+        2 => "EGX:OFH"
+        3 => "EGX:UEFM"
+        4 => "EGX:MFSC"
+        5 => "EGX:ADCI"
+        6 => "EGX:GDWA"
+        7 => "EGX:CFGH"
+        8 => "EGX:NAHO"
+        9 => "EGX:LCSW"
+        10 => "EGX:ELKA"
+        11 => "EGX:GPIM"
+        12 => "EGX:ETRS"
+        13 => "EGX:ACTF"
+        14 => "EGX:ACAMD"
+        15 => "EGX:ICFC"
+        16 => "EGX:CRST"
+        17 => "EGX:EDFM"
+        18 => "EGX:ALRA"
+        19 => "EGX:INFI"
+        20 => "EGX:ELSH"
+        21 => "EGX:ASCM"
+        22 => "EGX:ZEOT"
+        23 => "EGX:ATLC"
+        24 => "EGX:SNFC"
+        25 => "EGX:PHGC"
+        26 => "EGX:MPCO"
+        27 => "EGX:DAPH"
+        28 => "EGX:SMFR"
+        29 => "EGX:CEFM"
+        30 => "EGX:NARE"
+        31 => "EGX:ICID"
+        32 => "EGX:ISMA"
+        33 => "EGX:DEIN"
+        34 => "EGX:GGRN"
+        35 => "EGX:MENA"
+        36 => "EGX:ECAP"
+        37 => "EGX:RACC"
+        => ""
+
+f_b4(int i) =>
+    switch i
+        0 => "EGX:ADPC"
+        1 => "EGX:NDRL"
+        2 => "EGX:EALR"
+        3 => "EGX:KRDI"
+        4 => "EGX:MOSC"
+        5 => "EGX:EHDR"
+        6 => "EGX:WKOL"
+        7 => "EGX:AALR"
+        8 => "EGX:GTWL"
+        9 => "EGX:MAAL"
+        10 => "EGX:AIHC"
+        11 => "EGX:MILS"
+        12 => "EGX:ASPI"
+        13 => "EGX:IDRE"
+        14 => "EGX:NCCW"
+        15 => "EGX:GGCC"
+        16 => "EGX:ODIN"
+        17 => "EGX:CERA"
+        18 => "EGX:SIPC"
+        19 => "EGX:POCO"
+        20 => "EGX:SCFM"
+        21 => "EGX:GTEX"
+        22 => "EGX:UEGC"
+        23 => "EGX:PRCL"
+        24 => "EGX:DTPP"
+        25 => "EGX:CAED"
+        26 => "EGX:IEEC"
+        27 => "EGX:NHPS"
+        28 => "EGX:MEPA"
+        29 => "EGX:ICLE"
+        30 => "EGX:MEGM"
+        31 => "EGX:OBRI"
+        32 => "EGX:SEIG"
+        33 => "EGX:MBEG"
+        34 => "EGX:COSG"
+        35 => "EGX:RTVC"
+        36 => "EGX:RUBX"
+        37 => "EGX:ALUM"
+        => ""
+
+f_b5(int i) =>
+    switch i
+        0 => "EGX:AFDI"
+        1 => "EGX:AIDC"
+        2 => "EGX:RAKT"
+        3 => "EGX:LUTS"
+        4 => "EGX:TANM"
+        5 => "EGX:APSW"
+        6 => "EGX:EBSC"
+        7 => "EGX:TWSA"
+        8 => "EGX:PRMH"
+        9 => "EGX:UNIP"
+        10 => "EGX:ACFR"
+        11 => "EGX:ACRO"
+        12 => "EGX:ADRI"
+        13 => "EGX:AIFI"
+        14 => "EGX:AIH"
+        15 => "EGX:AITG"
+        16 => "EGX:AIVC"
+        17 => "EGX:ALXD"
+        18 => "EGX:AMEC"
+        19 => "EGX:AMII"
+        20 => "EGX:AMPI"
+        21 => "EGX:ANCC"
+        22 => "EGX:ANFI"
+        23 => "EGX:AOTM"
+        24 => "EGX:AREH"
+        25 => "EGX:ARVA"
+        26 => "EGX:AUTO"
+        27 => "EGX:BIDI"
+        28 => "EGX:BIGP"
+        29 => "EGX:BSFR"
+        30 => "EGX:CCRS"
+        31 => "EGX:CID"
+        32 => "EGX:CIRF"
+        33 => "EGX:CNIN"
+        34 => "EGX:COPR"
+        35 => "EGX:CPME"
+        36 => "EGX:DCCC"
+        37 => "EGX:DGTZ"
+        => ""
+
+f_b6(int i) =>
+    switch i
+        0 => "EGX:EASB"
+        1 => "EGX:EDBM"
+        2 => "EGX:EEII"
+        3 => "EGX:EEP"
+        4 => "EGX:EFAC"
+        5 => "EGX:EGOTH"
+        6 => "EGX:EGREF"
+        7 => "EGX:EGWA"
+        8 => "EGX:EKHO"
+        9 => "EGX:EKHOA"
+        10 => "EGX:ELAB"
+        11 => "EGX:ELNA"
+        12 => "EGX:ELWA"
+        13 => "EGX:ENPI"
+        14 => "EGX:EOSB"
+        15 => "EGX:EPCO"
+        16 => "EGX:EPPK"
+        17 => "EGX:ESRS"
+        18 => "EGX:FAITA"
+        19 => "EGX:FCMD"
+        20 => "EGX:FIRE"
+        21 => "EGX:FNAR"
+        22 => "EGX:FTNS"
+        23 => "EGX:GEOS"
+        24 => "EGX:GIHD"
+        25 => "EGX:GMCI"
+        26 => "EGX:GOCO"
+        27 => "EGX:GRCA"
+        28 => "EGX:GROV"
+        29 => "EGX:HBCO"
+        30 => "EGX:HDST"
+        31 => "EGX:IBCT"
+        32 => "EGX:INEG"
+        33 => "EGX:KNGC"
+        34 => "EGX:KWIN"
+        35 => "EGX:LKGP"
+        36 => "EGX:MISR"
+        37 => "EGX:MITR"
+        => ""
+
+f_b7(int i) =>
+    switch i
+        0 => "EGX:MLIC"
+        1 => "EGX:MMAT"
+        2 => "EGX:MMHC"
+        3 => "EGX:MNHD"
+        4 => "EGX:MOED"
+        5 => "EGX:NAMI"
+        6 => "EGX:NBCC"
+        7 => "EGX:NEDA"
+        8 => "EGX:NFCI"
+        9 => "EGX:NMIN"
+        10 => "EGX:OCAP"
+        11 => "EGX:PMSC"
+        12 => "EGX:RKAZ"
+        13 => "EGX:ROTO"
+        14 => "EGX:RREI"
+        15 => "EGX:SEIGA"
+        16 => "EGX:SIEG"
+        17 => "EGX:SINA"
+        18 => "EGX:SNFI"
+        19 => "EGX:SPMD"
+        20 => "EGX:TOUR"
+        21 => "EGX:TRTO"
+        22 => "EGX:TYCN"
+        23 => "EGX:UPMS"
+        24 => "EGX:UTOP"
+        25 => "EGX:VERT"
+        26 => "EGX:VLMRA"
+        27 => "EGX:YAYT"
+        => ""
+
+f_sym(int g) =>
+    g < 38 ? f_b0(g) : g < 76 ? f_b1(g - 38) : g < 114 ? f_b2(g - 76) : g < 152 ? f_b3(g - 114) : g < 190 ? f_b4(g - 152) : g < 228 ? f_b5(g - 190) : g < 266 ? f_b6(g - 228) : g < 304 ? f_b7(g - 266) : ""
+
+// --- BEGIN AUTO f_secTag ---
+f_secTag(string symFull) =>
+    string t = str.replace(symFull, "EGX:", "")
+    switch t
+        "AALR" => "استثمار"
+        "ABUK" => "بنك"
+        "ACAMD" => "خدمات"
+        "ACAP" => "صناع"
+        "ACFR" => "—"
+        "ACGC" => "خدمات"
+        "ACRO" => "—"
+        "ACTF" => "خدمات"
+        "ADCI" => "خدمات"
+        "ADIB" => "بنك"
+        "ADPC" => "—"
+        "ADRI" => "—"
+        "AFDI" => "خدمات"
+        "AFMC" => "خدمات"
+        "AIDC" => "خدمات"
+        "AIFI" => "—"
+        "AIH" => "—"
+        "AIHC" => "استثمار"
+        "AITG" => "—"
+        "AIVC" => "—"
+        "AJWA" => "غذاء"
+        "ALCN" => "صناع"
+        "ALRA" => "صناع"
+        "ALUM" => "حديد"
+        "ALXD" => "—"
+        "AMEC" => "—"
+        "AMER" => "خدمات"
+        "AMES" => "خدمات"
+        "AMIA" => "أدوية"
+        "AMII" => "—"
+        "AMOC" => "طاقة"
+        "AMPI" => "—"
+        "ANCC" => "—"
+        "ANFI" => "—"
+        "AOTM" => "—"
+        "APSW" => "صناع"
+        "ARAB" => "صناع"
+        "ARCC" => "صناع"
+        "AREH" => "—"
+        "ARVA" => "—"
+        "ASCM" => "صناع"
+        "ASPI" => "خدمات"
+        "ATLC" => "صناع"
+        "ATQA" => "خدمات"
+        "AUTO" => "—"
+        "AXPH" => "غذاء"
+        "BIDI" => "—"
+        "BIGP" => "—"
+        "BINV" => "بنك"
+        "BIOC" => "أدوية"
+        "BONY" => "خدمات"
+        "BSFR" => "—"
+        "BTFH" => "صناع"
+        "CAED" => "صناع"
+        "CANA" => "غذاء"
+        "CCAP" => "بنك"
+        "CCRS" => "—"
+        "CEFM" => "صناع"
+        "CERA" => "عقار"
+        "CFGH" => "صناع"
+        "CICH" => "خدمات"
+        "CID" => "—"
+        "CIEB" => "بنك"
+        "CIRA" => "عقار"
+        "CIRF" => "—"
+        "CLHO" => "أدوية"
+        "CNFN" => "خدمات"
+        "CNIN" => "استثمار"
+        "COMI" => "بنك"
+        "COPR" => "—"
+        "COSG" => "صناع"
+        "CPCI" => "خدمات"
+        "CPME" => "—"
+        "CRST" => "صناع"
+        "CSAG" => "خدمات"
+        "DAPH" => "عقار"
+        "DCCC" => "—"
+        "DEIN" => "صناع"
+        "DGTZ" => "—"
+        "DOMT" => "غذاء"
+        "DSCW" => "خدمات"
+        "DTPP" => "صناع"
+        "EALR" => "خدمات"
+        "EASB" => "—"
+        "EAST" => "غذاء"
+        "EBSC" => "صناع"
+        "ECAP" => "عقار"
+        "EDBM" => "—"
+        "EDFM" => "صناع"
+        "EEII" => "—"
+        "EEP" => "—"
+        "EFAC" => "—"
+        "EFIC" => "خدمات"
+        "EFID" => "غذاء"
+        "EFIH" => "تكنول"
+        "EGAL" => "حديد"
+        "EGAS" => "طاقة"
+        "EGBE" => "بنك"
+        "EGCH" => "صناع"
+        "EGOTH" => "—"
+        "EGREF" => "—"
+        "EGSA" => "صناع"
+        "EGTS" => "اتصالات"
+        "EGWA" => "—"
+        "EGX100EWI" => "—"
+        "EGX30" => "—"
+        "EHDR" => "خدمات"
+        "EKHO" => "—"
+        "EKHOA" => "—"
+        "ELAB" => "—"
+        "ELEC" => "صناع"
+        "ELKA" => "صناع"
+        "ELNA" => "—"
+        "ELSH" => "خدمات"
+        "ELWA" => "—"
+        "EMFD" => "استثمار"
+        "ENGC" => "صناع"
+        "ENPI" => "—"
+        "EOSB" => "—"
+        "EPCO" => "—"
+        "EPPK" => "—"
+        "ESRS" => "طاقة"
+        "ETEL" => "اتصالات"
+        "ETRS" => "صناع"
+        "EXPA" => "عقار"
+        "FAIT" => "صناع"
+        "FAITA" => "—"
+        "FCMD" => "—"
+        "FERC" => "صناع"
+        "FIRE" => "—"
+        "FNAR" => "—"
+        "FTNS" => "—"
+        "FWRY" => "تكنول"
+        "GBCO" => "بنك"
+        "GDWA" => "صناع"
+        "GEOS" => "—"
+        "GGCC" => "خدمات"
+        "GGRN" => "خدمات"
+        "GIHD" => "—"
+        "GMCI" => "—"
+        "GOCO" => "—"
+        "GOUR" => "غذاء"
+        "GPIM" => "صناع"
+        "GPPL" => "غذاء"
+        "GRCA" => "—"
+        "GROV" => "—"
+        "GSSC" => "صناع"
+        "GTEX" => "صناع"
+        "GTWL" => "عقار"
+        "HALN" => "صناع"
+        "HBCO" => "—"
+        "HDBK" => "بنك"
+        "HDST" => "—"
+        "HELI" => "عقار"
+        "HRHO" => "استثمار"
+        "IBCT" => "—"
+        "ICFC" => "خدمات"
+        "ICID" => "صناع"
+        "ICLE" => "خدمات"
+        "IDRE" => "خدمات"
+        "IEEC" => "خدمات"
+        "IFAP" => "أدوية"
+        "INEG" => "—"
+        "INFI" => "خدمات"
+        "IRON" => "حديد"
+        "ISMA" => "خدمات"
+        "ISMQ" => "غذاء"
+        "ISPH" => "أدوية"
+        "JUFO" => "غذاء"
+        "KABO" => "غذاء"
+        "KNGC" => "—"
+        "KORA" => "غذاء"
+        "KRDI" => "صناع"
+        "KWIN" => "—"
+        "KZPC" => "صناع"
+        "LCSW" => "صناع"
+        "LKGP" => "—"
+        "LUTS" => "صناع"
+        "MAAL" => "عقار"
+        "MASR" => "خدمات"
+        "MBEG" => "خدمات"
+        "MBSC" => "خدمات"
+        "MCQE" => "تكنول"
+        "MCRO" => "صناع"
+        "MEGM" => "صناع"
+        "MENA" => "عقار"
+        "MEPA" => "خدمات"
+        "MFPC" => "أسمدة"
+        "MFSC" => "صناع"
+        "MHOT" => "خدمات"
+        "MICH" => "غذاء"
+        "MILS" => "غذاء"
+        "MIPH" => "أدوية"
+        "MISR" => "—"
+        "MITR" => "—"
+        "MLIC" => "—"
+        "MMAT" => "—"
+        "MMHC" => "—"
+        "MNHD" => "عقار"
+        "MOED" => "—"
+        "MOIL" => "طاقة"
+        "MOIN" => "خدمات"
+        "MOSC" => "صناع"
+        "MPCI" => "صناع"
+        "MPCO" => "صناع"
+        "MPRC" => "طاقة"
+        "MTIE" => "تكنول"
+        "NAHO" => "—"
+        "NAMI" => "—"
+        "NAPR" => "خدمات"
+        "NARE" => "عقار"
+        "NBCC" => "—"
+        "NCCW" => "خدمات"
+        "NDRL" => "صناع"
+        "NEDA" => "—"
+        "NFCI" => "—"
+        "NHPS" => "خدمات"
+        "NINH" => "غذاء"
+        "NIPH" => "أدوية"
+        "NMIN" => "—"
+        "OBRI" => "خدمات"
+        "OCAP" => "—"
+        "OCDI" => "عقار"
+        "OCPH" => "أدوية"
+        "ODIN" => "عقار"
+        "OFH" => "صناع"
+        "OIH" => "خدمات"
+        "OLFI" => "غذاء"
+        "ORAS" => "صناع"
+        "ORHD" => "اتصالات"
+        "ORWE" => "اتصالات"
+        "PHAR" => "أدوية"
+        "PHDC" => "عقار"
+        "PHGC" => "خدمات"
+        "PHTV" => "خدمات"
+        "PMSC" => "—"
+        "POCO" => "خدمات"
+        "POUL" => "غذاء"
+        "PRCL" => "صناع"
+        "PRDC" => "صناع"
+        "PRMH" => "صناع"
+        "QNBE" => "بنك"
+        "RACC" => "صناع"
+        "RAKT" => "صناع"
+        "RAYA" => "صناع"
+        "RKAZ" => "—"
+        "RMDA" => "أدوية"
+        "ROTO" => "—"
+        "RREI" => "—"
+        "RTVC" => "اتصالات"
+        "RUBX" => "صناع"
+        "SAIB" => "بنك"
+        "SAUD" => "بنك"
+        "SCEM" => "صناع"
+        "SCFM" => "خدمات"
+        "SCTS" => "صناع"
+        "SDTI" => "خدمات"
+        "SEIG" => "خدمات"
+        "SEIGA" => "—"
+        "SIEG" => "—"
+        "SINA" => "—"
+        "SIPC" => "خدمات"
+        "SKPC" => "أسمدة"
+        "SMFR" => "صناع"
+        "SNFC" => "خدمات"
+        "SNFI" => "—"
+        "SPHT" => "خدمات"
+        "SPIN" => "صناع"
+        "SPMD" => "—"
+        "SUGR" => "غذاء"
+        "SVCE" => "خدمات"
+        "SWDY" => "صناع"
+        "TALM" => "خدمات"
+        "TANM" => "خدمات"
+        "TAQA" => "طاقة"
+        "TMGH" => "عقار"
+        "TOUR" => "—"
+        "TRTO" => "—"
+        "TWSA" => "صناع"
+        "TYCN" => "—"
+        "UBEE" => "بنك"
+        "UEFM" => "صناع"
+        "UEGC" => "خدمات"
+        "UNIP" => "أسمدة"
+        "UNIT" => "خدمات"
+        "UPMS" => "—"
+        "UTOP" => "—"
+        "VALU" => "تكنول"
+        "VERT" => "—"
+        "VLMR" => "صناع"
+        "VLMRA" => "—"
+        "WCDF" => "غذاء"
+        "WKOL" => "صناع"
+        "YAYT" => "—"
+        "ZEOT" => "خدمات"
+        "ZMID" => "غذاء"
+        => "—"
+// --- END AUTO f_secTag ---
+
+
+f_secOk(string symFull) =>
+    if sectorFlt == "الكل"
+        true
+    else
+        string tag = f_secTag(symFull)
+        sectorFlt == "بنوك" ? tag == "بنك" : sectorFlt == "عقار" ? tag == "عقار" : sectorFlt == "اتصالات" ? tag == "اتصالات" : sectorFlt == "صناعة" ? (tag == "صناع" or tag == "حديد" or tag == "أسمدة") : sectorFlt == "غذاء/زراعة" ? tag == "غذاء" : sectorFlt == "أدوية" ? tag == "أدوية" : sectorFlt == "طاقة" ? tag == "طاقة" : sectorFlt == "خدمات" ? (tag == "استثمار" or tag == "تكنول" or tag == "خدمات") : true
+
+// مرآة EGX_افضل_فرص.pine (D) — بدون regime السوق (يُطبَّق في f_cache)
+f_opp() =>
+    bool sigOk = not confirmClose or barstate.isconfirmed
+    float ema9 = ta.ema(close, 9)
+    float ema21 = ta.ema(close, 21)
+    float ema50 = ta.ema(close, 50)
+    float ema200 = ta.ema(close, 200)
+    bool bullStack = ema9 > ema21 and ema21 > ema50
+    bool above200 = close > ema200
+    float wClose = request.security(syminfo.tickerid, "W", close, barmerge.gaps_off, barmerge.lookahead_off)
+    float wEma50 = request.security(syminfo.tickerid, "W", ta.ema(close, 50), barmerge.gaps_off, barmerge.lookahead_off)
+    bool htfBull = wClose > wEma50
+    [macdL, macdS, macdH] = ta.macd(close, 12, 26, 9)
+    bool macdBull = macdH > 0 and macdL > macdS
+    float rsi = ta.rsi(close, 14)
+    float atr = ta.atr(14)
+    float volMa = ta.sma(volume, 20)
+    bool liqOk = volMa >= effMinVol
+    float rvol = volume / math.max(volMa, 1.0)
+    float mfm = ((close - low) - (high - close)) / math.max(high - low, syminfo.mintick)
+    float cmf = ta.sma(mfm * volume, 14) / ta.sma(volume, 14)
+    float obvSl = ta.linreg(ta.obv, 10, 0) - ta.linreg(ta.obv, 10, 1)
+    bool accumulating = cmf > 0 and obvSl > 0
+    bool distributing = cmf < 0 and obvSl < 0
+    float accScore = math.min(100.0, (accumulating ? 40.0 : 0.0) + (cmf > 0 ? 15.0 : 0.0) + (obvSl > 0 ? 15.0 : 0.0) + (rvol >= 1.0 and close > open ? 10.0 : 0.0))
+    float distRisk = math.min(100.0, (distributing ? 40.0 : 0.0) + (cmf < 0 ? 15.0 : 0.0) + (obvSl < 0 ? 15.0 : 0.0))
+    float pl = ta.pivotlow(low, 8, 8)
+    float ph = ta.pivothigh(high, 8, 8)
+    var float swingLow = na
+    var float swingHigh = na
+    if not na(pl)
+        swingLow := pl
+    if not na(ph)
+        swingHigh := ph
+    bool supportBreak = sigOk and not na(swingLow) and close < swingLow and close[1] >= swingLow
+    bool retestSupport = sigOk and not na(swingLow) and low <= swingLow * 1.005 and close > swingLow
+    float zw = atr * 0.35
+    float buyTop = nz(swingLow, low) + zw
+    float buyBot = nz(swingLow, low) - zw * 1.2
+    bool inZone = low <= buyTop and high >= buyBot
+    bool nearSupport = low <= buyTop and close >= buyBot
+    float phs = ta.pivothigh(high, 5, 5)
+    var float actHigh = na
+    var int structDir = 0
+    if not na(phs)
+        actHigh := phs
+    bool bullBreak = sigOk and not na(actHigh) and close > actHigh and close[1] <= actHigh
+    if bullBreak
+        structDir := 1
+        actHigh := na
+    bool fakeBreak = sigOk and not na(swingHigh) and high > swingHigh and close < swingHigh and rvol > 1.05
+    bool breakRetest = retestSupport and structDir == 1 and not fakeBreak
+    bool rawBreak = bullBreak and rvol >= 1.2
+    var float brkHoldLvl = na
+    var int brkHoldBars = 0
+    if barstate.isconfirmed
+        if rawBreak
+            brkHoldLvl := nz(swingHigh, close[1])
+            brkHoldBars := 1
+        else if not na(brkHoldLvl) and close > brkHoldLvl
+            brkHoldBars += 1
+        else
+            brkHoldLvl := na
+            brkHoldBars := 0
+    bool breakConfirmed = sigOk and not na(brkHoldLvl) and brkHoldBars >= 2 and (rvol >= 1.2 or rvol[1] >= 1.2)
+    float t1 = na(swingHigh) ? close + atr * 1.5 : swingHigh
+    float entryPx = (buyTop + buyBot) / 2.0
+    float stopPx = buyBot - atr * 0.5
+    float riskPx = math.max(entryPx - stopPx, syminfo.mintick)
+    float rr = riskPx > 0 ? (t1 - entryPx) / riskPx : 0.0
+    float roc20 = ta.roc(close, 20)
+    float hi252 = ta.highest(high, 252)
+    bool chase = hi252 > 0 and (close - hi252) / hi252 * 100.0 > -3.0 and rsi > 72
+    float dPrev = close[1]
+    float dayPct = dPrev > 0 ? (close - dPrev) / dPrev * 100.0 : 0.0
+    float haltPct = egxBoard == "SME تميّز" or egxBoard == "SME نايل" or egxBoard == "غير نشط" ? 5.0 : 10.0
+    float luldPct = egxBoard == "غير نشط" ? 5.0 : (egxBoard == "SME تميّز" or egxBoard == "SME نايل" ? 10.0 : 20.0)
+    bool nearLimit = blockLimit and dPrev > 0 and (dayPct >= math.min(9.0, haltPct - 1.0) or dayPct >= luldPct - 0.25)
+    float score = 0.0
+    score += bullStack ? 20.0 : 0.0
+    score += above200 ? 15.0 : -5.0
+    score += htfBull ? 15.0 : -10.0
+    score += macdBull ? 10.0 : 0.0
+    score += accumulating ? 15.0 : distributing ? -10.0 : 0.0
+    score += rvol >= 1.0 ? 10.0 : 0.0
+    score += rsi > 40 and rsi < 70 ? 10.0 : 0.0
+    score += accScore >= 55 ? 5.0 : 0.0
+    score += distRisk >= 55 ? -8.0 : 0.0
+    score := math.max(0.0, math.min(100.0, score))
+    int setupHits = 0
+    setupHits += bullStack ? 1 : 0
+    setupHits += htfBull ? 1 : 0
+    setupHits += macdBull ? 1 : 0
+    setupHits += accumulating ? 1 : 0
+    float benchRocL = request.security(bench, "D", ta.roc(close, 20), barmerge.gaps_off, barmerge.lookahead_off)
+    bool rsLeader = roc20 - benchRocL > 0
+    setupHits += rsLeader ? 1 : 0
+    setupHits += structDir == 1 ? 1 : 0
+    setupHits += inZone ? 1 : 0
+    setupHits += rr >= minRR ? 1 : 0
+    setupHits += rvol >= 1.0 ? 1 : 0
+    setupHits += breakRetest or breakConfirmed ? 1 : 0
+    setupHits += accScore >= 50 ? 1 : 0
+    float rank = math.max(0.0, math.min(100.0, score * 0.55 + setupHits / 11.0 * 30.0 + (rsLeader ? 8.0 : 0.0) + (rvol >= 1.2 ? 7.0 : 0.0)))
+    float opportunity = math.max(0.0, math.min(100.0, score * 0.45 + setupHits / 11.0 * 100.0 * 0.35 + math.min(100.0, rr / 3.0 * 100.0) * 0.20))
+    bool chaseOk = not blockChase or not chase
+    bool buyRaw = sigOk and liqOk and not supportBreak and setupHits >= effMinSetup and rr >= minRR and (nearSupport or breakRetest or breakConfirmed) and score >= 55 and chaseOk and not nearLimit and distRisk < 65
+    bool passRaw = buyRaw and rank >= effMinRank and opportunity >= 58.0
+    bool proRaw = passRaw and opportunity >= effMinOppScr and setupHits >= 7 and accScore >= 50 and distRisk < 50
+    int cycle12 = distRisk >= 55 ? 9 : supportBreak ? 11 : accScore >= 55 and (inZone or retestSupport) ? 4 : structDir == 1 ? 6 : 3
+    int action = supportBreak or nearLimit ? 0 : proRaw or buyRaw ? 3 : passRaw or (setupHits >= 7 and opportunity >= 58) ? 2 : 1
+    [opportunity, rank, score, buyRaw ? 1.0 : 0.0, passRaw ? 1.0 : 0.0, proRaw ? 1.0 : 0.0, setupHits, rvol, roc20, accScore, distRisk, rr, dayPct, action, cycle12, chase ? 1.0 : 0.0, nearLimit ? 1.0 : 0.0]
+
+float benchRoc = chartIs30 ? ta.roc(close, 20) : request.security(bench, "D", ta.roc(close, 20), barmerge.gaps_off, barmerge.lookahead_off)
+
+f_fetch(string s) =>
+    request.security(s, "D", f_opp(), barmerge.gaps_off, barmerge.lookahead_off)
+
+var float[] oppC = array.new_float(MAX, na)
+var float[] rkC = array.new_float(MAX, na)
+var float[] techC = array.new_float(MAX, na)
+var float[] buyC = array.new_float(MAX, 0.0)
+var float[] passC = array.new_float(MAX, 0.0)
+var int[] stC = array.new_int(MAX, 0)
+var int[] actC = array.new_int(MAX, 0)
+var float[] rvC = array.new_float(MAX, na)
+var float[] rsC = array.new_float(MAX, na)
+var float[] accC = array.new_float(MAX, na)
+var float[] dayC = array.new_float(MAX, na)
+var float[] rrC = array.new_float(MAX, na)
+var float[] distC = array.new_float(MAX, na)
+var bool[] okC = array.new_bool(MAX, false)
+var bool[] proC = array.new_bool(MAX, false)
+var bool[] spikeC = array.new_bool(MAX, false)
+var bool[] hotProC = array.new_bool(MAX, false)
+var int[] ageC = array.new_int(MAX, 999)
+var int[] updBarC = array.new_int(MAX, 0)
+
+var int lastUni = 0
+if barstate.isfirst or lastUni != TOTAL
+    lastUni := TOTAL
+    for ci = 0 to MAX - 1
+        array.set(okC, ci, false)
+        array.set(oppC, ci, na)
+
+if resetDaily and ta.change(time("D")) != 0
+    for ci = 0 to MAX - 1
+        array.set(okC, ci, false)
+        array.set(oppC, ci, na)
+
+f_gi(string sym) =>
+    int found = -1
+    for g = 0 to TOTAL - 1
+        if f_sym(g) == sym
+            found := g
+    found
+
+f_cache(int gi, float opp, float rank, float tech, float buR, float paR, float prR, float st, float rv, float roc20, float ac, float ds, float rrv, float dp, int act, float ch, float lim) =>
+    if gi >= 0 and gi < TOTAL
+        float rs = roc20 - benchRoc
+        bool sundayBlock = skipSundayBuy and dayofweek == dayofweek.sunday
+        bool mktBlock = not regimeOk or mktHalt100 or sundayBlock
+        bool buyOk = buR > 0 and not mktBlock
+        bool passOk = paR > 0 and not mktBlock
+        bool proOk = prR > 0 and not mktBlock
+        int actAdj = mktBlock ? 0 : heavySell ? math.min(act, 1) : act
+        bool hotP = proOk and rv >= 1.2 and rs > 0
+        array.set(oppC, gi, opp)
+        array.set(rkC, gi, rank)
+        array.set(techC, gi, tech)
+        array.set(buyC, gi, buyOk ? 1.0 : 0.0)
+        array.set(passC, gi, passOk ? 1.0 : 0.0)
+        array.set(stC, gi, int(st))
+        array.set(actC, gi, actAdj)
+        array.set(rvC, gi, rv)
+        array.set(rsC, gi, rs)
+        array.set(accC, gi, ac)
+        array.set(dayC, gi, dp)
+        array.set(rrC, gi, rrv)
+        array.set(distC, gi, ds)
+        array.set(proC, gi, proOk)
+        array.set(spikeC, gi, rv >= 2.0)
+        array.set(hotProC, gi, hotP)
+        array.set(okC, gi, true)
+        array.set(updBarC, gi, bar_index)
+        array.set(ageC, gi, 0)
+
+bool cacheTick = not confirmClose or barstate.isconfirmed
+
+int batch = (int(bar_index % BATCHES) + batchOffset) % BATCHES
+int bStart = batch * ROT
+
+if cacheTick
+    for p = 0 to PIN_SLOTS - 1
+        string ps = p < pinUse ? f_pin(p) : bench
+        [opp, rank, tech, buR, paR, prR, st, rv, roc20, ac, ds, rrv, dp, act, cyc, ch, lim] = f_fetch(ps)
+        if p < pinUse
+            f_cache(f_gi(f_pin(p)), opp, rank, tech, buR, paR, prR, st, rv, roc20, ac, ds, rrv, dp, act, ch, lim)
+    for slot = 0 to ROT - 1
+        int gi = bStart + slot
+        string sym = gi < TOTAL ? f_sym(gi) : bench
+        [opp, rank, tech, buR, paR, prR, st, rv, roc20, ac, ds, rrv, dp, act, cyc, ch, lim] = f_fetch(sym)
+        if gi < TOTAL
+            f_cache(gi, opp, rank, tech, buR, paR, prR, st, rv, roc20, ac, ds, rrv, dp, act, ch, lim)
+
+for ai = 0 to TOTAL - 1
+    if array.get(okC, ai)
+        int ub = array.get(updBarC, ai)
+        array.set(ageC, ai, bar_index - ub)
+
+f_sortVal(int ix) =>
+    sortMode == "Rank" ? array.get(rkC, ix) : sortMode == "RS20" ? array.get(rsC, ix) : sortMode == "RVOL" ? array.get(rvC, ix) : sortMode == "R/R" ? array.get(rrC, ix) : array.get(oppC, ix)
+
+int[] ord = array.new_int(TOTAL, 0)
+for k = 0 to TOTAL - 1
+    array.set(ord, k, k)
+for i = 0 to TOTAL - 2
+    for j = 0 to TOTAL - 2 - i
+        int ia = array.get(ord, j)
+        int ib = array.get(ord, j + 1)
+        float oa = array.get(okC, ia) ? f_sortVal(ia) : -1e10
+        float ob = array.get(okC, ib) ? f_sortVal(ib) : -1e10
+        if oa < ob
+            array.set(ord, j, ib)
+            array.set(ord, j + 1, ia)
+
+int[] vis = array.new_int()
+for k = 0 to TOTAL - 1
+    int ix = array.get(ord, k)
+    if not array.get(okC, ix)
+        continue
+    float op = array.get(oppC, ix)
+    bool bu = array.get(buyC, ix) > 0
+    if hideWeak and op < effMinOppShow
+        continue
+    if onlyBuy and not bu
+        continue
+    if onlyPro and not array.get(proC, ix)
+        continue
+    if onlyPass and array.get(passC, ix) <= 0
+        continue
+    if onlyHotPro and not array.get(hotProC, ix)
+        continue
+    if effRRFlt and array.get(rrC, ix) < minRR
+        continue
+    if effDistFlt and array.get(distC, ix) >= 55
+        continue
+    if effRvolFlt and array.get(rvC, ix) < minRVOL
+        continue
+    if not f_secOk(f_sym(ix))
+        continue
+    array.push(vis, ix)
+
+int nVis = array.size(vis)
+int rows = math.min(showTop, nVis)
+int leader = nVis > 0 ? array.get(vis, 0) : 0
+float leaderOpp = nVis > 0 ? array.get(oppC, leader) : 0.0
+bool leaderBuy = nVis > 0 and array.get(buyC, leader) > 0
+string leaderSym = nVis > 0 ? f_sym(leader) : "—"
+
+int buyCnt = 0
+int hotCnt = 0
+int proCnt = 0
+int passCnt = 0
+int spikeCnt = 0
+int liveCnt = 0
+int staleCnt = 0
+for i = 0 to TOTAL - 1
+    if array.get(okC, i)
+        liveCnt += 1
+        buyCnt += array.get(buyC, i) > 0 ? 1 : 0
+        hotCnt += array.get(oppC, i) >= effMinOppShow ? 1 : 0
+        proCnt += array.get(proC, i) ? 1 : 0
+        passCnt += array.get(passC, i) > 0 ? 1 : 0
+        spikeCnt += array.get(spikeC, i) ? 1 : 0
+        staleCnt += array.get(ageC, i) > staleMaxAge ? 1 : 0
+int stalePct = liveCnt > 0 ? int(math.min(100, staleCnt * 100 / liveCnt)) : 0
+
+int hotProCnt = 0
+int staleCnt = 0
+int staleTh = staleAgeWarn > 0 ? staleAgeWarn : BATCHES
+for i = 0 to TOTAL - 1
+    if array.get(okC, i) and array.get(hotProC, i)
+        hotProCnt += 1
+    if array.get(okC, i) and array.get(ageC, i) > staleTh
+        staleCnt += 1
+
+float sumOppLive = 0.0
+float sumOppSq = 0.0
+for i = 0 to TOTAL - 1
+    if array.get(okC, i)
+        float oL = array.get(oppC, i)
+        sumOppLive += oL
+        sumOppSq += oL * oL
+float meanOppLive = liveCnt > 0 ? sumOppLive / liveCnt : 0.0
+float varOppLive = liveCnt > 1 ? sumOppSq / liveCnt - meanOppLive * meanOppLive : 0.0
+float oppDispersion = math.sqrt(math.max(0.0, varOppLive))
+int breadthPct = liveCnt > 0 ? int(buyCnt * 100 / liveCnt) : 0
+int heatPct = liveCnt > 0 ? int(hotCnt * 100 / liveCnt) : 0
+
+int readyPct = TOTAL > 0 ? int(math.min(100, liveCnt * 100 / TOTAL)) : 0
+int minReady = int(TOTAL * minReadyAlert / 100.0)
+bool readyAlert = readyPct >= minReadyAlert
+int barsToFull = readyPct >= 100 ? 0 : math.max(0, BATCHES - 1 - batch)
+int[] buyOrd = array.new_int()
+for i = 0 to TOTAL - 1
+    if not array.get(okC, i)
+        continue
+    bool buI = array.get(buyC, i) > 0
+    if sortBuyOnly and not buI
+        continue
+    if not sortBuyOnly and array.get(oppC, i) < minOppShow
+        continue
+    array.push(buyOrd, i)
+for i = 0 to array.size(buyOrd) - 2
+    for j = 0 to array.size(buyOrd) - 2 - i
+        int ia = array.get(buyOrd, j)
+        int ib = array.get(buyOrd, j + 1)
+        if array.get(oppC, ia) < array.get(oppC, ib)
+            array.set(buyOrd, j, ib)
+            array.set(buyOrd, j + 1, ia)
+int buyRows = math.min(showBuy, array.size(buyOrd))
+
+int[] proOrd = array.new_int()
+for i = 0 to TOTAL - 1
+    if array.get(okC, i) and array.get(proC, i)
+        array.push(proOrd, i)
+for i = 0 to array.size(proOrd) - 2
+    for j = 0 to array.size(proOrd) - 2 - i
+        int ia = array.get(proOrd, j)
+        int ib = array.get(proOrd, j + 1)
+        if array.get(oppC, ia) < array.get(oppC, ib)
+            array.set(proOrd, j, ib)
+            array.set(proOrd, j + 1, ia)
+int proRows = math.min(showProTbl, array.size(proOrd))
+
+int[] rsOrd = array.new_int()
+for i = 0 to TOTAL - 1
+    if array.get(okC, i) and array.get(rsC, i) > 0
+        array.push(rsOrd, i)
+for i = 0 to array.size(rsOrd) - 2
+    for j = 0 to array.size(rsOrd) - 2 - i
+        int ia = array.get(rsOrd, j)
+        int ib = array.get(rsOrd, j + 1)
+        if array.get(rsC, ia) < array.get(rsC, ib)
+            array.set(rsOrd, j, ib)
+            array.set(rsOrd, j + 1, ia)
+int rsRows = math.min(showRS, array.size(rsOrd))
+
+float top2Opp = nVis > 1 ? array.get(oppC, array.get(vis, 1)) : na
+float top3Opp = nVis > 2 ? array.get(oppC, array.get(vis, 2)) : na
+float top4Opp = nVis > 3 ? array.get(oppC, array.get(vis, 3)) : na
+float top5Opp = nVis > 4 ? array.get(oppC, array.get(vis, 4)) : na
+float top6Opp = nVis > 5 ? array.get(oppC, array.get(vis, 5)) : na
+float top7Opp = nVis > 6 ? array.get(oppC, array.get(vis, 6)) : na
+float top8Opp = nVis > 7 ? array.get(oppC, array.get(vis, 7)) : na
+float top9Opp = nVis > 8 ? array.get(oppC, array.get(vis, 8)) : na
+float top10Opp = nVis > 9 ? array.get(oppC, array.get(vis, 9)) : na
+float leaderRR = nVis > 0 ? array.get(rrC, leader) : na
+float leaderRS = nVis > 0 ? array.get(rsC, leader) : na
+
+var string lastLead = ""
+var string leadH1 = ""
+var string leadH2 = ""
+var string leadH3 = ""
+var float lastLeadOpp = na
+bool leadOppOk = minLeadOppDelta <= 0 or leaderOpp >= nz(lastLeadOpp, leaderOpp) + minLeadOppDelta
+bool leadChg = alertLeadChg and barstate.isconfirmed and leaderSym != lastLead and str.length(lastLead) > 0 and readyAlert and leadOppOk
+if barstate.isconfirmed and leaderSym != lastLead
+    leadH3 := leadH2
+    leadH2 := leadH1
+    leadH1 := lastLead
+    lastLead := leaderSym
+    lastLeadOpp := leaderOpp
+
+string top10Line = ""
+int topAdded = 0
+int secB = 0
+int secR = 0
+int secT = 0
+int secI = 0
+int secF = 0
+int secS = 0
+if showTop10Copy and nVis > 0
+    for ti = 0 to nVis - 1
+        if topAdded >= 10
+            break
+        int tix = array.get(vis, ti)
+        string ts = f_sym(tix)
+        string tag = f_secTag(ts)
+        if top10Diversify
+            int scN = tag == "بنك" ? secB : tag == "عقار" ? secR : tag == "اتصالات" ? secT : tag == "صناع" or tag == "حديد" or tag == "أسمدة" ? secI : tag == "تكنول" or tag == "استثمار" ? secS : secF
+            if scN >= maxPerSector
+                continue
+            if tag == "بنك"
+                secB += 1
+            else if tag == "عقار"
+                secR += 1
+            else if tag == "اتصالات"
+                secT += 1
+            else if tag == "صناع" or tag == "حديد" or tag == "أسمدة"
+                secI += 1
+            else if tag == "تكنول" or tag == "استثمار"
+                secS += 1
+            else
+                secF += 1
+        top10Line += topAdded == 0 ? ts : ", " + ts
+        topAdded += 1
+bool leaderHotPro = nVis > 0 and array.get(hotProC, leader)
+bool leaderSpikePro = nVis > 0 and leaderHotPro and array.get(spikeC, leader)
+bool leaderComposite = leaderBuy and leaderRS > 0 and leaderRR >= minRR and readyAlert
+
+var table tb = table.new(position.top_right, 13, 94, bgcolor=color.new(#0d1117, 4), border_width=1)
+var table tbB = table.new(position.bottom_right, 4, 42, bgcolor=color.new(#0d1117, 8), border_width=1)
+var table tbP = table.new(position.bottom_left, 4, 22, bgcolor=color.new(#0d1117, 8), border_width=1)
+var table tbRS = table.new(position.top_left, 5, 22, bgcolor=color.new(#0d1117, 8), border_width=1)
+if barstate.islast
+    int footExtra = showTop10Copy and str.length(top10Line) > 0 ? 1 : 0
+    int lastR = math.max(rows + 4 + footExtra, 5)
+    table.clear(tb, 0, 0, 12, lastR)
+    color hdr = color.new(#0d3b2e, 8)
+    table.cell(tb, 0, 0, "#", bgcolor=hdr, text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 1, 0, showSector ? "رمز·ق" : "رمز", bgcolor=hdr, text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 2, 0, "فرصة", bgcolor=hdr, text_color=color.white, text_size=size.tiny)
+    table.cell(tb, 3, 0, "Rank", bgcolor=hdr, text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 4, 0, "إعداد", bgcolor=hdr, text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 5, 0, "R/R", bgcolor=hdr, text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 6, 0, "RVOL", bgcolor=hdr, text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 7, 0, "RS20", bgcolor=hdr, text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 8, 0, "يوم%", bgcolor=hdr, text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 9, 0, "Dist", bgcolor=hdr, text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 10, 0, "Age", bgcolor=hdr, text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 11, 0, "تجم", bgcolor=hdr, text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 12, 0, "Act", bgcolor=hdr, text_color=color.gray, text_size=size.tiny)
+    if rows == 0
+        table.cell(tb, 1, 1, readyPct < 50 ? "جاري المسح " + str.tostring(readyPct) + "%" : "لا مرشح — خفّف الفلاتر", text_color=color.orange, text_size=size.small)
+        table.cell(tb, 2, 1, preset, text_color=color.gray, text_size=size.tiny)
+    if rows > 0
+        for row = 0 to rows - 1
+            int ix = array.get(vis, row)
+            float op = array.get(oppC, ix)
+            bool bu = array.get(buyC, ix) > 0
+            float dp = array.get(dayC, ix)
+            color oc = op >= 68 ? color.lime : op >= minOppShow ? color.yellow : color.gray
+            table.cell(tb, 0, row + 1, str.tostring(row + 1), text_size=size.tiny, text_color=row == 0 ? color.lime : color.gray)
+            string symLbl = f_sym(ix)
+            if showSector
+                symLbl := str.replace(symLbl, "EGX:", "") + "·" + f_secTag(f_sym(ix))
+            int ageR = array.get(ageC, ix)
+            bool isStale = ageR > staleTh
+            color rowBg = highlightStale and isStale ? color.new(color.orange, 88) : na
+            table.cell(tb, 1, row + 1, symLbl, text_size=size.tiny, text_color=row == 0 ? color.white : color.silver, bgcolor=rowBg)
+            table.cell(tb, 2, row + 1, str.tostring(op, "#"), text_size=size.tiny, text_color=oc)
+            table.cell(tb, 3, row + 1, str.tostring(array.get(rkC, ix), "#"), text_size=size.tiny, text_color=array.get(rkC, ix) >= effMinRank ? color.lime : color.white)
+            table.cell(tb, 4, row + 1, str.tostring(array.get(stC, ix)) + "/11", text_size=size.tiny)
+            table.cell(tb, 5, row + 1, str.tostring(array.get(rrC, ix), "#.#"), text_size=size.tiny)
+            table.cell(tb, 6, row + 1, str.tostring(array.get(rvC, ix), "#.##"), text_size=size.tiny)
+            table.cell(tb, 7, row + 1, str.tostring(array.get(rsC, ix), "#.#") + "%", text_size=size.tiny, text_color=array.get(rsC, ix) > 0 ? color.lime : color.orange)
+            table.cell(tb, 8, row + 1, str.tostring(dp, "#.#") + "%", text_size=size.tiny, text_color=dp >= 9 ? color.orange : dp > 0 ? color.lime : color.gray)
+            table.cell(tb, 9, row + 1, str.tostring(array.get(distC, ix), "#"), text_size=size.tiny, text_color=array.get(distC, ix) >= 55 ? color.orange : color.gray)
+            string ageTxt = isStale ? "!" + str.tostring(ageR) : str.tostring(ageR)
+            table.cell(tb, 10, row + 1, ageTxt, text_size=size.tiny, text_color=isStale ? color.orange : color.gray, bgcolor=rowBg)
+            table.cell(tb, 11, row + 1, str.tostring(array.get(accC, ix), "#"), text_size=size.tiny, text_color=array.get(accC, ix) >= 50 ? color.lime : color.gray)
+            int ax = array.get(actC, ix)
+            string stTxt = array.get(proC, ix) ? "Pro" : bu ? "Buy" : array.get(passC, ix) > 0 ? "Pass" : op >= minOppShow ? "Hot" : "—"
+            color stCol = array.get(proC, ix) ? color.aqua : bu ? color.lime : color.gray
+            table.cell(tb, 12, row + 1, str.tostring(ax) + " " + stTxt, text_size=size.tiny, text_color=stCol)
+    table.cell(tb, 0, rows + 1, "★", text_color=color.lime, text_size=size.small)
+    table.cell(tb, 1, rows + 1, leaderSym, text_color=color.white, text_size=size.small)
+    table.cell(tb, 2, rows + 1, str.tostring(leaderOpp, "#"), text_color=color.lime, text_size=size.small)
+    table.cell(tb, 3, rows + 1, "دفعة " + str.tostring(batch + 1) + "/" + str.tostring(BATCHES), text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 4, rows + 1, "شراء " + str.tostring(buyCnt), text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 5, rows + 1, "Buy " + str.tostring(buyCnt) + " Pass " + str.tostring(passCnt) + " Pro " + str.tostring(proCnt), text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 6, rows + 1, str.tostring(liveCnt) + "/" + str.tostring(TOTAL) + " · " + str.tostring(pinUse) + "★+" + str.tostring(ROT), text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 7, rows + 1, barsToFull > 0 ? "~" + str.tostring(barsToFull) + " شمعة" : "مسح ✓", text_color=barsToFull > 0 ? color.orange : color.lime, text_size=size.tiny)
+    table.cell(tb, 8, rows + 1, "R/R≥1.5", text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 0, rows + 2, "فرص " + str.tostring(TOTAL), text_color=color.aqua, text_size=size.tiny)
+    table.cell(tb, 1, rows + 2, "مسح · " + str.tostring(readyPct) + "%", text_color=color.yellow, text_size=size.tiny)
+    table.cell(tb, 2, rows + 2, sortMode + " · شارت " + tfHint + " · منطق D", text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 3, rows + 2, (heavySell ? "ضغط EGX30 · " : "") + "Spike " + str.tostring(spikeCnt) + " · HotPro " + str.tostring(hotProCnt), text_color=heavySell ? color.orange : color.gray, text_size=size.tiny)
+    table.cell(tb, 0, rows + 3, "★ سابق", text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 1, rows + 3, str.length(leadH1) > 0 ? leadH1 + " ← " + leadH2 : "—", text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 2, rows + 3, profile, text_color=color.aqua, text_size=size.tiny)
+    table.cell(tb, 3, rows + 3, "Breadth " + str.tostring(breadthPct) + "% · Heat " + str.tostring(heatPct) + "% · σ " + str.tostring(oppDispersion, "#.#"), text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 4, rows + 3, sectorFlt, text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 5, rows + 3, "Desk: OppMeta+Mega", text_color=color.aqua, text_size=size.tiny)
+    table.cell(tb, 6, rows + 3, "Scr Pro·RS·Limit", text_color=color.gray, text_size=size.tiny)
+    if showTop10Copy and str.length(top10Line) > 0
+        table.cell(tb, 0, rows + 4, "Top10", text_color=color.yellow, text_size=size.tiny)
+        table.cell(tb, 1, rows + 4, top10Line, text_color=color.white, text_size=size.tiny)
+    if showRS > 0 and not compactUI
+        table.clear(tbRS, 0, 0, 4, math.max(rsRows + 1, 2))
+        table.cell(tbRS, 0, 0, "RS20", bgcolor=hdr, text_color=color.lime, text_size=size.tiny)
+        table.cell(tbRS, 1, 0, "رمز", bgcolor=hdr, text_color=color.gray, text_size=size.tiny)
+        table.cell(tbRS, 2, 0, "فارق%", bgcolor=hdr, text_color=color.white, text_size=size.tiny)
+        table.cell(tbRS, 3, 0, "فرصة", bgcolor=hdr, text_color=color.gray, text_size=size.tiny)
+        table.cell(tbRS, 4, 0, "RVOL", bgcolor=hdr, text_color=color.gray, text_size=size.tiny)
+        if rsRows > 0
+            for row = 0 to rsRows - 1
+                int ix = array.get(rsOrd, row)
+                table.cell(tbRS, 0, row + 1, str.tostring(row + 1), text_size=size.tiny, text_color=color.lime)
+                table.cell(tbRS, 1, row + 1, f_sym(ix), text_size=size.tiny, text_color=color.white)
+                table.cell(tbRS, 2, row + 1, str.tostring(array.get(rsC, ix), "#.#") + "%", text_size=size.tiny, text_color=color.lime)
+                table.cell(tbRS, 3, row + 1, str.tostring(array.get(oppC, ix), "#"), text_size=size.tiny)
+                table.cell(tbRS, 4, row + 1, str.tostring(array.get(rvC, ix), "#.##"), text_size=size.tiny, text_color=array.get(spikeC, ix) ? color.yellow : color.gray)
+        else
+            table.cell(tbRS, 1, 1, "—", text_color=color.gray, text_size=size.tiny)
+    if showProTbl > 0
+        int pinRows = showPinInPro ? pinUse : 0
+        int pLast = pinRows + proRows + 1
+        table.clear(tbP, 0, 0, 3, math.max(pLast, 2))
+        table.cell(tbP, 0, 0, showPinInPro ? "★/Pro" : "Pro", bgcolor=hdr, text_color=color.aqua, text_size=size.tiny)
+        table.cell(tbP, 1, 0, "رمز", bgcolor=hdr, text_color=color.gray, text_size=size.tiny)
+        table.cell(tbP, 2, 0, "فرصة", bgcolor=hdr, text_color=color.white, text_size=size.tiny)
+        table.cell(tbP, 3, 0, "R/R", bgcolor=hdr, text_color=color.gray, text_size=size.tiny)
+        int tRow = 1
+        if pinRows > 0
+            for p = 0 to pinRows - 1
+                int pg = f_gi(f_pin(p))
+                string pSym = f_pin(p)
+                table.cell(tbP, 0, tRow, "★", text_size=size.tiny, text_color=color.yellow)
+                table.cell(tbP, 1, tRow, pSym, text_size=size.tiny, text_color=color.white)
+                if pg >= 0 and array.get(okC, pg)
+                    table.cell(tbP, 2, tRow, str.tostring(array.get(oppC, pg), "#"), text_size=size.tiny, text_color=color.lime)
+                    table.cell(tbP, 3, tRow, str.tostring(array.get(rrC, pg), "#.#"), text_size=size.tiny)
+                else
+                    table.cell(tbP, 2, tRow, "…", text_size=size.tiny, text_color=color.gray)
+                    table.cell(tbP, 3, tRow, "—", text_size=size.tiny)
+                tRow += 1
+        if proRows > 0
+            for row = 0 to proRows - 1
+                int ix = array.get(proOrd, row)
+                table.cell(tbP, 0, tRow, str.tostring(row + 1), text_size=size.tiny, text_color=color.aqua)
+                table.cell(tbP, 1, tRow, f_sym(ix), text_size=size.tiny, text_color=color.white)
+                table.cell(tbP, 2, tRow, str.tostring(array.get(oppC, ix), "#"), text_size=size.tiny, text_color=color.lime)
+                table.cell(tbP, 3, tRow, str.tostring(array.get(rrC, ix), "#.#"), text_size=size.tiny)
+                tRow += 1
+        if pinRows == 0 and proRows == 0
+            table.cell(tbP, 1, 1, "—", text_color=color.gray, text_size=size.tiny)
+    if showBuy > 0 and not compactUI
+        table.clear(tbB, 0, 0, 3, math.max(buyRows + 1, 2))
+        table.cell(tbB, 0, 0, sortBuyOnly ? "شراء" : "حار", bgcolor=hdr, text_color=color.lime, text_size=size.tiny)
+        table.cell(tbB, 1, 0, "رمز", bgcolor=hdr, text_color=color.gray, text_size=size.tiny)
+        table.cell(tbB, 2, 0, "فرصة", bgcolor=hdr, text_color=color.white, text_size=size.tiny)
+        table.cell(tbB, 3, 0, "R/R·RVOL", bgcolor=hdr, text_color=color.gray, text_size=size.tiny)
+        if buyRows > 0
+            for row = 0 to buyRows - 1
+                int ix = array.get(buyOrd, row)
+                table.cell(tbB, 0, row + 1, str.tostring(row + 1), text_size=size.tiny, text_color=color.lime)
+                table.cell(tbB, 1, row + 1, f_sym(ix), text_size=size.tiny, text_color=color.white)
+                table.cell(tbB, 2, row + 1, str.tostring(array.get(oppC, ix), "#"), text_size=size.tiny, text_color=color.lime)
+                table.cell(tbB, 3, row + 1, str.tostring(array.get(rrC, ix), "#.#") + "·" + str.tostring(array.get(rvC, ix), "#.##"), text_size=size.tiny)
+        else
+            table.cell(tbB, 1, 1, "—", text_color=color.gray, text_size=size.tiny)
+
+plot(nVis > 0 ? leader + 1 : 0, "EGXOppB200_LeaderIdx", display=display.data_window)
+plot(leaderOpp, "EGXOppB200_LeaderScore", display=display.data_window)
+plot(top2Opp, "EGXOppB200_Top2Score", display=display.data_window)
+plot(top3Opp, "EGXOppB200_Top3Score", display=display.data_window)
+plot(top4Opp, "EGXOppB200_Top4Score", display=display.data_window)
+plot(top5Opp, "EGXOppB200_Top5Score", display=display.data_window)
+plot(top6Opp, "EGXOppB200_Top6Score", display=display.data_window)
+plot(top7Opp, "EGXOppB200_Top7Score", display=display.data_window)
+plot(top8Opp, "EGXOppB200_Top8Score", display=display.data_window)
+plot(top9Opp, "EGXOppB200_Top9Score", display=display.data_window)
+plot(top10Opp, "EGXOppB200_Top10Score", display=display.data_window)
+plot(leaderRR, "EGXOppB200_LeaderRR", display=display.data_window)
+plot(leaderRS, "EGXOppB200_LeaderRS", display=display.data_window)
+plot(leadChg ? 1 : 0, "EGXOppB200_LeadChg", display=display.data_window)
+plot(leaderBuy ? 1 : 0, "EGXOppB200_LeaderBuy", display=display.data_window)
+plot(buyCnt, "EGXOppB200_BuyCount", display=display.data_window)
+plot(liveCnt, "EGXOppB200_Live", display=display.data_window)
+plot(batch + 1, "EGXOppB200_Batch", display=display.data_window)
+plot(TOTAL, "EGXOppB200_Universe", display=display.data_window)
+plot(proCnt, "EGXOppB200_ProCount", display=display.data_window)
+plot(passCnt, "EGXOppB200_PassCount", display=display.data_window)
+plot(hotCnt, "EGXOppB200_HotCount", display=display.data_window)
+plot(readyPct, "EGXOppB200_ReadyPct", display=display.data_window)
+plot(heavySell ? 1 : 0, "EGXOppB200_MktBear", display=display.data_window)
+plot(regimeOk ? 1 : 0, "EGXOppB200_RegimeOk", display=display.data_window)
+plot(regimeOk ? 1 : 0, "EGX_RegimeOk", display=display.all)
+plot(mktHalt100 ? 1 : 0, "EGXOppB200_MktHalt100", display=display.data_window)
+plot(spikeCnt, "EGXOppB200_SpikeCount", display=display.data_window)
+plot(breadthPct, "EGXOppB200_Breadth", display=display.data_window)
+plot(heatPct, "EGXOppB200_Heat", display=display.data_window)
+plot(oppDispersion, "EGXOppB200_Dispersion", display=display.data_window)
+plot(nVis, "EGXOppB200_VisCount", display=display.data_window)
+plot(nVis > 0 and array.get(passC, leader) > 0 ? 1 : 0, "EGXOppB200_Pass", display=display.data_window)
+plot(nVis > 0 ? array.get(actC, leader) : 0, "EGXOppB200_LeaderAction", display=display.data_window)
+plot(nVis > 0 ? array.get(distC, leader) : na, "EGXOppB200_LeaderDist", display=display.data_window)
+plot(nVis > 0 ? array.get(rkC, leader) : na, "EGXOppB200_LeaderRank", display=display.data_window)
+plot(hotProCnt, "EGXOppB200_HotProCount", display=display.data_window)
+plot(staleCnt, "EGXOppB200_StaleCount", display=display.data_window)
+plot(staleTh, "EGXOppB200_StaleAgeTh", display=display.data_window)
+plot(leaderComposite ? 1 : 0, "EGXOppB200_LeaderComposite", display=display.data_window)
+plot(leaderHotPro ? 1 : 0, "EGXOppB200_LeaderHotPro", display=display.data_window)
+plot(leaderSpikePro ? 1 : 0, "EGXOppB200_LeaderSpikePro", display=display.data_window)
+plot(minReadyAlert, "EGXOppB200_MinReadyPct", display=display.data_window)
+plot(1, "EGXOppB200", display=display.data_window)
+
+alertcondition(leaderComposite, "فرص — Leader Buy+RS+R/R", "{{ticker}} فرص leader composite")
+alertcondition(leaderHotPro and readyAlert, "فرص — Leader HotPro", "{{ticker}} فرص leader hot pro")
+alertcondition(leaderSpikePro and readyAlert, "فرص — Leader Spike+HotPro", "{{ticker}} فرص leader spike pro")
+alertcondition(leaderBuy and readyAlert, "فرص — شراء الأول (Ready%)", "{{ticker}} فرص leader BUY")
+alertcondition(proCnt >= 1 and readyAlert, "فرص — Pro في الكون", "{{ticker}} فرص Pro hit")
+alertcondition(buyCnt >= 3 and readyAlert, "فرص — 3+ شراء", "{{ticker}} فرص multi-buy")
+alertcondition(readyPct >= 100, "فرص — مسح 100%", "{{ticker}} فرص scan complete")
+alertcondition(leadChg, "فرص — ★ Leader تغيّر", "{{ticker}} فرص new leader")
+alertcondition(spikeCnt >= 5 and readyAlert, "فرص — 5+ Vol Spike", "{{ticker}} فرص vol spike")
+alertcondition(nVis >= 10 and readyAlert, "فرص — 10+ مرشح", "{{ticker}} فرص deep list")
+alertcondition(hotProCnt >= 1 and readyAlert, "فرص — HotPro (Pro+RS+RVOL)", "{{ticker}} فرص HotPro")
+alertcondition(proCnt >= 2 and spikeCnt >= 2 and readyAlert, "فرص — Spike+Pro", "{{ticker}} فرص spike pro")
+alertcondition(leaderBuy and readyAlert and regimeOk, "فرص — Leader Buy + Regime", "{{ticker}} فرص leader regime")
+alertcondition(passCnt >= 5 and readyAlert, "فرص — 5+ Pass", "{{ticker}} فرص pass breadth")
+alertcondition(breadthPct >= 15 and readyAlert and regimeOk, "فرص — Breadth 15%+", "{{ticker}} فرص buy breadth")
+alertcondition(staleCnt >= 20 and readyAlert, "فرص — 20+ stale cache", "{{ticker}} فرص stale scan")

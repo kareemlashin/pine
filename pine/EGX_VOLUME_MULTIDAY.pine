@@ -1,0 +1,37 @@
+//@version=6
+indicator("EGX Volume Multi-day — 3/5/10 sum", shorttitle="EGX VMulti", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// تراكم حجم 3/5/10 أيام vs متوسط · docs/EGX_VOLUME.md
+
+string G = "إعداد"
+int baseMa = input.int(20, "MA يومي", group=G)
+float minRatio = input.float(1.25, "حد Pass (5d/MA)", group=G)
+
+float v3 = ta.sma(volume, 3) * 3.0
+float v5 = ta.sma(volume, 5) * 5.0
+float v10 = ta.sma(volume, 10) * 10.0
+float exp5 = ta.sma(volume, baseMa) * 5.0
+float exp10 = ta.sma(volume, baseMa) * 10.0
+
+float r3 = v3 / math.max(ta.sma(volume, baseMa) * 3.0, 1.0)
+float r5 = v5 / math.max(exp5, 1.0)
+float r10 = v10 / math.max(exp10, 1.0)
+
+bool pass = r5 >= minRatio and ta.sma(volume, baseMa) >= 500
+
+plot(r3, "R3", color=color.teal, linewidth=1)
+plot(r5, "R5", color=color.orange, linewidth=2)
+plot(r10, "R10", color=color.gray, linewidth=1)
+hline(minRatio, "Pass", color=color.lime, linestyle=hline.style_dashed)
+hline(1.0, "1.0", color=color.gray, linestyle=hline.style_dotted)
+
+var table t = table.new(position.top_right, 2, 5, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 4)
+    table.cell(t, 0, 0, "Multi-day", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, pass ? "PASS" : "—", text_color=pass ? color.lime : color.gray, text_size=size.tiny)
+    table.cell(t, 0, 1, "R3/R5/R10", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 1, str.tostring(r3, "#.##") + " / " + str.tostring(r5, "#.##") + " / " + str.tostring(r10, "#.##"), text_size=size.tiny)
+
+plot(pass ? 1 : 0, "EGVMulti_Pass", display=display.all)
+plot(r5, "EGVMulti_R5", display=display.all)

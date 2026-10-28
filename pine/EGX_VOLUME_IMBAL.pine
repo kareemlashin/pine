@@ -1,0 +1,32 @@
+//@version=6
+indicator("EGX Volume Imbalance — bar %", shorttitle="EGX VImb", overlay=true, max_tables_count=2, calc_bars_count=5000)
+
+// عدم توازن شراء/بيع لكل شمعة · docs/EGX_VOLUME.md
+
+string G = "Imbal"
+float minPct = input.float(62.0, "Min buy %", group=G)
+float minRvol = input.float(1.05, "RVOL", group=G)
+bool colorBars = input.bool(true, "Bar colors", group=G)
+
+float rng = math.max(high - low, syminfo.mintick)
+float buyPct = (close - low) / rng * 100.0
+float sellPct = 100.0 - buyPct
+float imb = buyPct - 50.0
+float rvol = volume / math.max(ta.sma(volume, 20), 1.0)
+
+bool bullImb = buyPct >= minPct and rvol >= minRvol
+bool bearImb = sellPct >= minPct and rvol >= minRvol
+
+barcolor(colorBars ? (bullImb ? color.lime : bearImb ? color.red : na) : na)
+plotshape(bullImb, "Buy imb", shape.triangleup, location.belowbar, color=color.lime, size=size.tiny)
+plotshape(bearImb, "Sell imb", shape.triangledown, location.abovebar, color=color.red, size=size.tiny)
+
+var table t = table.new(position.bottom_left, 2, 3, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 2)
+    table.cell(t, 0, 0, "Imbalance", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, str.tostring(buyPct, "#") + "% buy", text_size=size.tiny)
+
+plot(buyPct, "EGVImb_BuyPct", display=display.all)
+plot(bullImb ? 1 : 0, "EGVImb_Bull", display=display.all)
+plot(bearImb ? 1 : 0, "EGVImb_Bear", display=display.all)

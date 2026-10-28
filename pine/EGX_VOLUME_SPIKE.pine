@@ -1,0 +1,36 @@
+//@version=6
+indicator("EGX Volume Spike — flag", shorttitle="EGX VSpk", overlay=true, max_labels_count=60, max_tables_count=2, calc_bars_count=5000)
+
+// علم spike بسيط (RVOL + Z) · docs/EGX_VOLUME.md
+
+string G = "Spike"
+float rvolThr = input.float(2.0, "RVOL", group=G)
+float zThr = input.float(2.5, "Z", group=G)
+bool onlyConfirmed = input.bool(true, "Confirmed bar", group=G)
+
+float vma = ta.sma(volume, 20)
+float rvol = volume / math.max(vma, 1.0)
+float z = (volume - vma) / math.max(ta.stdev(volume, 20), 1.0)
+float rng = math.max(high - low, syminfo.mintick)
+float buyPct = (close - low) / rng * 100.0
+
+bool spike = rvol >= rvolThr or z >= zThr
+bool ok = not onlyConfirmed or barstate.isconfirmed
+bool bullSpike = ok and spike and buyPct >= 52 and close >= open
+bool bearSpike = ok and spike and buyPct <= 48 and close <= open
+
+plotshape(bullSpike, "Spike+", shape.flag, location.belowbar, color=color.lime, size=size.small, text="!")
+plotshape(bearSpike, "Spike-", shape.flag, location.abovebar, color=color.red, size=size.small, text="!")
+
+var table t = table.new(position.bottom_right, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "Spike", bgcolor=color.black, text_color=color.orange, text_size=size.small)
+    table.cell(t, 1, 0, spike ? "R" + str.tostring(rvol, "#.#") : "—", text_size=size.tiny)
+
+plot(spike ? 1 : 0, "EGVSpk_Any", display=display.all)
+plot(bullSpike ? 1 : 0, "EGVSpk_Bull", display=display.all)
+plot(bearSpike ? 1 : 0, "EGVSpk_Bear", display=display.all)
+plot(rvol, "EGVSpk_RVOL", display=display.all)
+
+alertcondition(bullSpike, "Bull spike", "EGX bull volume spike")

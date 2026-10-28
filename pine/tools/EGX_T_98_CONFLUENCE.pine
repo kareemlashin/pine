@@ -1,0 +1,34 @@
+//@version=6
+indicator("EGX Tool 98 كونفلوينس — Clarity 0–5 proxy", shorttitle="EGX T-CONFLUENCE", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة ح بروفايل · #98/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+float e20 = ta.ema(close, 20)
+float e50 = ta.ema(close, 50)
+float rsi = ta.rsi(close, 14)
+[macdL, macdS, macdH] = ta.macd(close, 12, 26, 9)
+float cmf = ta.sma(((close - low) - (high - close)) / math.max(high - low, syminfo.mintick) * volume, 20) / ta.sma(volume, 20)
+float rvol = volume / math.max(ta.sma(volume, 20), 1.0)
+int c = 0
+c += close > e20 and e20 > e50 ? 1 : 0
+c += rsi > 50 ? 1 : 0
+c += macdH > 0 ? 1 : 0
+c += cmf > 0 ? 1 : 0
+c += rvol >= 1.0 and close > open ? 1 : 0
+int vote = c >= 4 ? 1 : c <= 1 ? -1 : 0
+plot(c, "EGXT_CONF", color=c >= 4 ? color.lime : c <= 1 ? color.red : color.gray, style=plot.style_columns)
+hline(3, "3", color=color.gray)
+
+plot(vote, "EGXT_CONFLUENCE_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_CONFLUENCE_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_CONFLUENCE_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "CONFLUENCE", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-CONFLUENCE صاعد", "EGX Tool CONFLUENCE: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-CONFLUENCE هابط", "EGX Tool CONFLUENCE: vote هابط")

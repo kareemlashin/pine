@@ -1,0 +1,187 @@
+//@version=6
+strategy("صياد موجات EGX PRO — اختبار", shorttitle="صياد STRAT", overlay=true, pyramiding=0, calc_bars_count=5000, commission_type=strategy.commission.percent, commission_value=0.125, slippage=2, default_qty_type=strategy.percent_of_equity, default_qty_value=10, initial_capital=100000, currency=currency.EGP)
+
+string G_IN = "الدخول"
+string G_EX = "الخروج"
+string G_BR = "الاختراق"
+string G_EGX = "EGX"
+
+int   i_pivotLen = input.int(5, "محور يسار/يمين", group=G_IN)
+int   i_volAvg   = input.int(20, "متوسط الحجم", group=G_IN)
+string i_egxPreset = input.string("معيار EGX", "إعداد EGX", options=["مخصص", "معيار EGX", "قطع كبير", "انتقائي", "أسهم صغيرة"], group=G_EGX)
+float i_minVol   = input.float(2000.0, "حد حجم (يدوي)", group=G_EGX)
+float i_rankMin  = input.float(62.0, "حد درجة (يدوي)", group=G_IN)
+float i_minRR    = input.float(1.5, "حد عائد/مخاطرة", group=G_IN)
+float effMinVol = i_egxPreset == "قطع كبير" ? 3000.0 : i_egxPreset == "انتقائي" ? 2500.0 : i_egxPreset == "أسهم صغيرة" ? 500.0 : i_egxPreset == "معيار EGX" ? 2000.0 : i_minVol
+float effRank = i_egxPreset == "انتقائي" ? 65.0 : i_egxPreset == "قطع كبير" ? 62.0 : i_egxPreset == "معيار EGX" ? 58.0 : i_egxPreset == "أسهم صغيرة" ? 52.0 : i_rankMin
+float effRR = i_egxPreset == "انتقائي" ? 2.0 : i_egxPreset == "قطع كبير" ? 1.75 : i_minRR
+float i_commPct  = input.float(0.125, "عمولة %", group=G_EGX)
+int   i_baseBars = input.int(15, "حد أدنى قاعدة", group=G_IN)
+int   i_atrLen   = input.int(14, "ATR", group=G_IN)
+float i_adxMin   = input.float(18.0, "ADX أدنى", group=G_IN)
+bool  i_confirm  = input.bool(true, "دخول عند الإغلاق", group=G_IN)
+bool  i_phaseFilter = input.bool(true, "مراحل 3–5 فقط", group=G_IN)
+bool  i_blockHeavyMkt = input.bool(true, "منع الدخول عند ضغط EGX30/70", group=G_EGX)
+bool  i_blockLimit = input.bool(true, "منع شراء قرب halt/LULD", group=G_EGX)
+string i_egxBoard = input.string("نشط (EGX100)", "لوحة", options=["نشط (EGX100)", "EGX30 (بيع مكشوف)", "SME تميّز", "SME نايل", "غير نشط"], group=G_EGX)
+bool  i_mktHalt100 = input.bool(true, "منع إذا EGX100 ≤ −10%", group=G_EGX)
+string i_tfD     = input.timeframe("D", "اتجاه يومي", group=G_IN)
+
+bool  i_partial  = input.bool(true, "خروج جزئي عند الهدف 1", group=G_EX)
+float i_partialPct = input.float(50.0, "نسبة الخروج الجزئي %", minval=10, maxval=90, group=G_EX)
+bool  i_trail    = input.bool(true, "وقف متحرك بعد جزئي", group=G_EX)
+float i_trailAtr = input.float(1.2, "وقف متحرك × ATR", group=G_EX)
+bool  i_useRrNet = input.bool(true, "فلتر R/R بعد العمولة", group=G_IN)
+bool  i_showStTbl = input.bool(true, "جدول حالة (أسفل يمين)", group=G_EGX)
+
+f_trendPack() =>
+    int sc = 0
+    sc += close > ta.ema(close, 20) ? 1 : close < ta.ema(close, 20) ? -1 : 0
+    sc += ta.ema(close, 20) > ta.ema(close, 50) ? 1 : -1
+    sc
+int trD = request.security(syminfo.tickerid, i_tfD, f_trendPack(), barmerge.gaps_off, barmerge.lookahead_off)
+int trW = request.security(syminfo.tickerid, "W", f_trendPack(), barmerge.gaps_off, barmerge.lookahead_off)
+
+f_mktMom() =>
+    close[20] > 0 ? (close / close[20] - 1.0) * 100.0 : 0.0
+f_mktTr() =>
+    int sc = 0
+    float e20 = ta.ema(close, 20)
+    float e50 = ta.ema(close, 50)
+    sc += close > e20 ? 1 : close < e20 ? -1 : 0
+    sc += e20 > e50 ? 1 : e20 < e50 ? -1 : 0
+    sc
+int trMkt30 = request.security("EGX:EGX30", timeframe.period, f_mktTr(), barmerge.gaps_off, barmerge.lookahead_off)
+float momMkt30 = request.security("EGX:EGX30", timeframe.period, f_mktMom(), barmerge.gaps_off, barmerge.lookahead_off)
+float momMkt70 = request.security("EGX:EGX70EWI", timeframe.period, f_mktMom(), barmerge.gaps_off, barmerge.lookahead_off)
+bool heavySellMkt = momMkt30 < -4.0 and momMkt70 < -3.0 and trMkt30 <= -1
+
+float atr = ta.atr(i_atrLen)
+[_, _, adx] = ta.dmi(14, 14)
+bool adxOk = adx >= i_adxMin
+float volAvg = ta.sma(volume, i_volAvg)
+float rvol = volAvg > 0 ? volume / volAvg : na
+float cmf = ta.cmf(20)
+float obvSl = ta.linreg(ta.obv, 10, 0) - ta.linreg(ta.obv, 10, 1)
+
+float pH = ta.pivothigh(high, i_pivotLen, i_pivotLen)
+float pL = ta.pivotlow(low, i_pivotLen, i_pivotLen)
+var float sh = na
+var float sl = na
+var int bias = 0
+if not na(pH)
+    sh := pH
+if not na(pL)
+    sl := pL
+
+bool bosUp = false
+bool barOk = i_confirm ? barstate.isconfirmed : true
+float dPrevClose = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+float dayChgPct = dPrevClose > 0 ? (close - dPrevClose) / dPrevClose * 100.0 : 0.0
+float haltPct = i_egxBoard == "SME تميّز" or i_egxBoard == "SME نايل" or i_egxBoard == "غير نشط" ? 5.0 : 10.0
+float luldPct = i_egxBoard == "غير نشط" ? 5.0 : (i_egxBoard == "SME تميّز" or i_egxBoard == "SME نايل" ? 10.0 : 20.0)
+bool nearLimitUp = i_blockLimit and dPrevClose > 0 and (dayChgPct >= math.min(9.0, haltPct - 1.0) or dayChgPct >= luldPct - 0.25)
+float dayPct100 = i_mktHalt100 ? request.security("EGX:EGX100EWI", "D", close[1] > 0 ? (close - close[1]) / close[1] * 100.0 : 0.0, barmerge.gaps_off, barmerge.lookahead_off) : 0.0
+bool mktHalt100 = i_mktHalt100 and dayPct100 <= -10.0
+bool microOk = not nearLimitUp and not mktHalt100
+if barOk and not na(sh) and close > sh and close[1] <= nz(sh[1], sh)
+    bosUp := true
+    bias := 1
+if barOk and not na(sl) and close < sl and close[1] >= nz(sl[1], sl)
+    bias := -1
+
+float atrMa = ta.sma(atr, 20)
+bool compress = atrMa > 0 and atr / atrMa <= 0.85
+var int baseBars = 0
+if compress and bias <= 0
+    baseBars += 1
+else
+    baseBars := 0
+
+bool breakConf = bosUp and rvol >= 1.25 and adxOk
+bool accum = cmf > 0.05 and obvSl > 0
+int phaseProxy = breakConf ? 5 : baseBars >= i_baseBars and accum ? 3 : baseBars >= i_baseBars ? 2 : bias == 1 and trD > 0 ? 6 : 1
+bool phaseOk = not i_phaseFilter or (phaseProxy >= 3 and phaseProxy <= 5)
+
+float zoneW = atr * 0.35
+float dHi = na(sl) ? na : sl + zoneW
+float dLo = na(sl) ? na : sl - zoneW
+float fib = na(sl) or na(sh) ? na : sh - sl
+float tgt1 = na(fib) ? close + atr * 2 : sh + fib * 0.618
+float tgt2 = na(fib) ? close + atr * 3 : sh + fib * 1.0
+float stopL = na(dLo) ? close - atr * 2 : dLo - atr * 0.5
+float entry = breakConf ? close : na(dHi) ? close : dHi
+float risk = entry - stopL
+float rr = risk > 0 ? (tgt1 - entry) / risk : na
+float comm = i_commPct / 100.0 * 2.0
+float rrNet = risk > 0 ? math.max(0.0, (tgt1 - entry - entry * comm)) / (risk + entry * comm) : na
+
+float early = math.min(100.0, baseBars / float(i_baseBars) * 50.0 + (compress ? 25.0 : 0.0) + (accum ? 12.0 : 0.0))
+float mom = breakConf ? 75.0 : bosUp ? 55.0 : 0.0
+float rank = math.max(early, mom)
+if trW < 0
+    rank -= 12.0
+if trD > 0
+    rank += 10.0
+if not adxOk
+    rank -= 8.0
+rank := math.max(0.0, math.min(100.0, rank))
+
+bool liq = volAvg >= effMinVol
+bool inZone = not na(dLo) and low <= dHi and high >= dLo
+bool rrOk = i_useRrNet and not na(rrNet) ? rrNet >= effRR : not na(rr) and rr >= effRR
+bool regimeOk = not i_blockHeavyMkt or not heavySellMkt
+bool longEntry = barOk and microOk and liq and phaseOk and rank >= effRank and (inZone or breakConf) and trD >= 0 and rrOk and regimeOk and strategy.position_size == 0
+
+bool exitSig = barOk and (not na(sl) and close < sl or bias == -1)
+
+var bool tookT1 = false
+var float trailStop = na
+if strategy.position_size == 0
+    tookT1 := false
+    trailStop := na
+
+if longEntry
+    strategy.entry("L", strategy.long, comment="شراء")
+    tookT1 := false
+    trailStop := stopL
+
+if barOk and strategy.position_size > 0 and i_partial and not tookT1 and high >= tgt1
+    strategy.close("L", qty_percent=i_partialPct, comment="هدف1")
+    tookT1 := true
+    trailStop := entry
+
+if strategy.position_size > 0 and i_trail and tookT1
+    trailStop := math.max(nz(trailStop, stopL), close - atr * i_trailAtr)
+
+float exitStop = tookT1 and i_trail ? nz(trailStop, stopL) : stopL
+float exitLim = tookT1 ? tgt2 : tgt1
+if strategy.position_size > 0
+    strategy.exit("LX", "L", stop=exitStop, limit=exitLim)
+
+if exitSig and strategy.position_size > 0
+    strategy.close("L", comment="خروج")
+
+strategy.risk.max_drawdown(50, strategy.percent_of_equity)
+
+plot(stopL, "وقف", color=color.red, style=plot.style_linebr)
+plot(tgt1, "هدف1", color=color.aqua, style=plot.style_linebr)
+plot(tgt2, "هدف2", color=color.new(color.aqua, 50), style=plot.style_linebr)
+
+var table whSt = table.new(position.bottom_right, 2, 5, border_width=1)
+if i_showStTbl and barstate.islast
+    table.clear(whSt, 0, 0, 1, 4)
+    table.cell(whSt, 0, 0, "صياد ST", bgcolor=color.new(#1a237e, 20), text_color=color.white, text_size=size.tiny)
+    table.cell(whSt, 1, 0, i_egxPreset, bgcolor=color.new(#1a237e, 20), text_color=color.white, text_size=size.tiny)
+    table.cell(whSt, 0, 1, "درجة/مرحلة", text_color=color.gray, text_size=size.tiny)
+    table.cell(whSt, 1, 1, str.tostring(rank, "#") + " · مرحلة " + str.tostring(phaseProxy), text_color=color.white, text_size=size.tiny)
+    table.cell(whSt, 0, 2, "R/R", text_color=color.gray, text_size=size.tiny)
+    table.cell(whSt, 1, 2, str.tostring(nz(rrNet, rr), "#.##") + (heavySellMkt ? " · ضغط" : ""), text_color=rrOk ? color.lime : color.orange, text_size=size.tiny)
+    table.cell(whSt, 0, 3, "حجم", text_color=color.gray, text_size=size.tiny)
+    table.cell(whSt, 1, 3, str.tostring(volAvg, "#") + " · RVOL " + str.tostring(rvol, "#.##"), text_color=liq ? color.white : color.red, text_size=size.tiny)
+    table.cell(whSt, 0, 4, "إشارة", text_color=color.gray, text_size=size.tiny)
+    table.cell(whSt, 1, 4, longEntry ? "🟢 دخول" : strategy.position_size > 0 ? "📈 صفقة" : "⚪ انتظار", text_color=longEntry ? color.lime : color.gray, text_size=size.tiny)
+
+bool abWh = barstate.isconfirmed
+alertcondition(abWh and longEntry and not longEntry[1], "صياد ST: دخول", "صياد ST: دخول {{ticker}}")
+alertcondition(abWh and exitSig and strategy.position_size > 0, "صياد ST: خروج", "صياد ST: خروج {{ticker}}")

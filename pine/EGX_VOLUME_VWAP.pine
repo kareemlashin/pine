@@ -1,0 +1,52 @@
+//@version=6
+indicator("EGX Volume VWAP — bands · vol", shorttitle="EGX VVW", overlay=true, max_lines_count=50, max_tables_count=2, calc_bars_count=5000)
+
+// VWAP يومي/جلسة + انحراف ±σ weighted by volume · docs/EGX_VOLUME.md
+
+string G = "VWAP"
+string mode = input.string("جلسة EGX", "نوع", options=["جلسة EGX", "يومي", "من آخر قاع"], group=G)
+string tz = input.string("Africa/Cairo", "TZ", group=G)
+float stdevMult = input.float(1.0, "±σ bands", minval=0.5, step=0.25, group=G)
+bool showVolBg = input.bool(true, "تلوين حجم فوق/تحت VWAP", group=G)
+
+bool newD = ta.change(time("D", tz)) != 0
+var float sumPv = 0.0
+var float sumV = 0.0
+var float sumP2v = 0.0
+
+if newD
+    sumPv := 0.0
+    sumV := 0.0
+    sumP2v := 0.0
+
+bool inSess = mode != "جلسة EGX" or not na(time(timeframe.period, "1000-1430:23456", tz))
+bool accumulate = mode == "يومي" ? true : mode == "جلسة EGX" ? inSess : close <= ta.lowest(close, 20)
+
+if accumulate
+    float tp = hlc3
+    sumPv += tp * volume
+    sumV += volume
+    sumP2v += tp * tp * volume
+
+float vwap = sumV > 0 ? sumPv / sumV : na
+float var_ = sumV > 0 ? math.max(sumP2v / sumV - vwap * vwap, 0) : 0.0
+float sd = math.sqrt(var_)
+float up = vwap + sd * stdevMult
+float dn = vwap - sd * stdevMult
+
+plot(vwap, "VWAP", color=color.fuchsia, linewidth=2)
+plot(up, "VWAP+", color=color.new(color.gray, 50), linewidth=1)
+plot(dn, "VWAP-", color=color.new(color.gray, 50), linewidth=1)
+
+bool above = close > vwap
+bgcolor(showVolBg and not na(vwap) ? (above ? color.new(color.teal, 96) : color.new(color.red, 96)) : na)
+
+var table t = table.new(position.bottom_right, 2, 3, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 2)
+    table.cell(t, 0, 0, "VWAP", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, mode, text_size=size.tiny)
+    table.cell(t, 0, 1, "Price", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 1, above ? "فوق" : "تحت", text_color=above ? color.lime : color.red, text_size=size.tiny)
+
+plot(above ? 1 : 0, "EGVVW_Above", display=display.data_window)

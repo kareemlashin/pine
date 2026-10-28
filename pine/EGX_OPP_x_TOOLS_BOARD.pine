@@ -1,0 +1,169 @@
+//@version=6
+indicator("EGX Opp × Tools — لوحة 40", shorttitle="O×T40", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// فرص Rank vs Tools Rank على 40 رمز (صفحة واحدة) · plots: EGXOxT40_*
+// كامل 294: EGX_TOOLS_BOARD200 + EGX_افضل_فرص_BOARD200
+
+int N = 40
+string G = "═══ 40 رمز ═══"
+string page = input.string("1 كبار 1–40", "صفحة", options=["1 كبار 1–40", "2 SCEM–BONY", "3 SUGR–ADCI", "4 GDWA–AALR", "5 GTWL–UNIP"], group=G)
+string bench = input.symbol("EGX:EGX30", "EGX30", group=G)
+float minVol = input.float(800.0, "حد حجم", group=G)
+float sigMin = input.float(20.0, "Tools Score %", group=G)
+float minAgree = input.float(50.0, "حد توافق Rank", minval=30, maxval=90, group=G)
+int showTop = input.int(25, "Top N", minval=5, maxval=40, group=G)
+string egxBoard = input.string("نشط (EGX100)", "لوحة", options=["نشط (EGX100)", "EGX30 (بيع مكشوف)", "SME تميّز", "SME نايل", "غير نشط"], group=G)
+
+f_p0(int i) =>
+    switch i
+        0 => "EGX:COMI"
+        1 => "EGX:SWDY"
+        2 => "EGX:ETEL"
+        3 => "EGX:TMGH"
+        4 => "EGX:MFPC"
+        5 => "EGX:EGAL"
+        6 => "EGX:ABUK"
+        7 => "EGX:QNBE"
+        8 => "EGX:HDBK"
+        9 => "EGX:ALCN"
+        10 => "EGX:EAST"
+        11 => "EGX:ORAS"
+        12 => "EGX:EFIH"
+        13 => "EGX:ADIB"
+        14 => "EGX:EMFD"
+        15 => "EGX:FWRY"
+        16 => "EGX:SCTS"
+        17 => "EGX:GPPL"
+        18 => "EGX:VLMR"
+        19 => "EGX:CANA"
+        20 => "EGX:HALN"
+        21 => "EGX:EFID"
+        22 => "EGX:HRHO"
+        23 => "EGX:ORHD"
+        24 => "EGX:PHDC"
+        25 => "EGX:FAIT"
+        26 => "EGX:JUFO"
+        27 => "EGX:OCDI"
+        28 => "EGX:MNHD"
+        29 => "EGX:HELI"
+        30 => "EGX:CCAP"
+        31 => "EGX:CIEB"
+        32 => "EGX:IRON"
+        33 => "EGX:SKPC"
+        34 => "EGX:ISPH"
+        35 => "EGX:ESRS"
+        36 => "EGX:ACGC"
+        37 => "EGX:SAUD"
+        38 => "EGX:CNIN"
+        39 => "EGX:UNIP"
+
+f_sym(int i) => f_p0(i)
+
+f_oppLite() =>
+    float e9 = ta.ema(close, 9)
+    float e21 = ta.ema(close, 21)
+    float e50 = ta.ema(close, 50)
+    bool bSt = e9 > e21 and e21 > e50
+    [_, _, mh] = ta.macd(close, 12, 26, 9)
+    float vma = ta.sma(volume, 20)
+    bool liq = vma >= minVol
+    float rv = volume / math.max(vma, 1.0)
+    float cm = ta.sma(((close - low) - (high - close)) / math.max(high - low, syminfo.mintick) * volume, 14) / ta.sma(volume, 14)
+    float ob = ta.linreg(ta.obv, 10, 0) - ta.linreg(ta.obv, 10, 1)
+    bool ac = cm > 0 and ob > 0
+    float pl = ta.pivotlow(low, 8, 8)
+    var float sl = na
+    if not na(pl)
+        sl := pl
+    float at = ta.atr(14)
+    bool atZ = low <= nz(sl, low) + at * 0.35 and close >= nz(sl, low) - at * 0.42
+    bool ret = not na(sl) and low <= sl * 1.006 and close > sl
+    int st = (bSt ? 1 : 0) + (mh > 0 ? 1 : 0) + (ac ? 1 : 0) + (atZ or ret ? 1 : 0) + (rv >= 1.0 ? 1 : 0)
+    float oppR = math.min(100.0, (bSt ? 25.0 : 0.0) + st / 8.0 * 60.0 + (rv >= 1.2 ? 10.0 : 0.0))
+    bool oppPro = liq and ac and (atZ or ret) and st >= 6 and oppR >= 55
+    [oppR, oppPro ? 1.0 : 0.0]
+
+f_toolsLite() =>
+    float rsi = ta.rsi(close, 14)
+    [mL, mS, mH] = ta.macd(close, 12, 26, 9)
+    float vma = ta.sma(volume, 20)
+    bool liq = vma >= minVol
+    float rv = volume / math.max(vma, 1.0)
+    float cm = ta.sma(((close - low) - (high - close)) / math.max(high - low, syminfo.mintick) * volume, 20) / ta.sma(volume, 20)
+    float ob = ta.linreg(ta.obv, 10, 0) - ta.linreg(ta.obv, 10, 1)
+    bool inDem = close <= ta.highest(high, 80) - 0.618 * (ta.highest(high, 80) - ta.lowest(low, 80)) and close >= ta.lowest(low, 80)
+    bool bos = close > ta.highest(high, 20)[1]
+    int sc = (rsi > 52 and rsi < 68 ? 1 : 0) + (mH > 0 and mL > mS ? 1 : 0) + (close > ta.ema(close, 50) ? 1 : 0) + (cm > 0.05 ? 1 : 0) + (ob > 0 ? 1 : 0) + (bos or inDem ? 1 : 0)
+    float toolR = sc / 6.0 * 100.0
+    bool toolPro = liq and toolR >= sigMin and sc >= 5 and cm > 0 and (bos or inDem)
+    [toolR, toolPro ? 1.0 : 0.0]
+
+f_row(int i) =>
+    string s = f_sym(i)
+    if s == ""
+        [0.0, 0.0, 0.0, 0.0, 0.0]
+    else
+        [oR, oP] = request.security(s, "D", f_oppLite(), barmerge.gaps_off, barmerge.lookahead_off)
+        [tR, tP] = request.security(s, "D", f_toolsLite(), barmerge.gaps_off, barmerge.lookahead_off)
+        float agree = (oR + tR) / 2.0
+        float mega = oP > 0 and tP > 0 ? 1.0 : 0.0
+        [oR, tR, agree, mega, oP + tP]
+
+float[] oA = array.new_float(N, 0.0)
+float[] tA = array.new_float(N, 0.0)
+float[] gA = array.new_float(N, 0.0)
+float[] mA = array.new_float(N, 0.0)
+
+for i = 0 to N - 1
+    [oR, tR, ag, mg, _] = f_row(i)
+    array.set(oA, i, oR)
+    array.set(tA, i, tR)
+    array.set(gA, i, ag)
+    array.set(mA, i, mg)
+
+int[] ord = array.new_int(N, 0)
+for k = 0 to N - 1
+    array.set(ord, k, k)
+for i = 0 to N - 2
+    for j = 0 to N - 2 - i
+        int ia = array.get(ord, j)
+        int ib = array.get(ord, j + 1)
+        if array.get(gA, ia) < array.get(gA, ib)
+            array.set(ord, j, ib)
+            array.set(ord, j + 1, ia)
+
+int megaCnt = 0
+int agreeCnt = 0
+for i = 0 to N - 1
+    megaCnt += array.get(mA, i) > 0 ? 1 : 0
+    agreeCnt += array.get(gA, i) >= minAgree ? 1 : 0
+
+int rows = math.min(showTop, N)
+var table tb = table.new(position.top_right, 6, 28, border_width=1)
+if barstate.islast
+    table.clear(tb, 0, 0, 5, rows + 2)
+    table.cell(tb, 0, 0, "#", text_size=size.tiny)
+    table.cell(tb, 1, 0, "رمز", text_size=size.tiny)
+    table.cell(tb, 2, 0, "Opp", text_size=size.tiny)
+    table.cell(tb, 3, 0, "Tools", text_size=size.tiny)
+    table.cell(tb, 4, 0, "Avg", text_size=size.tiny)
+    table.cell(tb, 5, 0, "Mega", text_size=size.tiny)
+    for row = 0 to rows - 1
+        int ix = array.get(ord, row)
+        table.cell(tb, 0, row + 1, str.tostring(row + 1), text_size=size.tiny)
+        table.cell(tb, 1, row + 1, f_sym(ix), text_size=size.tiny)
+        table.cell(tb, 2, row + 1, str.tostring(array.get(oA, ix), "#"), text_size=size.tiny)
+        table.cell(tb, 3, row + 1, str.tostring(array.get(tA, ix), "#"), text_size=size.tiny)
+        table.cell(tb, 4, row + 1, str.tostring(array.get(gA, ix), "#"), text_color=array.get(gA, ix) >= minAgree ? color.lime : color.white, text_size=size.tiny)
+        table.cell(tb, 5, row + 1, array.get(mA, ix) > 0 ? "✓" : "—", text_size=size.tiny)
+    table.cell(tb, 0, rows + 1, "Mega", text_size=size.tiny)
+    table.cell(tb, 1, rows + 1, str.tostring(megaCnt), text_color=color.lime, text_size=size.tiny)
+    table.cell(tb, 2, rows + 1, "Agree", text_size=size.tiny)
+    table.cell(tb, 3, rows + 1, str.tostring(agreeCnt), text_size=size.tiny)
+
+plot(megaCnt, "EGXOxT40_MegaCount", display=display.all)
+plot(agreeCnt, "EGXOxT40_AgreeCount", display=display.all)
+plot(N > 0 ? array.get(gA, array.get(ord, 0)) : 0, "EGXOxT40_LeaderAgree", display=display.data_window)
+plot(1, "EGXOxT40", display=display.all)
+
+alertcondition(megaCnt >= 3, "O×T40 — 3+ Mega", "{{ticker}} EGXOxT40 mega")

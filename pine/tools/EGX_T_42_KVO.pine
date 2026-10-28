@@ -1,0 +1,30 @@
+//@version=6
+indicator("EGX Tool 42 Klinger — Klinger Volume Osc", shorttitle="EGX T-KVO", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة ج الحجم · #42/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+float trend = hlc3 > hlc3[1] ? 1.0 : -1.0
+float dm = high - low
+float cm = 0.0
+cm := nz(cm[1]) + dm
+float vf = volume * trend * 100.0 * math.abs(2.0 * dm / math.max(cm, syminfo.mintick) - 1.0)
+float kvo = ta.ema(vf, 34) - ta.ema(vf, 55)
+float sig = ta.ema(kvo, 13)
+int vote = kvo > sig ? 1 : -1
+plot(kvo, "EGXT_KVO", color=color.teal, linewidth=2)
+plot(sig, "EGXT_KVO_S", color=color.orange)
+hline(0, "0", color=color.gray)
+
+plot(vote, "EGXT_KVO_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_KVO_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_KVO_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "KVO", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-KVO صاعد", "EGX Tool KVO: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-KVO هابط", "EGX Tool KVO: vote هابط")

@@ -1,0 +1,38 @@
+//@version=6
+indicator("EGX Volume Dry-up — squeeze then expand", shorttitle="EGX VDry", overlay=false, max_labels_count=50, max_tables_count=2, calc_bars_count=5000)
+
+// جفاف حجم ثم توسع · docs/EGX_VOLUME.md
+
+string G = "إعداد"
+int dryLen = input.int(5, "أيام جفاف", minval=3, maxval=10, group=G)
+float dryPct = input.float(0.65, "حجم/MA max", maxval=0.85, step=0.05, group=G)
+float expandRvol = input.float(1.35, "RVOL توسع", group=G)
+int maLen = input.int(20, "MA", group=G)
+
+float vma = ta.sma(volume, maLen)
+bool dry = true
+for i = 1 to dryLen
+    if volume[i] > vma[i] * dryPct
+        dry := false
+
+float rvol = volume / math.max(vma, 1.0)
+bool expand = dry[1] and rvol >= expandRvol
+bool expandUp = expand and close > open
+bool expandDn = expand and close < open
+
+plot(volume, "Vol", style=plot.style_columns, color=color.new(expandUp ? color.lime : expandDn ? color.red : color.gray, 60))
+plot(vma, "MA", color=color.orange, linewidth=2)
+plotshape(expandUp, "Dry→Up", shape.triangleup, location=location.bottom, color=color.lime, size=size.small)
+plotshape(expandDn, "Dry→Dn", shape.triangledown, location=location.top, color=color.red, size=size.small)
+
+var table t = table.new(position.top_right, 2, 3, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 2)
+    table.cell(t, 0, 0, "Dry-up", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, expand ? "EXPAND" : dry ? "DRY" : "—", text_size=size.tiny)
+    table.cell(t, 0, 1, "RVOL", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 1, str.tostring(rvol, "#.##"), text_size=size.tiny)
+
+plot(expandUp ? 1 : 0, "EGVDry_ExpandUp", display=display.all)
+plot(expandDn ? 1 : 0, "EGVDry_ExpandDn", display=display.all)
+plot(dry ? 1 : 0, "EGVDry_IsDry", display=display.all)

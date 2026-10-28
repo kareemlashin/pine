@@ -1,0 +1,54 @@
+//@version=6
+string egxBoard = input.string("نشط (EGX100)", "لوحة", options=["نشط (EGX100)", "EGX30 (بيع مكشوف)", "SME تميّز", "SME نايل", "غير نشط"])
+indicator("EGX قرar — Alerts Hub", shorttitle="EGX Q Alert", overlay=false, calc_bars_count=5000)
+
+// يرسل alert() على: شراء · Ultra · خروج · Board-style lite · Q×R agree (على الرمز الحالي)
+
+bool onClose = input.bool(true, "إغلاق الشmعة")
+bool tg = input.bool(true, "Telegram alert()")
+bool alertBuy = input.bool(true, "شراء", group="تنبيهات")
+bool alertUltra = input.bool(true, "Ultra", group="تنبيهات")
+bool alertExit = input.bool(true, "خروج", group="تنبيهات")
+bool alertCrash = input.bool(true, "CrashTrap", group="تنبيهات")
+
+bool sigOk = not onClose or barstate.isconfirmed
+float minVol = 800.0
+
+float volMa = ta.sma(volume, 20)
+bool liq = volMa >= minVol
+float cmf = ta.sma(((close - low) - (high - close)) / math.max(high - low, syminfo.mintick) * volume, 20) / ta.sma(volume, 20)
+float obvSl = ta.linreg(ta.obv, 10, 0) - ta.linreg(ta.obv, 10, 1)
+float acc = math.min(100.0, (cmf > 0 and obvSl > 0 ? 40.0 : 0.0) + (cmf > 0 ? 15.0 : 0.0))
+float dist = math.min(100.0, (cmf < 0 and obvSl < 0 ? 35.0 : 0.0))
+float hi = ta.highest(high, 252)
+float lo = ta.lowest(low, 252)
+float pctHi = hi > 0 ? (close - hi) / hi * 100.0 : 0.0
+float rocB = lo > 0 ? (close / lo - 1.0) * 100.0 : 0.0
+bool trap = rocB > 100 and pctHi < -28 and dist >= 38
+var float sl = na
+if not na(ta.pivotlow(low, 8, 8))
+    sl := ta.pivotlow(low, 8, 8)
+bool supBr = not na(sl) and close < sl and close[1] >= sl
+bool atZ = low <= nz(sl, low) + ta.atr(14) * 0.35
+bool ret = not na(sl) and low <= sl * 1.006 and close > sl
+int cyc = acc >= 55 ? 4 : 3
+bool buy = sigOk and liq and acc >= 55 and dist < 50 and cyc >= 4 and cyc <= 7 and (atZ or ret) and not supBr and not trap and not nearLimit
+bool exit = sigOk and (supBr or dist >= 65 or trap or cyc == 9)
+float dna = math.min(100.0, (acc >= 55 ? 25 : 0) + (dist < 45 ? 15 : 0))
+bool ultra = buy and dna >= 55
+
+if tg and sigOk
+    if alertBuy and buy
+        alert("EGX ✅ " + syminfo.ticker + " — قرar شراء", alert.freq_once_per_bar_close)
+    if alertUltra and ultra
+        alert("EGX ⚡ " + syminfo.ticker + " — Ultra", alert.freq_once_per_bar_close)
+    if alertExit and exit
+        alert("EGX 🛑 " + syminfo.ticker + " — خروج", alert.freq_once_per_bar_close)
+    if alertCrash and trap
+        alert("EGX ⚠ " + syminfo.ticker + " — CrashTrap", alert.freq_once_per_bar_close)
+
+plot(buy ? 1 : 0, "EGXQ_Buy", display=display.data_window)
+plot(ultra ? 1 : 0, "EGXQ_ScreenerUltra", display=display.data_window)
+plot(exit ? 1 : 0, "EGXQ_Exit", display=display.data_window)
+plot(trap ? 1 : 0, "EGXQ_CrashTrap", display=display.data_window)
+plot(1, "EGXQAL_Hub", display=display.data_window)

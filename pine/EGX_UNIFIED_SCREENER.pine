@@ -1,0 +1,168 @@
+//@version=6
+indicator("EGX ماسح موحّد — فني + فوليوم", shorttitle="EGX Uni Scr", overlay=false, max_labels_count=1, max_lines_count=1, calc_bars_count=5000)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// فلتر TradingView واحد: فني (Pass/Pro) + Vol Rank + سيولة + veto EGX
+// Filter: EGXUni_Pro = 1 · أو EGXUni_Pass = 1 · تمييز: EGXUni = 1
+// مرجع: docs/EGX_الخلاصة.md · EGX_Core.f_volRankScore
+// ═══════════════════════════════════════════════════════════════════════════════
+
+string G = "═══ ملف ═══"
+string profile = input.string("EGX قياسي", "الملف", options=["EGX قياسي", "مضاربة 15د", "استثمار يومي"], group=G)
+string techSource = input.string("Pro فني", "مصدر فني", options=["Pro فني", "Pass فقط", "BuyFlag"], group=G)
+string egxBoard = input.string("نشط (EGX100)", "لوحة", options=["نشط (EGX100)", "EGX30 (بيع مكشوف)", "SME تميّز", "SME نايل", "غير نشط"], group=G)
+float minRankIn = input.float(65.0, "حد Rank فني", group=G)
+float minRRIn = input.float(1.5, "حد R/R", group=G)
+int minSetupIn = input.int(7, "حد إعداد /11", group=G)
+float minOppIn = input.float(68.0, "حد Opp Pro", group=G)
+bool confirmClose = input.bool(true, "إغلاق الشمعة", group=G)
+bool useMktHalt100 = input.bool(true, "منع إذا EGX100 ≤ −10%", group=G)
+
+string G_V = "═══ فوليوم ═══"
+float minVolRank = input.float(60.0, "حد Vol Rank /100", minval=40, maxval=90, group=G_V)
+bool requireVolPass = input.bool(true, "يتطلب EGVRank Pass", group=G_V)
+int volPctLen = input.int(500, "Vol % rank نافذة", minval=50, group=G_V)
+string bench = input.symbol("EGX:EGX30", "EGX30 RS vol", group=G_V)
+
+string G_L = "═══ سيولة ═══"
+float tier2Min = input.float(1500.0, "Tier2 avg vol ≥", group=G_L)
+bool requireLiq = input.bool(true, "يتطلب Tier ≥ 2", group=G_L)
+
+float effMinVol = profile == "مضاربة 15د" ? 3000.0 : profile == "استثمار يومي" ? 800.0 : 1500.0
+float effMinRank = profile == "استثمار يومي" ? 60.0 : minRankIn
+float effMinOpp = profile == "استثمار يومي" ? 62.0 : minOppIn
+
+bool sigOk = not confirmClose or barstate.isconfirmed
+
+float ema9 = ta.ema(close, 9)
+float ema21 = ta.ema(close, 21)
+float ema50 = ta.ema(close, 50)
+bool bullStack = ema9 > ema21 and ema21 > ema50
+float wClose = request.security(syminfo.tickerid, "W", close, barmerge.gaps_off, barmerge.lookahead_off)
+float wEma50 = request.security(syminfo.tickerid, "W", ta.ema(close, 50), barmerge.gaps_off, barmerge.lookahead_off)
+bool htfBull = wClose > wEma50
+[macdL, macdS, macdH] = ta.macd(close, 12, 26, 9)
+bool macdBull = macdH > 0 and macdL > macdS
+float volMa = ta.sma(volume, 20)
+bool liqOk = volMa >= effMinVol
+float rvol = volume / math.max(volMa, 1.0)
+float mfm = ((close - low) - (high - close)) / math.max(high - low, syminfo.mintick)
+float cmf = ta.sma(mfm * volume, 14) / ta.sma(volume, 14)
+float obv = ta.obv
+float obvSlope = ta.linreg(obv, 10, 0) - ta.linreg(obv, 10, 1)
+bool accumulating = cmf > 0 and obvSlope > 0
+float benchRoc = request.security(bench, timeframe.period, ta.roc(close, 20), barmerge.gaps_off, barmerge.lookahead_off)
+bool rsLeader = ta.roc(close, 20) - benchRoc > 0
+
+float pl = ta.pivotlow(low, 8, 8)
+var float swingLow = na
+if not na(pl)
+    swingLow := pl
+bool supportBreak = sigOk and not na(swingLow) and close < swingLow and close[1] >= swingLow
+
+float atr = ta.atr(14)
+float zw = atr * 0.35
+float buyTop = nz(swingLow, low) + zw
+float buyBot = nz(swingLow, low) - zw * 1.2
+float ph = ta.pivothigh(high, 8, 8)
+var float swingHigh = na
+if not na(ph)
+    swingHigh := ph
+float t1 = na(swingHigh) ? close + atr * 1.5 : swingHigh
+float entryPx = (buyTop + buyBot) / 2.0
+float stopPx = buyBot - atr * 0.5
+float rr = math.max(entryPx - stopPx, syminfo.mintick) > 0 ? (t1 - entryPx) / math.max(entryPx - stopPx, syminfo.mintick) : na
+
+float score = math.max(0.0, math.min(100.0, (bullStack ? 20.0 : 0.0) + (htfBull ? 15.0 : 0.0) + (macdBull ? 10.0 : 0.0) + (accumulating ? 15.0 : 0.0) + (rvol >= 1.0 ? 10.0 : 0.0) + (rsLeader ? 5.0 : 0.0)))
+int setupHits = (bullStack ? 1 : 0) + (htfBull ? 1 : 0) + (macdBull ? 1 : 0) + (accumulating ? 1 : 0) + (rsLeader ? 1 : 0) + (not na(rr) and rr >= minRRIn ? 1 : 0) + (rvol >= 1.0 ? 1 : 0)
+float rank = score * 0.6 + setupHits / 11.0 * 40.0
+float opp = score * 0.5 + setupHits / 11.0 * 50.0
+
+bool nearSupport = low <= buyTop and close >= buyBot
+bool buyFlag = sigOk and liqOk and not supportBreak and setupHits >= minSetupIn and not na(rr) and rr >= minRRIn and nearSupport and score >= 55
+bool pass = buyFlag and rank >= effMinRank
+bool techPro = pass and opp >= effMinOpp and setupHits >= 7
+
+float pct = ta.percentrank(volume, volPctLen)
+float z = (volume - volMa) / math.max(ta.stdev(volume, 20), 1.0)
+float bRvol = request.security(bench, timeframe.period, volume / math.max(ta.sma(volume, 20), 1.0), barmerge.gaps_off, barmerge.lookahead_off)
+float rsV = bRvol > 0 ? rvol / bRvol : 1.0
+float rng = math.max(high - low, syminfo.mintick)
+float buyPct = (close - low) / rng * 100.0
+float volRankScore = 0.0
+volRankScore += math.min(pct, 100.0) * 0.22
+volRankScore += math.min(rvol, 3.0) / 3.0 * 100.0 * 0.18
+volRankScore += math.min(math.max(z, 0), 4.0) / 4.0 * 100.0 * 0.12
+volRankScore += math.min(rsV, 2.0) / 2.0 * 100.0 * 0.15
+volRankScore += buyPct * 0.12
+volRankScore += cmf > 0 ? 10.0 : cmf < 0 ? -5.0 : 0.0
+volRankScore += obvSlope > 0 ? 8.0 : -4.0
+volRankScore += volMa >= 1000 ? 5.0 : -10.0
+volRankScore := math.max(0.0, math.min(100.0, volRankScore))
+bool volPass = volRankScore >= minVolRank and volMa >= 500
+
+int liqTier = volMa >= 3000 ? 4 : volMa >= tier2Min ? 3 : volMa >= 500 ? 2 : 1
+bool liqTierOk = not requireLiq or liqTier >= 3
+
+float dPrev = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+float dayPctU = dPrev > 0 ? (close - dPrev) / dPrev * 100.0 : 0.0
+float haltPctU = egxBoard == "SME تميّز" or egxBoard == "SME نايل" or egxBoard == "غير نشط" ? 5.0 : 10.0
+float luldPctU = egxBoard == "غير نشط" ? 5.0 : (egxBoard == "SME تميّز" or egxBoard == "SME نايل" ? 10.0 : 20.0)
+bool nearLimit = dayPctU >= math.min(9.0, haltPctU - 1.0) or dayPctU >= luldPctU - 0.25
+float hi252 = ta.highest(high, 252)
+bool chase = hi252 > 0 and (close - hi252) / hi252 * 100.0 > -3.0 and ta.rsi(close, 14) > 72
+int veto = (supportBreak ? 1 : 0) + (nearLimit ? 2 : 0) + (chase ? 4 : 0) + (not liqOk ? 8 : 0)
+bool noVeto = veto == 0
+
+f_mktTrU() =>
+    int sc = 0
+    float e20 = ta.ema(close, 20)
+    float e50 = ta.ema(close, 50)
+    sc += close > e20 ? 1 : -1
+    sc += e20 > e50 ? 1 : -1
+    sc
+float mom30U = request.security(bench, timeframe.period, close[20] > 0 ? (close / close[20] - 1.0) * 100.0 : 0.0, barmerge.gaps_off, barmerge.lookahead_off)
+int tr30U = request.security(bench, timeframe.period, f_mktTrU(), barmerge.gaps_off, barmerge.lookahead_off)
+bool heavySellU = mom30U < -4.0 and tr30U <= -1
+float dayPct100U = useMktHalt100 ? request.security("EGX:EGX100EWI", "D", close[1] > 0 ? (close - close[1]) / close[1] * 100.0 : 0.0, barmerge.gaps_off, barmerge.lookahead_off) : 0.0
+bool mktHalt100U = useMktHalt100 and dayPct100U <= -10.0
+bool regimeOk = not heavySellU and not mktHalt100U
+
+bool techOk = techSource == "BuyFlag" ? buyFlag : techSource == "Pass فقط" ? pass : techPro
+bool unifiedPass = techOk and noVeto and liqTierOk and regimeOk and (not requireVolPass or volPass)
+bool unifiedPro = unifiedPass and techPro and volPass and liqTier >= 3
+
+float uniScore = rank * 0.45 + volRankScore * 0.35 + (unifiedPro ? 20.0 : unifiedPass ? 10.0 : 0.0)
+uniScore := math.min(100.0, uniScore)
+
+var table t = table.new(position.middle_center, 2, 7, bgcolor=color.new(color.black, 10), border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 6)
+    table.cell(t, 0, 0, syminfo.ticker, text_color=color.white, text_size=size.normal)
+    table.cell(t, 1, 0, unifiedPro ? "Uni Pro ✓" : unifiedPass ? "Pass" : "—", text_color=unifiedPro ? color.lime : unifiedPass ? color.yellow : color.gray, text_size=size.normal)
+    table.cell(t, 0, 1, "Rank / Vol", text_color=color.gray, text_size=size.small)
+    table.cell(t, 1, 1, str.tostring(rank, "#") + " / " + str.tostring(volRankScore, "#"), text_color=color.white, text_size=size.small)
+    table.cell(t, 0, 2, "Setup · R/R", text_color=color.gray, text_size=size.small)
+    table.cell(t, 1, 2, str.tostring(setupHits) + "/11 · " + str.tostring(rr, "#.#"), text_color=color.white, text_size=size.small)
+    table.cell(t, 0, 3, "Tier / Veto", text_color=color.gray, text_size=size.small)
+    table.cell(t, 1, 3, "T" + str.tostring(liqTier) + " · " + str.tostring(veto), text_color=noVeto ? color.gray : color.orange, text_size=size.small)
+    table.cell(t, 0, 4, "UniScore", text_color=color.gray, text_size=size.small)
+    table.cell(t, 1, 4, str.tostring(uniScore, "#"), text_color=unifiedPro ? color.lime : color.white, text_size=size.small)
+    table.cell(t, 0, 5, profile, text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 5, techSource, text_color=color.gray, text_size=size.tiny)
+
+plot(buyFlag ? 1 : 0, "EGXUni_BuyFlag", display=display.all)
+plot(rank, "EGXUni_Rank", display=display.all)
+plot(volRankScore, "EGXUni_VolRank", display=display.all)
+plot(volPass ? 1 : 0, "EGXUni_VolPass", display=display.all)
+plot(liqTier, "EGXUni_LiqTier", display=display.all)
+plot(veto, "EGXUni_Veto", display=display.all)
+plot(uniScore, "EGXUni_Score", display=display.all)
+plot(unifiedPass ? 1 : 0, "EGXUni_Pass", display=display.all)
+plot(unifiedPro ? 1 : 0, "EGXUni_Pro", display=display.all)
+plot(regimeOk ? 1 : 0, "EGX_RegimeOk", display=display.all)
+plot(mktHalt100U ? 1 : 0, "EGXUni_MktHalt100", display=display.data_window)
+plot(1, "EGXUni", display=display.all)
+
+alertcondition(unifiedPro, "EGX Uni — Pro", "{{ticker}}: EGXUni Pro=1")
+alertcondition(unifiedPass, "EGX Uni — Pass", "{{ticker}}: EGXUni Pass=1")

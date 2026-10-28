@@ -1,0 +1,40 @@
+//@version=6
+indicator("EGX Tool 75 هارمونيك AB=CD — Harmonic AB=CD", shorttitle="EGX T-HARMONIC", overlay=true, max_labels_count=80, max_lines_count=80, max_boxes_count=40, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة و موجات · #75/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+int len = input.int(8, "Swing")
+float ph = ta.pivothigh(high, len, len)
+float pl = ta.pivotlow(low, len, len)
+var array<float> px = array.new_float()
+if not na(ph)
+    array.push(px, ph)
+if not na(pl)
+    array.push(px, pl)
+if array.size(px) > 8
+    array.shift(px)
+int vote = 0
+if array.size(px) >= 4
+    float w = array.get(px, array.size(px) - 4)
+    float x = array.get(px, array.size(px) - 3)
+    float y = array.get(px, array.size(px) - 2)
+    float z = array.get(px, array.size(px) - 1)
+    float ab = math.abs(x - w)
+    float cd = math.abs(z - y)
+    bool eq = ab > 0 and math.abs(cd / ab - 1.0) < 0.12
+    vote := eq and z > y ? -1 : eq and z < y ? 1 : 0
+plot(close, "px", display=display.none)
+
+plot(vote, "EGXT_HARMONIC_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_HARMONIC_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_HARMONIC_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "HARMONIC", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-HARMONIC صاعد", "EGX Tool HARMONIC: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-HARMONIC هابط", "EGX Tool HARMONIC: vote هابط")

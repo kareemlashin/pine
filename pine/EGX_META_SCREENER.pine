@@ -1,0 +1,150 @@
+//@version=6
+indicator("EGX ماسح مركّب — أخير + فوليوم + قرار", shorttitle="EGX Meta Scr", overlay=false, calc_bars_count=5000)
+
+// ماسح واحد: EGXScr Pro · Vol B1 · قرار مبسّط — إطار D
+// EGXMeta_Triple = 1 · EGXMeta_AkhirPro · EGXMeta_VolPro · EGXMeta_QBuy
+
+string G = "عتبات"
+float minRank = input.float(65.0, "Rank أخير", group=G)
+float minRR = input.float(1.5, "R/R", group=G)
+int minSetup = input.int(7, "إعداد /11", group=G)
+float minOpp = input.float(68.0, "فرصة Pro", group=G)
+float minVolMa = input.float(1500.0, "متوسط حجم", group=G)
+float volNetBuy = input.float(52.0, "Net buy B1 %", group=G)
+float minQAcc = input.float(55.0, "قرار: تجم", group=G)
+bool onClose = input.bool(true, "إغلاق الشمعة", group=G)
+string egxBoard = input.string("نشط (EGX100)", "لوحة", options=["نشط (EGX100)", "EGX30 (بيع مكشوف)", "SME تميّز", "SME نايل", "غير نشط"], group=G)
+bool blockLimit = input.bool(true, "منع قرب halt/LULD", group=G)
+bool useMktHalt100 = input.bool(true, "منع إذا EGX100 ≤ −10%", group=G)
+string mktBench = input.symbol("EGX:EGX30", "EGX30", group=G)
+
+bool sigOk = not onClose or barstate.isconfirmed
+
+f_mktTrMeta() =>
+    int sc = 0
+    float e20 = ta.ema(close, 20)
+    float e50 = ta.ema(close, 50)
+    sc += close > e20 ? 1 : -1
+    sc += e20 > e50 ? 1 : -1
+    sc
+float mom30Meta = request.security(mktBench, timeframe.period, close[20] > 0 ? (close / close[20] - 1.0) * 100.0 : 0.0, barmerge.gaps_off, barmerge.lookahead_off)
+int tr30Meta = request.security(mktBench, timeframe.period, f_mktTrMeta(), barmerge.gaps_off, barmerge.lookahead_off)
+bool heavySellMeta = mom30Meta < -4.0 and tr30Meta <= -1
+float dayPct100Meta = useMktHalt100 ? request.security("EGX:EGX100EWI", "D", close[1] > 0 ? (close - close[1]) / close[1] * 100.0 : 0.0, barmerge.gaps_off, barmerge.lookahead_off) : 0.0
+bool mktHalt100Meta = useMktHalt100 and dayPct100Meta <= -10.0
+bool regimeOk = not heavySellMeta and not mktHalt100Meta
+
+// ─── Akhir-lite ───
+float ema9 = ta.ema(close, 9)
+float ema21 = ta.ema(close, 21)
+float ema50 = ta.ema(close, 50)
+bool bullStack = ema9 > ema21 and ema21 > ema50
+float wClose = request.security(syminfo.tickerid, "W", close, barmerge.gaps_off, barmerge.lookahead_off)
+float wEma50 = request.security(syminfo.tickerid, "W", ta.ema(close, 50), barmerge.gaps_off, barmerge.lookahead_off)
+bool htfBull = wClose > wEma50
+[macdL, macdS, macdH] = ta.macd(close, 12, 26, 9)
+bool macdBull = macdH > 0 and macdL > macdS
+float volMa = ta.sma(volume, 20)
+bool liqOk = volMa >= minVolMa
+float rvol = volume / math.max(volMa, 1.0)
+float mfm = ((close - low) - (high - close)) / math.max(high - low, syminfo.mintick)
+float cmf = ta.sma(mfm * volume, 14) / ta.sma(volume, 14)
+float obvSl = ta.linreg(ta.obv, 10, 0) - ta.linreg(ta.obv, 10, 1)
+bool accumulating = cmf > 0 and obvSl > 0
+float benchRoc = request.security("EGX:EGX30", timeframe.period, ta.roc(close, 20), barmerge.gaps_off, barmerge.lookahead_off)
+bool rsLeader = ta.roc(close, 20) - benchRoc > 0
+
+float pl = ta.pivotlow(low, 8, 8)
+var float sl = na
+if not na(pl)
+    sl := pl
+float atr = ta.atr(14)
+float zw = atr * 0.35
+bool nearSupport = low <= nz(sl, low) + zw and close >= nz(sl, low) - zw * 1.2
+bool supportBreak = sigOk and not na(sl) and close < sl and close[1] >= sl
+
+int setupHits = 0
+setupHits += bullStack ? 1 : 0
+setupHits += htfBull ? 1 : 0
+setupHits += macdBull ? 1 : 0
+setupHits += accumulating ? 1 : 0
+setupHits += rsLeader ? 1 : 0
+setupHits += nearSupport ? 1 : 0
+setupHits += rvol >= 1.0 ? 1 : 0
+setupHits += liqOk ? 1 : 0
+
+float stopPx = nz(sl, close) - zw * 1.2
+float entryPx = (nz(sl, close) + zw + stopPx) / 2.0
+float risk = math.max(entryPx - stopPx, syminfo.mintick)
+float t1 = ta.highest(high, 40)
+float rr = risk > 0 ? (t1 - entryPx) / risk : na
+
+float score = math.min(100.0, (bullStack ? 20.0 : 0.0) + (htfBull ? 15.0 : 0.0) + (accumulating ? 15.0 : 0.0) + setupHits * 5.0)
+float rank = math.min(100.0, score * 0.6 + setupHits / 8.0 * 40.0)
+float opportunity = math.min(100.0, score * 0.4 + setupHits / 8.0 * 100.0 * 0.35 + (rvol >= 1.2 ? 10.0 : 0.0))
+bool oppStrong = opportunity >= minOpp and setupHits >= minSetup
+
+float dPrev = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+float dayPct = dPrev > 0 ? (close - dPrev) / dPrev * 100.0 : 0.0
+float haltPct = egxBoard == "SME تميّز" or egxBoard == "SME نايل" or egxBoard == "غير نشط" ? 5.0 : 10.0
+float luldPct = egxBoard == "غير نشط" ? 5.0 : (egxBoard == "SME تميّز" or egxBoard == "SME نايل" ? 10.0 : 20.0)
+bool nearLimit = blockLimit and dPrev > 0 and (dayPct >= math.min(9.0, haltPct - 1.0) or dayPct >= luldPct - 0.25)
+
+bool buyAkhir = sigOk and not supportBreak and not nearLimit and liqOk and setupHits >= minSetup and rank >= minRank and not na(rr) and rr >= minRR and nearSupport and accumulating
+bool akhirPro = buyAkhir and oppStrong
+
+// ─── Vol B1 ───
+f_bv(int off) =>
+    float r = math.max(high[off] - low[off], syminfo.mintick)
+    volume[off] * (close[off] - low[off]) / r
+
+int bins = 24
+int n = math.min(400, bar_index)
+float hi = ta.highest(high, n)
+float lo = ta.lowest(low, n)
+float step = (hi - lo) / math.max(bins, 1)
+step := step <= syminfo.mintick ? syminfo.mintick : step
+array<float> buyB = array.new_float(bins, 0.0)
+float tB = 0.0
+float tS = 0.0
+for i = 0 to n - 1
+    float bV = f_bv(i)
+    tS += volume[i] - bV
+    tB += bV
+    int bi = int(math.floor((close[i] - lo) / step))
+    bi := math.max(0, math.min(bins - 1, bi))
+    array.set(buyB, bi, array.get(buyB, bi) + bV)
+float maxB = 0.0
+int b1i = 0
+for b = 0 to bins - 1
+    if array.get(buyB, b) > maxB
+        maxB := array.get(buyB, b)
+        b1i := b
+float pad = atr * 0.28
+float bLo = lo + b1i * step - pad
+float bHi = lo + (b1i + 1) * step + pad
+float bMid = lo + (b1i + 0.5) * step
+float netP = tB + tS > 0 ? tB / (tB + tS) * 100.0 : 50.0
+bool inB1 = low <= bHi and high >= bLo
+bool b1Bounce = inB1 and close > open and rvol >= 1.0 and close > bMid
+float distLite = cmf < 0 and obvSl < 0 ? 55.0 : 35.0
+bool volPro = (inB1 or b1Bounce) and netP >= volNetBuy and distLite < 55
+
+// ─── Q-lite ───
+float accQ = math.min(100.0, (accumulating ? 40.0 : 0.0) + (cmf > 0 ? 15.0 : 0.0))
+float distQ = math.min(100.0, (cmf < 0 and obvSl < 0 ? 35.0 : 0.0))
+bool qBuy = sigOk and liqOk and accQ >= minQAcc and distQ < 50 and nearSupport and not supportBreak
+
+bool triple = akhirPro and volPro and qBuy and regimeOk
+int metaVotes = (akhirPro ? 1 : 0) + (volPro ? 1 : 0) + (qBuy ? 1 : 0)
+
+plot(akhirPro ? 1 : 0, "EGXMeta_AkhirPro", display=display.data_window)
+plot(volPro ? 1 : 0, "EGXMeta_VolPro", display=display.data_window)
+plot(qBuy ? 1 : 0, "EGXMeta_QBuy", display=display.data_window)
+plot(triple ? 1 : 0, "EGXMeta_Triple", display=display.data_window)
+plot(nearLimit ? 1 : 0, "EGXMeta_Limit", display=display.data_window)
+plot(regimeOk ? 1 : 0, "EGX_RegimeOk", display=display.all)
+plot(metaVotes, "EGXMeta_Votes", display=display.data_window)
+plot(buyAkhir ? 1 : 0, "EGXMeta_AkhirBuy", display=display.data_window)
+plot(rank, "EGXMeta_Rank", display=display.data_window)
+plot(1, "EGXMeta", display=display.data_window)

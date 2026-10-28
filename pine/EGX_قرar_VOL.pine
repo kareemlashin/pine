@@ -1,0 +1,68 @@
+//@version=6
+indicator("EGX قرar + Volume — تأكيد", shorttitle="EGX Q×V", overlay=true, max_tables_count=2, calc_bars_count=5000)
+
+// قرar (مبسّط) + B1/Net · EGXQ_VolPass · إطار D
+
+string mode = input.string("PRO موحّd", "قرar", options=["PRO موحّd", "عدّاء", "فلسي"])
+int zoneLook = input.int(400, "نافذة B1", minval=80, maxval=800)
+float minNet = input.float(52.0, "Net buy %", minval=45, maxval=60)
+float minVol = mode == "فلسي" ? 400.0 : 800.0
+
+bool runnerMode = mode != "EGX يومي"
+float effAcc = mode == "فلسi" ? 50.0 : 55.0
+
+f_bv(int off) =>
+    float r = math.max(high[off] - low[off], syminfo.mintick)
+    volume[off] * (close[off] - low[off]) / r
+
+int n = math.min(zoneLook, bar_index)
+float tB = 0.0
+float tS = 0.0
+for i = 0 to n - 1
+    float bV = f_bv(i)
+    tB += bV
+    tS += volume[i] - bV
+float netPct = tB + tS > 0 ? tB / (tB + tS) * 100.0 : 50.0
+float volMa = ta.sma(volume, 20)
+float rvol = volume / math.max(volMa, 1.0)
+bool vBuy = close > open and rvol >= 1.0 and netPct >= minNet
+
+float cmf = ta.sma(((close - low) - (high - close)) / math.max(high - low, syminfo.mintick) * volume, 20) / ta.sma(volume, 20)
+float obvSl = ta.linreg(ta.obv, 10, 0) - ta.linreg(ta.obv, 10, 1)
+float acc = math.min(100.0, (cmf > 0 and obvSl > 0 ? 40.0 : 0.0) + (cmf > 0 ? 15.0 : 0.0))
+float dist = math.min(100.0, (cmf < 0 and obvSl < 0 ? 35.0 : 0.0))
+float pl = ta.pivotlow(low, 8, 8)
+var float sl = na
+if not na(pl)
+    sl := pl
+float atr = ta.atr(14)
+bool atZ = low <= nz(sl, low) + atr * 0.35 and close >= nz(sl, low) - atr * 0.42
+bool ret = not na(sl) and low <= sl * 1.006 and close > sl
+bool liq = volMa >= minVol
+
+float dPrevQ = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+float dayPctQ = dPrevQ > 0 ? (close - dPrevQ) / dPrevQ * 100.0 : 0.0
+float haltPctQ = mode == "فلسi" ? 5.0 : 10.0
+float luldPctQ = mode == "فلسi" ? 10.0 : 20.0
+bool nearLimit = dayPctQ >= math.min(9.0, haltPctQ - 1.0) or dayPctQ >= luldPctQ - 0.25
+int cyc = acc >= effAcc ? 4 : 3
+bool qBuy = liq and not nearLimit and acc >= effAcc and dist < 50 and (atZ or ret) and (runnerMode ? cyc >= 4 and cyc <= 7 : ret)
+
+bool volPass = qBuy and vBuy
+bool volSoft = qBuy and netPct >= minNet - 3 and rvol >= 0.9
+
+var table t = table.new(position.bottom_right, 1, 3, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 0, 2)
+    table.cell(t, 0, 0, volPass ? "🟢 Q+V شراء" : qBuy ? "🟡 Q (بدون V)" : vBuy ? "🟡 V فقط" : "⛔", bgcolor=color.new(color.black, 30), text_color=color.white, text_size=size.normal)
+    table.cell(t, 0, 1, "Net " + str.tostring(netPct, "#") + "% · RVOL " + str.tostring(rvol, "#.##"), text_size=size.tiny)
+    table.cell(t, 0, 2, "تجم " + str.tostring(acc, "#") + " · EGXQ_VolPass", text_size=size.tiny)
+
+plot(qBuy ? 1 : 0, "EGXQ_Buy", display=display.data_window)
+plot(vBuy ? 1 : 0, "EGVQ_Buy", display=display.data_window)
+plot(volPass ? 1 : 0, "EGXQ_VolPass", display=display.data_window)
+plot(volSoft ? 1 : 0, "EGXQ_VolSoft", display=display.data_window)
+plot(netPct, "EGVQ_NetBuy", display=display.data_window)
+plot(1, "EGXQV", display=display.data_window)
+
+alertcondition(volPass, "EGX Q×V — تأكيد", "{{ticker}} Q+V Pass")

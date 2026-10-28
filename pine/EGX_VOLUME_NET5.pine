@@ -1,0 +1,31 @@
+//@version=6
+indicator("EGX Volume Net 5d — buy proxy", shorttitle="EGX VN5", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// صافي شراء 5 أيام (OHLCV) · docs/EGX_VOLUME.md
+
+string G = "Net5"
+int days = input.int(5, "Days", minval=3, maxval=10, group=G)
+float minNetPct = input.float(52.0, "Min net %", group=G)
+
+float netSum = 0.0
+float volSum = 0.0
+for i = 0 to days - 1
+    float rng = math.max(high[i] - low[i], syminfo.mintick)
+    float b = volume[i] * (close[i] - low[i]) / rng
+    netSum += b
+    volSum += volume[i]
+
+float netPct = volSum > 0 ? netSum / volSum * 100.0 : 50.0
+bool pass = netPct >= minNetPct and volSum / days >= ta.sma(volume, 20) * 0.8
+
+plot(netPct, "EGVN5_NetPct", color=netPct >= 50 ? color.lime : color.red, linewidth=2, display=display.all)
+hline(minNetPct, "Pass", color=color.gray, linestyle=hline.style_dashed)
+hline(50, "50", color=color.gray)
+
+var table t = table.new(position.top_right, 2, 3, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 2)
+    table.cell(t, 0, 0, "Net " + str.tostring(days) + "d", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, str.tostring(netPct, "#") + "%", text_size=size.normal)
+
+plot(pass ? 1 : 0, "EGVN5_Pass", display=display.all)

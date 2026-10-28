@@ -1,0 +1,29 @@
+//@version=6
+indicator("EGX Volume Consec — up + V", shorttitle="EGX VCsq", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// أيام متتالية: close↑ + volume↑ · docs/EGX_VOLUME.md
+
+string G = "Consec"
+int need = input.int(3, "Min days", minval=2, maxval=6, group=G)
+float minRvol = input.float(1.0, "RVOL", group=G)
+
+bool step = close > close[1] and volume > volume[1] and volume / math.max(ta.sma(volume, 20), 1.0) >= minRvol
+
+var int run = 0
+if step
+    run += 1
+else
+    run := 0
+
+bool pass = run >= need
+
+plot(run, "EGVCsq_Run", color=pass ? color.lime : color.gray, linewidth=2, display=display.all)
+plotshape(pass and run == need, "Pass", shape.diamond, location=location.top, color=color.orange, size=size.small)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "Up+V run", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, str.tostring(run), text_color=pass ? color.lime : color.white, text_size=size.large)
+
+plot(pass ? 1 : 0, "EGVCsq_Pass", display=display.all)

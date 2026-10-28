@@ -1,0 +1,25 @@
+//@version=6
+indicator("EGX Tool 60 تشوبنس — Choppiness Index", shorttitle="EGX T-CHOP", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة د التقلب · #60/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+int len = input.int(14, "Chop")
+float v = 100.0 * math.log10(math.sum(ta.tr, len) / math.max(ta.highest(high, len) - ta.lowest(low, len), syminfo.mintick)) / math.log10(len)
+int vote = v < 38.2 ? (close > ta.ema(close, 50) ? 1 : -1) : 0
+plot(v, "EGXT_CHOP", color=color.orange, linewidth=2)
+hline(61.8, "Range", color=color.red)
+hline(38.2, "Trend", color=color.lime)
+
+plot(vote, "EGXT_CHOP_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_CHOP_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_CHOP_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "CHOP", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-CHOP صاعد", "EGX Tool CHOP: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-CHOP هابط", "EGX Tool CHOP: vote هابط")

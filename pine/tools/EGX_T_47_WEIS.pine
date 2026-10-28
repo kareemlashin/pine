@@ -1,0 +1,34 @@
+//@version=6
+indicator("EGX Tool 47 وايز ويف — Weis Wave", shorttitle="EGX T-WEIS", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة ج الحجم · #47/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+int len = input.int(5, "اتجاه الموجة")
+var float wave = 0.0
+var int dir = 1
+bool up = close > close[len]
+bool dn = close < close[len]
+if up and dir <= 0
+    dir := 1
+    wave := volume
+else if dn and dir >= 0
+    dir := -1
+    wave := volume
+else
+    wave += volume
+int vote = dir > 0 ? 1 : -1
+plot(dir > 0 ? wave : -wave, "EGXT_WEIS", color=dir > 0 ? color.lime : color.red, style=plot.style_columns)
+
+plot(vote, "EGXT_WEIS_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_WEIS_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_WEIS_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "WEIS", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-WEIS صاعد", "EGX Tool WEIS: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-WEIS هابط", "EGX Tool WEIS: vote هابط")

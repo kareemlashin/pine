@@ -1,0 +1,24 @@
+//@version=6
+indicator("EGX Tool 55 ATR% — ATR Percent", shorttitle="EGX T-ATR", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة د التقلب · #55/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+float v = ta.atr(14) / close * 100.0
+float med = ta.sma(v, 50)
+int vote = v < med * 0.85 ? 0 : v > med * 1.6 ? (close > open ? -1 : 1) : close > ta.ema(close, 20) ? 1 : -1
+plot(v, "EGXT_ATRP", color=color.yellow, linewidth=2)
+plot(med, "Median", color=color.gray)
+
+plot(vote, "EGXT_ATR_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_ATR_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_ATR_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "ATR", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-ATR صاعد", "EGX Tool ATR: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-ATR هابط", "EGX Tool ATR: vote هابط")

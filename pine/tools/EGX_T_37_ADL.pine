@@ -1,0 +1,24 @@
+//@version=6
+indicator("EGX Tool 37 A/D — Accumulation/Distribution", shorttitle="EGX T-ADL", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة ج الحجم · #37/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+float v = ta.accdist
+float ema = ta.ema(v, 20)
+int vote = v > ema and v > v[10] ? 1 : v < ema and v < v[10] ? -1 : 0
+plot(v, "EGXT_AD", color=v >= ema ? color.lime : color.red, linewidth=2)
+plot(ema, "EGXT_AD_EMA", color=color.orange)
+
+plot(vote, "EGXT_ADL_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_ADL_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_ADL_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "ADL", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-ADL صاعد", "EGX Tool ADL: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-ADL هابط", "EGX Tool ADL: vote هابط")

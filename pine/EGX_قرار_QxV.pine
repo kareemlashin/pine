@@ -1,0 +1,140 @@
+//@version=6
+indicator("EGX قرar × فوليوم — توافق", shorttitle="EGX Q×V", overlay=true, max_tables_count=2, calc_bars_count=5000)
+
+// مقارنة EGXQ (قرar) مع Vol Rank + B1 proxy · plots: EGXQV_*
+// فلتر: EGXQV_Agree=1 · EGXQV_QBuy=1 · EGXQV_VolPass=1
+
+string mode = input.string("PRO موحّد", "قرar", options=["PRO موحّد", "عدّاء استثمار", "EGX يومي", "فلسي EGX"])
+bool onClose = input.bool(true, "إغلاق الشمعة", group="EGX")
+float minVolRank = input.float(58.0, "Vol Rank ≥", minval=40, maxval=90, group="EGX")
+float volNetMin = input.float(52.0, "Net buy % ≥ (B1)", minval=45, maxval=60, group="EGX")
+int volLook = input.int(400, "نافذة B1", minval=80, maxval=800, group="EGX")
+string bench = input.symbol("EGX:EGX30", "EGX30", group="EGX")
+bool useMktHalt100 = input.bool(true, "EGX100 halt", group="EGX")
+bool blockBearQ = input.bool(true, "ضغط EGX30", group="EGX")
+
+
+f_mktTrQv() =>
+    int sc = 0
+    float e20 = ta.ema(close, 20)
+    float e50 = ta.ema(close, 50)
+    sc += close > e20 ? 1 : -1
+    sc += e20 > e50 ? 1 : -1
+    sc
+float mom30Qv = request.security(bench, timeframe.period, close[20] > 0 ? (close / close[20] - 1.0) * 100.0 : 0.0, barmerge.gaps_off, barmerge.lookahead_off)
+int tr30Qv = request.security(bench, timeframe.period, f_mktTrQv(), barmerge.gaps_off, barmerge.lookahead_off)
+bool heavySellQv = blockBearQ and mom30Qv < -4.0 and tr30Qv <= -1
+float dayPct100Qv = useMktHalt100 ? request.security("EGX:EGX100EWI", "D", close[1] > 0 ? (close - close[1]) / close[1] * 100.0 : 0.0, barmerge.gaps_off, barmerge.lookahead_off) : 0.0
+bool mktHalt100Qv = useMktHalt100 and dayPct100Qv <= -10.0
+bool regimeOkQv = not heavySellQv and not mktHalt100Qv
+
+bool proMode = mode == "PRO موحّد"
+bool runnerMode = proMode or mode == "عدّاء استثمار" or mode == "فلسي EGX"
+bool pennyMode = mode == "فلسي EGX"
+float effVol = pennyMode ? 400.0 : mode == "EGX يومي" ? 1500.0 : 800.0
+float effAcc = pennyMode ? 50.0 : 55.0
+float effDist = pennyMode ? 52.0 : 50.0
+float effRank = pennyMode ? 55.0 : mode == "EGX يومي" ? 62.0 : 58.0
+float effRR = 1.5
+
+bool sigOk = not onClose or barstate.isconfirmed
+
+float ema21 = ta.ema(close, 21)
+float atr = ta.atr(14)
+float rsi = ta.rsi(close, 14)
+float volMa = ta.sma(volume, 20)
+bool liqOk = volMa >= effVol
+float rvol = volume / math.max(volMa, 1.0)
+
+float cmf = ta.sma(((close - low) - (high - close)) / math.max(high - low, syminfo.mintick) * volume, 20) / ta.sma(volume, 20)
+float obvSl = ta.linreg(ta.obv, 10, 0) - ta.linreg(ta.obv, 10, 1)
+bool accOk = cmf > 0 and obvSl > 0
+float acc = math.min(100.0, (accOk ? 40.0 : 0.0) + (cmf > 0 ? 20.0 : 0.0))
+float dist = math.min(100.0, (cmf < 0 and obvSl < 0 ? 40.0 : 0.0))
+
+var float sl = na
+if not na(ta.pivotlow(low, 8, 8))
+    sl := ta.pivotlow(low, 8, 8)
+bool supBr = sigOk and not na(sl) and close < sl and close[1] >= sl
+float zw = atr * 0.35
+bool atZ = low <= nz(sl, low) + zw and close >= nz(sl, low) - zw * 1.2
+bool ret = sigOk and not na(sl) and low <= sl * 1.006 and close > sl
+float hi252 = ta.highest(high, 252)
+bool chase = hi252 > 0 and (close - hi252) / hi252 * 100.0 > -3 and rsi > 72
+
+float dPrevQ = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+float dayPctQ = dPrevQ > 0 ? (close - dPrevQ) / dPrevQ * 100.0 : 0.0
+float haltPctQ = pennyMode ? 5.0 : 10.0
+float luldPctQ = pennyMode ? 10.0 : 20.0
+bool nearLimit = dayPctQ >= math.min(9.0, haltPctQ - 1.0) or dayPctQ >= luldPctQ - 0.25
+bool rs = ta.roc(close, 20) - request.security(bench, timeframe.period, ta.roc(close, 20), barmerge.gaps_off, barmerge.lookahead_off) > 0
+float rank = math.min(100.0, acc * 0.5 + (100.0 - dist) * 0.3 + (rs ? 12.0 : 0.0))
+float rr = atr / math.max(atr * 0.6, syminfo.mintick)
+
+bool qBuy = sigOk and liqOk and acc >= effAcc and dist < effDist and (atZ or ret) and not supBr and not chase and rank >= effRank and rr >= effRR and not nearLimit
+
+float pct = ta.percentrank(volume, 500)
+float z = (volume - volMa) / math.max(ta.stdev(volume, 20), 1.0)
+float bRvol = request.security(bench, timeframe.period, volume / math.max(ta.sma(volume, 20), 1.0), barmerge.gaps_off, barmerge.lookahead_off)
+float rsV = bRvol > 0 ? rvol / bRvol : 1.0
+float rng = math.max(high - low, syminfo.mintick)
+float buyPct = (close - low) / rng * 100.0
+float volScore = 0.0
+volScore += math.min(pct, 100.0) * 0.22
+volScore += math.min(rvol, 3.0) / 3.0 * 100.0 * 0.18
+volScore += math.min(math.max(z, 0), 4.0) / 4.0 * 100.0 * 0.12
+volScore += math.min(rsV, 2.0) / 2.0 * 100.0 * 0.15
+volScore += buyPct * 0.12
+volScore += cmf > 0 ? 10.0 : -5.0
+volScore += obvSl > 0 ? 8.0 : -4.0
+volScore := math.max(0.0, math.min(100.0, volScore))
+bool volPass = volScore >= minVolRank and volMa >= 500
+
+int bins = 24
+float lo = ta.lowest(low, volLook)
+float hi = ta.highest(high, volLook)
+float step = math.max((hi - lo) / bins, syminfo.mintick)
+float tB = 0.0
+float tS = 0.0
+for i = 0 to math.min(volLook - 1, 399)
+    float bV = volume[i]
+    float rngI = math.max(high[i] - low[i], syminfo.mintick)
+    float bp = (close[i] - low[i]) / rngI
+    tB += bV * bp
+    tS += bV * (1.0 - bp)
+float netBuy = tB + tS > 0 ? tB / (tB + tS) * 100.0 : 50.0
+bool b1Ok = netBuy >= volNetMin and dist < 55 and (atZ or low <= nz(sl, low) + atr * 0.5)
+
+bool vBuy = volPass and (b1Ok or (rvol >= 1.2 and close > open and accOk))
+bool agree = (qBuy and vBuy) and regimeOkQv
+bool qOnly = qBuy and not vBuy
+bool vOnly = vBuy and not qBuy
+
+var table tb = table.new(position.top_left, 2, 6, bgcolor=color.new(#0d1117, 10), border_width=1)
+if barstate.islast
+    table.clear(tb, 0, 0, 1, 5)
+    table.cell(tb, 0, 0, "EGX Q×V", text_color=color.white, text_size=size.small)
+    table.cell(tb, 1, 0, syminfo.ticker, text_color=color.yellow, text_size=size.tiny)
+    table.cell(tb, 0, 1, "قرar", text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 1, 1, qBuy ? "✅" : "—", text_color=qBuy ? color.lime : color.gray, text_size=size.small)
+    table.cell(tb, 0, 2, "Vol", text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 1, 2, str.tostring(volScore, "#") + (vBuy ? " ✅" : ""), text_color=vBuy ? color.teal : color.gray, text_size=size.small)
+    table.cell(tb, 0, 3, "Net/B1", text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 1, 3, str.tostring(netBuy, "#") + "%", text_color=b1Ok ? color.lime : color.gray, text_size=size.tiny)
+    table.cell(tb, 0, 4, agree ? "🟢 توافق" : qOnly ? "Q فقط" : vOnly ? "V فقط" : "⚪", text_color=agree ? color.lime : color.orange, text_size=size.small)
+
+bgcolor(agree ? color.new(color.lime, 97) : na)
+plotshape(agree, "Agree", shape.circle, location.belowbar, color.lime, size=size.tiny)
+
+plot(qBuy ? 1 : 0, "EGXQV_QBuy", display=display.data_window)
+plot(vBuy ? 1 : 0, "EGXQV_VBuy", display=display.data_window)
+plot(agree ? 1 : 0, "EGXQV_Agree", display=display.data_window)
+plot(volPass ? 1 : 0, "EGXQV_VolPass", display=display.data_window)
+plot(volScore, "EGXQV_VolRank", display=display.data_window)
+plot(b1Ok ? 1 : 0, "EGXQV_InB1", display=display.data_window)
+plot(netBuy, "EGXQV_NetBuy", display=display.data_window)
+plot(1, "EGXQV", display=display.data_window)
+
+alertcondition(agree, "EGX Q×V — توافق", "{{ticker}}: Q×V agree BUY")
+
+plot(regimeOkQv ? 1 : 0, "EGX_RegimeOk", display=display.all)

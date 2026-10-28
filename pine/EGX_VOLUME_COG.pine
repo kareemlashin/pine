@@ -1,0 +1,44 @@
+//@version=6
+indicator("EGX Volume COG — rolling VWAP line", shorttitle="EGX VCOG", overlay=true, max_lines_count=20, max_tables_count=2, calc_bars_count=5000)
+
+// مركز ثقل حجم (VWAP متحرك) vs السعر · docs/EGX_VOLUME.md
+
+string G = "COG"
+int win = input.int(50, "نافذة", minval=20, maxval=400, group=G)
+bool showBand = input.bool(true, "±ATR band", group=G)
+float bandMult = input.float(1.0, "Band ATR", group=G)
+
+float sumPv = 0.0
+float sumV = 0.0
+for i = 0 to win - 1
+    float tp = hlc3[i]
+    sumPv += tp * volume[i]
+    sumV += volume[i]
+
+float cog = sumV > 0 ? sumPv / sumV : na
+float atr = ta.atr(14)
+float up = cog + atr * bandMult
+float dn = cog - atr * bandMult
+
+bool above = close > cog
+bool crossUp = ta.crossover(close, cog)
+bool crossDn = ta.crossunder(close, cog)
+
+plot(cog, "COG", color=color.fuchsia, linewidth=2)
+plot(showBand ? up : na, "COG+", color=color.new(color.gray, 60))
+plot(showBand ? dn : na, "COG-", color=color.new(color.gray, 60))
+
+plotshape(crossUp, "X↑", shape.triangleup, location.belowbar, color=color.lime, size=size.tiny)
+plotshape(crossDn, "X↓", shape.triangledown, location.abovebar, color=color.red, size=size.tiny)
+
+var table t = table.new(position.top_right, 2, 3, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 2)
+    table.cell(t, 0, 0, "COG", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, above ? "Price↑" : "Price↓", text_color=above ? color.lime : color.red, text_size=size.tiny)
+    table.cell(t, 0, 1, "Dist%", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 1, cog > 0 ? str.tostring((close - cog) / cog * 100.0, "#.##") : "—", text_size=size.tiny)
+
+plot(above ? 1 : 0, "EGVCog_Above", display=display.all)
+plot(crossUp ? 1 : 0, "EGVCog_CrossUp", display=display.all)
+plot(crossDn ? 1 : 0, "EGVCog_CrossDn", display=display.all)

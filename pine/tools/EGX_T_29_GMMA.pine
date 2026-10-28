@@ -1,0 +1,24 @@
+//@version=6
+indicator("EGX Tool 29 غابي GMMA — Guppy MMA", shorttitle="EGX T-GMMA", overlay=true, max_labels_count=80, max_lines_count=80, max_boxes_count=40, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة ب الاتجاه · #29/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+float gS = (ta.ema(close, 3) + ta.ema(close, 5) + ta.ema(close, 8) + ta.ema(close, 10) + ta.ema(close, 12) + ta.ema(close, 15)) / 6.0
+float gL = (ta.ema(close, 30) + ta.ema(close, 35) + ta.ema(close, 40) + ta.ema(close, 45) + ta.ema(close, 50) + ta.ema(close, 60)) / 6.0
+int vote = gS > gL and close > gS ? 1 : gS < gL and close < gS ? -1 : 0
+plot(gS, "EGXT_GMMA_S", color=color.lime, linewidth=2)
+plot(gL, "EGXT_GMMA_L", color=color.red, linewidth=2)
+
+plot(vote, "EGXT_GMMA_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_GMMA_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_GMMA_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "GMMA", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-GMMA صاعد", "EGX Tool GMMA: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-GMMA هابط", "EGX Tool GMMA: vote هابط")

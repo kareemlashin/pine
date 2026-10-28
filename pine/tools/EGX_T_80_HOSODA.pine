@@ -1,0 +1,38 @@
+//@version=6
+indicator("EGX Tool 80 هوسودا — Ichimoku NT/N targets", shorttitle="EGX T-HOSODA", overlay=true, max_labels_count=80, max_lines_count=80, max_boxes_count=40, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة و موجات · #80/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+int len = input.int(8, "Swing")
+float ph = ta.pivothigh(high, len, len)
+float pl = ta.pivotlow(low, len, len)
+var float a = na
+var float b = na
+var float c = na
+if not na(pl)
+    a := b
+    b := c
+    c := pl
+if not na(ph)
+    a := b
+    b := c
+    c := ph
+float nt = not na(a) and not na(b) and not na(c) ? c + (c - a) : na
+float nT = not na(a) and not na(c) ? 2.0 * c - a : na
+int vote = not na(nt) and close < nt and close > nz(b, close) ? 1 : not na(nt) and close > nt ? -1 : 0
+plot(nt, "NT", color=color.orange, style=plot.style_linebr)
+plot(nT, "N", color=color.yellow, style=plot.style_linebr)
+
+plot(vote, "EGXT_HOSODA_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_HOSODA_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_HOSODA_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "HOSODA", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-HOSODA صاعد", "EGX Tool HOSODA: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-HOSODA هابط", "EGX Tool HOSODA: vote هابط")

@@ -1,0 +1,33 @@
+//@version=6
+indicator("EGX Volume MA Cross", shorttitle="EGX VX", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// تقاطع MA حجم سريع/بطيء · docs/EGX_VOLUME.md
+
+string G = "MA"
+int fast = input.int(5, "Fast", minval=2, group=G)
+int slow = input.int(20, "Slow", minval=5, group=G)
+float minRvol = input.float(1.0, "Min RVOL on cross", group=G)
+
+float vf = ta.sma(volume, fast)
+float vs = ta.sma(volume, slow)
+float rvol = volume / math.max(vs, 1.0)
+
+bool bullX = ta.crossover(vf, vs) and rvol >= minRvol and close >= open
+bool bearX = ta.crossunder(vf, vs) and rvol >= minRvol and close <= open
+bool expand = vf > vs * 1.05
+
+plot(volume, "V", style=plot.style_columns, color=color.new(color.gray, 70))
+plot(vf, "Vol fast", color=color.lime, linewidth=2)
+plot(vs, "Vol slow", color=color.orange, linewidth=2)
+
+var table t = table.new(position.top_right, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "Vol MA X", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, expand ? "Expand" : "—", text_size=size.tiny)
+
+plot(bullX ? 1 : 0, "EGVVX_BullX", display=display.all)
+plot(bearX ? 1 : 0, "EGVVX_BearX", display=display.all)
+plot(expand ? 1 : 0, "EGVVX_Expand", display=display.all)
+
+alertcondition(bullX, "Vol MA bull", "Volume MA bullish cross")

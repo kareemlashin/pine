@@ -1,0 +1,25 @@
+//@version=6
+indicator("EGX Tool 44 NVI — Negative Volume Index", shorttitle="EGX T-NVI", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة ج الحجم · #44/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+var float nvi = 1000.0
+nvi := volume < volume[1] ? nz(nvi[1]) * (1.0 + ta.change(close) / math.max(close[1], syminfo.mintick)) : nz(nvi[1], 1000.0)
+float sig = ta.ema(nvi, 255)
+int vote = nvi > sig ? 1 : -1
+plot(nvi, "EGXT_NVI", color=color.aqua, linewidth=2)
+plot(sig, "EGXT_NVI_EMA", color=color.orange)
+
+plot(vote, "EGXT_NVI_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_NVI_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_NVI_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "NVI", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-NVI صاعد", "EGX Tool NVI: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-NVI هابط", "EGX Tool NVI: vote هابط")

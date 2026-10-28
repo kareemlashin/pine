@@ -1,0 +1,29 @@
+//@version=6
+indicator("EGX Tool 93 هرست — Hurst-like cycle", shorttitle="EGX T-HURST", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة ز أنظمة · #93/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+int len = input.int(32, "R/S")
+float mu = ta.sma(close, len)
+float dev = close - mu
+float z = ta.cum(dev) - ta.sma(ta.cum(dev), len)
+float rng = ta.highest(z, len) - ta.lowest(z, len)
+float sd = ta.stdev(close, len)
+float rs = sd > 0 ? rng / sd : 0.0
+int vote = rs > 1.2 and close > mu ? 1 : rs > 1.2 and close < mu ? -1 : 0
+plot(rs, "EGXT_HURST", color=color.purple, linewidth=2)
+hline(1, "1", color=color.gray)
+
+plot(vote, "EGXT_HURST_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_HURST_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_HURST_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "HURST", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-HURST صاعد", "EGX Tool HURST: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-HURST هابط", "EGX Tool HURST: vote هابط")

@@ -1,0 +1,30 @@
+//@version=6
+indicator("EGX Volume / ATR — efficiency", shorttitle="EGX VATR", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// حجم لكل وحدة ATR · docs/EGX_VOLUME.md
+
+string G = "V/ATR"
+int atrLen = input.int(14, "ATR", group=G)
+int maLen = input.int(20, "MA ratio", group=G)
+float minRatio = input.float(1.2, "Hot vs MA", step=0.05, group=G)
+
+float atr = ta.atr(atrLen)
+float ratio = volume / math.max(atr, syminfo.mintick)
+float ratioMa = ta.sma(ratio, maLen)
+float rel = ratio / math.max(ratioMa, 1.0)
+
+bool hot = rel >= minRatio and close >= open
+bool cold = rel <= 1.0 / minRatio
+
+plot(ratio, "V/ATR", color=color.orange, linewidth=2)
+plot(ratioMa, "MA", color=color.gray, linewidth=1)
+plot(rel, "Rel", color=color.lime, linewidth=1)
+
+var table t = table.new(position.top_right, 2, 3, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 2)
+    table.cell(t, 0, 0, "V/ATR", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, hot ? "HOT" : cold ? "COLD" : "—", text_size=size.tiny)
+
+plot(hot ? 1 : 0, "EGVATR_Hot", display=display.all)
+plot(rel, "EGVATR_Rel", display=display.all)

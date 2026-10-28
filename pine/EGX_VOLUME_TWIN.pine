@@ -1,0 +1,40 @@
+//@version=6
+indicator("EGX Volume Twin peaks", shorttitle="EGX VTwn", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// قمتان حجم متقاربتان (توزيع) · docs/EGX_VOLUME.md
+
+string G = "Twin"
+int left = input.int(3, "Pivot L", group=G)
+int right = input.int(3, "Pivot R", group=G)
+float tol = input.float(0.12, "Peak tol %", step=0.02, group=G)
+int maxBars = input.int(12, "Max bars apart", group=G)
+
+float ph = ta.pivothigh(volume, left, right)
+var float lastPk = na
+var int lastBi = na
+bool twin = false
+
+if not na(ph)
+    float pk = volume[right]
+    if not na(lastPk) and bar_index - lastBi <= maxBars
+        float diff = math.abs(pk - lastPk) / math.max(lastPk, 1.0)
+        if diff <= tol
+            twin := true
+    lastPk := pk
+    lastBi := bar_index - right
+
+bool twinBear = twin and close < open and close < ta.sma(close, 20)
+bool twinBull = twin and close > open and close > ta.sma(close, 20)
+
+plot(volume, "V", style=plot.style_columns, color=color.new(twin ? color.orange : color.gray, 60))
+plotshape(twin, "Twin", shape.diamond, location=location.top, color=color.orange, size=size.small, offset=-right)
+
+var table t = table.new(position.top_right, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "Twin V", bgcolor=color.black, text_color=color.orange, text_size=size.small)
+    table.cell(t, 1, 0, twin ? "YES" : "—", text_size=size.tiny)
+
+plot(twin ? 1 : 0, "EGVTwn_Any", display=display.all)
+plot(twinBull ? 1 : 0, "EGVTwn_Bull", display=display.all)
+plot(twinBear ? 1 : 0, "EGVTwn_Bear", display=display.all)

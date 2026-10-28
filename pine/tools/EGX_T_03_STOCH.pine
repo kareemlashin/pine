@@ -1,0 +1,28 @@
+//@version=6
+indicator("EGX Tool 03 ستوكاستك — Stochastic", shorttitle="EGX T-STOCH", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة أ الزخم · #03/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+int kLen = input.int(14, "%K")
+int dLen = input.int(3, "%D")
+k = ta.sma(ta.stoch(close, high, low, kLen), 3)
+d = ta.sma(k, dLen)
+int vote = k > d and k < 80 ? 1 : k < d and k > 20 ? -1 : 0
+plot(k, "EGXT_STOCH_K", color=color.teal, linewidth=2)
+plot(d, "EGXT_STOCH_D", color=color.orange, linewidth=1)
+hline(80, "80", color=color.red)
+hline(20, "20", color=color.lime)
+
+plot(vote, "EGXT_STOCH_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_STOCH_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_STOCH_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "STOCH", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-STOCH صاعد", "EGX Tool STOCH: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-STOCH هابط", "EGX Tool STOCH: vote هابط")

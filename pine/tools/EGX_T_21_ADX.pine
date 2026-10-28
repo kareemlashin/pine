@@ -1,0 +1,26 @@
+//@version=6
+indicator("EGX Tool 21 ADX/DMI — ADX DMI", shorttitle="EGX T-ADX", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة ب الاتجاه · #21/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+int len = input.int(14, "ADX")
+[diP, diM, adx] = ta.dmi(len, len)
+int vote = adx > 20 and diP > diM ? 1 : adx > 20 and diM > diP ? -1 : 0
+plot(adx, "EGXT_ADX", color=color.yellow, linewidth=2)
+plot(diP, "EGXT_DI+", color=color.lime)
+plot(diM, "EGXT_DI-", color=color.red)
+hline(25, "25", color=color.gray)
+
+plot(vote, "EGXT_ADX_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_ADX_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_ADX_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "ADX", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-ADX صاعد", "EGX Tool ADX: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-ADX هابط", "EGX Tool ADX: vote هابط")

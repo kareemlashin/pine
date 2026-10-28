@@ -1,0 +1,977 @@
+//@version=6
+indicator("EGX الشامل الزمني — كريم", shorttitle="EGX زمني", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=300)
+
+// ============================================================
+// الإعدادات
+// ============================================================
+gGen = "الإعدادات العامة"
+pivLen    = input.int(8, "طول السوينج (القمم والقيعان)", minval=2, group=gGen)
+atrMult   = input.float(2.0, "وقف احتياطي = ATR ×", minval=0.5, step=0.25, group=gGen)
+sigMin    = input.float(20.0, "حد السكور المطلوب للشراء (%)", minval=5, maxval=80, group=gGen)
+capital   = input.float(100000.0, "رأس المال (جنيه)", minval=1000.0, group=gGen)
+riskPct   = input.float(1.0, "نسبة المخاطرة لكل صفقة %", minval=0.1, maxval=10.0, step=0.1, group=gGen)
+feePct    = input.float(0.4, "عمولة ذهاب وإياب % (غيّرها حسب شركتك)", minval=0.0, step=0.05, group=gGen)
+showTable = input.bool(true, "إظهار لوحة المعلومات", group=gGen)
+showSig   = input.bool(true, "إظهار علامات الشراء والخروج", group=gGen)
+
+gTime = "التحليل الزمني"
+showTime  = input.bool(true, "رسم نوافذ الانعكاس المتوقعة", group=gTime)
+majLook   = input.int(120, "مدى القمة والقاع الكبير (شمعة)", minval=30, group=gTime)
+tolBars   = input.int(2, "تسامح التوافق الزمني (± شمعة)", minval=0, maxval=8, group=gTime)
+minSch    = input.int(2, "أقل عدد مدارس متوافقة لعرض النافذة", minval=1, maxval=6, group=gTime)
+useFib    = input.bool(true, "مدرسة فيبوناتشي الزمني", group=gTime)
+useGann   = input.bool(true, "مدرسة جان (دورات بالأيام + ذكرى سنوية)", group=gTime)
+useIch    = input.bool(true, "مدرسة إيشيموكو (أرقام الزمن)", group=gTime)
+useEll    = input.bool(true, "مدرسة إليوت (نسب زمن الموجات)", group=gTime)
+useDow    = input.bool(true, "مدرسة داو (زمن التصحيح الثانوي)", group=gTime)
+useSq     = input.bool(true, "مربع الزمن (جان)", group=gTime)
+showFibTZ = input.bool(true, "رسم خطوط فيبوناتشي الزمنية", group=gTime)
+fibAnchor = input.string("القاع الكبير", "مرساة فيبو الزمني", options=["القاع الكبير", "القمة الكبيرة", "آخر سوينج"], group=gTime)
+idxSym    = input.symbol("EGX:EGX30", "مؤشر السوق لتأكيد داو", group=gTime)
+
+gBox = "الصناديق"
+showDarvas = input.bool(true, "صناديق داروفاس", group=gBox)
+dvLen      = input.int(20, "مدى قمة داروفاس (شمعة)", minval=5, group=gBox)
+dvVol      = input.float(1.3, "حجم الاختراق المطلوب (× المتوسط)", minval=1.0, step=0.1, group=gBox)
+showGBox   = input.bool(true, "صندوق جان (سعر × زمن) على آخر حركة", group=gBox)
+
+gDraw = "الرسم"
+showZZ     = input.bool(true, "خط داو المتعرج + قمم وقيعان", group=gDraw)
+showEllLbl = input.bool(true, "ترقيم موجات إليوت", group=gDraw)
+showDivLbl = input.bool(true, "علامات تباعد A/D", group=gDraw)
+
+gW = "أوزان المجموعات في السكور"
+wTr = input.float(0.25, "اتجاه", minval=0.0, step=0.05, group=gW)
+wMo = input.float(0.20, "زخم", minval=0.0, step=0.05, group=gW)
+wMn = input.float(0.30, "أموال وحجم", minval=0.0, step=0.05, group=gW)
+wSt = input.float(0.25, "هيكل ومدارس", minval=0.0, step=0.05, group=gW)
+
+// ============================================================
+// دوال مساعدة
+// ============================================================
+f_add(array<float> pr, array<int> bars, array<int> ty, float price, int bar, int typ) =>
+    int n = array.size(ty)
+    if n > 0 and array.get(ty, n - 1) == typ
+        float lastP = array.get(pr, n - 1)
+        if (typ == 1 and price > lastP) or (typ == -1 and price < lastP)
+            array.set(pr, n - 1, price)
+            array.set(bars, n - 1, bar)
+    else
+        array.push(pr, price)
+        array.push(bars, bar)
+        array.push(ty, typ)
+        if array.size(ty) > 40
+            array.shift(pr)
+            array.shift(bars)
+            array.shift(ty)
+    true
+
+f_idx(array<int> ty, int typ, int nth) =>
+    int res = -1
+    int cnt = 0
+    int sz = array.size(ty)
+    if sz > 0
+        for i = sz - 1 to 0
+            if array.get(ty, i) == typ
+                if cnt == nth
+                    res := i
+                    break
+                cnt += 1
+    res
+
+f_val(array<float> pr, int i) =>
+    i >= 0 ? array.get(pr, i) : float(na)
+
+f_imp(array<float> pr, array<int> ty, int endI, int cnt) =>
+    int res = 0
+    int st = endI - cnt + 1
+    if st >= 0 and endI < array.size(ty)
+        int s = array.get(ty, st) == -1 ? 1 : -1
+        float v0 = s * array.get(pr, st)
+        float v1 = s * array.get(pr, st + 1)
+        float v2 = s * array.get(pr, st + 2)
+        float v3 = s * array.get(pr, st + 3)
+        float v4 = s * array.get(pr, st + 4)
+        float w1 = v1 - v0
+        float w3 = v3 - v2
+        bool ok = v2 > v0 and v3 > v1 and v4 > v1 and w1 > 0 and w3 > 0
+        if cnt == 6
+            float v5 = s * array.get(pr, st + 5)
+            float w5 = v5 - v4
+            ok := ok and w5 > 0 and w3 >= math.min(w1, w5)
+        else
+            ok := ok and w3 > w1
+        if ok
+            res := s
+    res
+
+f_ell(array<float> pr, array<int> ty) =>
+    int n = array.size(ty)
+    int code = 0
+    int s6 = f_imp(pr, ty, n - 1, 6)
+    if s6 != 0
+        code := 6 * s6
+    else
+        int s5 = f_imp(pr, ty, n - 1, 5)
+        if s5 != 0
+            code := 5 * s5
+        else if n >= 9
+            int s9 = f_imp(pr, ty, n - 4, 6)
+            if s9 != 0
+                float p5 = s9 * array.get(pr, n - 4)
+                float pa = s9 * array.get(pr, n - 3)
+                float pb = s9 * array.get(pr, n - 2)
+                float pc = s9 * array.get(pr, n - 1)
+                if pa < p5 and pb > pa and pb < p5 and pc < pa
+                    code := 9 * s9
+    code
+
+f_clr_lines(array<line> a) =>
+    for l in a
+        line.delete(l)
+    array.clear(a)
+    true
+
+f_clr_labels(array<label> a) =>
+    for l in a
+        label.delete(l)
+    array.clear(a)
+    true
+
+f_clr_boxes(array<box> a) =>
+    for b in a
+        box.delete(b)
+    array.clear(a)
+    true
+
+f_sig(int v) =>
+    v > 0 ? "▲ شراء" : v < 0 ? "▼ بيع" : "— محايد"
+
+f_sigc(int v) =>
+    v > 0 ? color.new(color.green, 30) : v < 0 ? color.new(color.red, 30) : color.new(color.gray, 50)
+
+// مللي ثانية لكل شمعة (تقريب تقويمي: اليومي = 1.4 يوم تقويمي لأن البورصة 5 أيام من 7)
+f_msper() =>
+    float d = timeframe.isdaily ? timeframe.multiplier * 1.4 * 86400000.0 : timeframe.isweekly ? timeframe.multiplier * 7.0 * 86400000.0 : timeframe.ismonthly ? timeframe.multiplier * 30.4375 * 86400000.0 : timeframe.in_seconds() * 1000.0
+    d
+
+f_date(int ahead, float msPer) =>
+    str.format_time(time + int(ahead * msPer), "yyyy-MM-dd", "Africa/Cairo")
+
+// إضافة هدف زمني لقائمة التوقعات (المدرسة: 1 فيبو، 2 جان، 3 إيشيموكو، 4 إليوت، 5 داو، 6 مربع الزمن، 7 ذكرى سنوية)
+f_prj(array<int> pb, array<int> ps, int target, int school) =>
+    if target > bar_index and target <= bar_index + 450
+        array.push(pb, target)
+        array.push(ps, school)
+    true
+
+f_taken(array<int> arr, int v, int d) =>
+    bool res = false
+    int sz = array.size(arr)
+    if sz > 0
+        for i = 0 to sz - 1
+            if math.abs(array.get(arr, i) - v) <= d
+                res := true
+    res
+
+// تجميع: كم مدرسة مختلفة وكم توقع خام حوالين تاريخ معين
+f_cluster(array<int> pb, array<int> ps, int center, int tol) =>
+    array<bool> seen = array.new<bool>(8, false)
+    int raw = 0
+    for j = 0 to array.size(pb) - 1
+        if math.abs(array.get(pb, j) - center) <= tol
+            raw += 1
+            array.set(seen, array.get(ps, j), true)
+    names = array.from("", "فيبو", "جان", "إيشيموكو", "إليوت", "داو", "مربع الزمن", "ذكرى سنوية")
+    int sch = 0
+    string txt = ""
+    for k = 1 to 7
+        if array.get(seen, k)
+            sch += 1
+            txt += (txt == "" ? "" : "+") + array.get(names, k)
+    [sch, raw, txt]
+
+f_trend() =>
+    float e50 = ta.ema(close, 50)
+    float e200 = ta.ema(close, 200)
+    int t = close > e50 and e50 > e200 ? 1 : close < e50 and e50 < e200 ? -1 : 0
+    t
+
+f_hdr(table t, int r, string txt) =>
+    table.cell(t, 0, r, txt, text_color=color.white, bgcolor=color.new(color.navy, 0), text_size=size.small, text_halign=text.align_center)
+    table.merge_cells(t, 0, r, 3, r)
+    true
+
+f_kv(table t, int r, string k1, string v1, color c1, string k2, string v2, color c2) =>
+    table.cell(t, 0, r, k1, text_color=color.white, bgcolor=color.new(color.gray, 75), text_size=size.tiny, text_halign=text.align_right)
+    table.cell(t, 1, r, v1, text_color=color.white, bgcolor=c1, text_size=size.tiny)
+    table.cell(t, 2, r, k2, text_color=color.white, bgcolor=color.new(color.gray, 75), text_size=size.tiny, text_halign=text.align_right)
+    table.cell(t, 3, r, v2, text_color=color.white, bgcolor=c2, text_size=size.tiny)
+    true
+
+f_wide(table t, int r, string txt, color c) =>
+    table.cell(t, 0, r, txt, text_color=color.white, bgcolor=c, text_size=size.tiny, text_halign=text.align_right)
+    table.merge_cells(t, 0, r, 3, r)
+    true
+
+// ============================================================
+// القمم والقيعان
+// ============================================================
+var pP = array.new<float>()
+var pB = array.new<int>()
+var pT = array.new<int>()
+
+float phV = ta.pivothigh(high, pivLen, pivLen)
+float plV = ta.pivotlow(low, pivLen, pivLen)
+if not na(phV)
+    f_add(pP, pB, pT, phV, bar_index - pivLen, 1)
+if not na(plV)
+    f_add(pP, pB, pT, plV, bar_index - pivLen, -1)
+
+int nP = array.size(pT)
+int hiI1 = f_idx(pT, 1, 0)
+int hiI2 = f_idx(pT, 1, 1)
+int loI1 = f_idx(pT, -1, 0)
+int loI2 = f_idx(pT, -1, 1)
+float hi1 = f_val(pP, hiI1)
+float hi2 = f_val(pP, hiI2)
+float lo1 = f_val(pP, loI1)
+float lo2 = f_val(pP, loI2)
+
+// ============================================================
+// أساسيات
+// ============================================================
+atrV   = ta.atr(14)
+ema20  = ta.ema(close, 20)
+ema50  = ta.ema(close, 50)
+ema200 = ta.ema(close, 200)
+volMa  = ta.sma(volume, 20)
+relVol = volMa > 0 ? volume / volMa : 1.0
+rsiV   = ta.rsi(close, 14)
+hi52   = ta.highest(high, 250)
+lo52   = ta.lowest(low, 250)
+majHi  = ta.highest(high, majLook)
+majLo  = ta.lowest(low, majLook)
+majHiB = bar_index + ta.highestbars(high, majLook)
+majLoB = bar_index + ta.lowestbars(low, majLook)
+yTop   = ta.highest(high, 60)
+yBot   = ta.lowest(low, 60)
+upVolAvg = ta.sma(close > open ? volume : 0.0, 20)
+dnVolAvg = ta.sma(close < open ? volume : 0.0, 20)
+chopV  = 100 * math.log10(math.sum(ta.tr, 14) / math.max(ta.highest(high, 14) - ta.lowest(low, 14), syminfo.mintick)) / math.log10(14)
+float msPer = f_msper()
+float dpb = msPer / 86400000.0
+int idxTrend = request.security(idxSym, timeframe.period, f_trend())
+
+// الشموع
+body = math.abs(close - open)
+rng  = high - low
+upSh = high - math.max(open, close)
+loSh = math.min(open, close) - low
+bullEng = close > open and close[1] < open[1] and close >= open[1] and open <= close[1] and body > body[1]
+bearEng = close < open and close[1] > open[1] and close <= open[1] and open >= close[1] and body > body[1]
+hammer  = rng > 0 and body > 0 and body <= 0.35 * rng and loSh >= 2 * body and upSh <= 0.3 * rng and close < ema20
+shoot   = rng > 0 and body > 0 and body <= 0.35 * rng and upSh >= 2 * body and loSh <= 0.3 * rng and close > ema20
+morningS = close[2] < open[2] and math.abs(close[1] - open[1]) <= 0.3 * (high[1] - low[1]) and close > open and close > (open[2] + close[2]) / 2
+eveningS = close[2] > open[2] and math.abs(close[1] - open[1]) <= 0.3 * (high[1] - low[1]) and close < open and close < (open[2] + close[2]) / 2
+bullBasic = bullEng or hammer or morningS
+bearBasic = bearEng or shoot or eveningS
+
+// ============================================================
+// المؤشرات الضخمة (29 مؤشر في 4 مجموعات)
+// ============================================================
+// --- مجموعة الاتجاه ---
+gS = (ta.ema(close, 3) + ta.ema(close, 5) + ta.ema(close, 8) + ta.ema(close, 10) + ta.ema(close, 12) + ta.ema(close, 15)) / 6
+gL = (ta.ema(close, 30) + ta.ema(close, 35) + ta.ema(close, 40) + ta.ema(close, 45) + ta.ema(close, 50) + ta.ema(close, 60)) / 6
+int vGMMA = gS > gL and close > gS ? 1 : gS < gL and close < gS ? -1 : 0
+
+lrS = ta.linreg(close, 50, 0) - ta.linreg(close, 50, 1)
+lrPct = lrS / close * 100
+int vLR = lrPct > 0.05 ? 1 : lrPct < -0.05 ? -1 : 0
+
+alV = ta.alma(close, 20, 0.85, 6)
+int vALMA = close > alV and alV > alV[1] ? 1 : close < alV and alV < alV[1] ? -1 : 0
+
+haC = (open + high + low + close) / 4
+float haO = na
+haO := na(haO[1]) ? (open + close) / 2 : (haO[1] + haC[1]) / 2
+int vHA = haC > haO and haC[1] > haO[1] ? 1 : haC < haO and haC[1] < haO[1] ? -1 : 0
+
+ema13 = ta.ema(close, 13)
+bullP = high - ema13
+bearP = low - ema13
+int vElder = ema13 > ema13[1] and bearP < 0 and bearP > bearP[1] ? 1 : ema13 < ema13[1] and bullP > 0 and bullP < bullP[1] ? -1 : 0
+
+vmP = math.sum(math.abs(high - low[1]), 14)
+vmM = math.sum(math.abs(low - high[1]), 14)
+trSum = math.max(math.sum(ta.tr, 14), syminfo.mintick)
+viP = vmP / trSum
+viM = vmM / trSum
+int vVortex = viP > viM ? 1 : -1
+
+rp = hi52 != lo52 ? (close - lo52) / (hi52 - lo52) : 0.5
+int vRP = rp > 0.6 ? 1 : rp < 0.4 ? -1 : 0
+
+// --- مجموعة الزخم ---
+srK = ta.sma(ta.stoch(rsiV, rsiV, rsiV, 14), 3)
+srD = ta.sma(srK, 3)
+srCross = ta.crossover(srK, srD)
+bool srUp = srCross and srK < 30
+int vSR = srK > srD and srK < 80 ? 1 : srK < srD and srK > 20 ? -1 : 0
+
+rocV = ta.roc(close, 12)
+int vROC = rocV > 1 ? 1 : rocV < -1 ? -1 : 0
+
+trixV = 10000 * ta.change(ta.ema(ta.ema(ta.ema(math.log(close), 15), 15), 15))
+trixSig = ta.sma(trixV, 9)
+int vTRIX = trixV > trixSig and trixV > 0 ? 1 : trixV < trixSig and trixV < 0 ? -1 : 0
+
+tsiV = ta.tsi(close, 13, 25)
+tsiSig = ta.ema(tsiV, 13)
+int vTSI = tsiV > tsiSig and tsiV > 0 ? 1 : tsiV < tsiSig and tsiV < 0 ? -1 : 0
+
+bpV = close - math.min(low, close[1])
+trR = math.max(high, close[1]) - math.min(low, close[1])
+a7 = math.sum(bpV, 7) / math.max(math.sum(trR, 7), syminfo.mintick)
+a14 = math.sum(bpV, 14) / math.max(math.sum(trR, 14), syminfo.mintick)
+a28 = math.sum(bpV, 28) / math.max(math.sum(trR, 28), syminfo.mintick)
+uoV = 100 * (4 * a7 + 2 * a14 + a28) / 7
+int vUO = uoV > 55 ? 1 : uoV < 45 ? -1 : 0
+
+copV = ta.wma(ta.roc(close, 14) + ta.roc(close, 11), 10)
+int vCop = copV > 0 and copV > copV[1] ? 1 : copV < 0 and copV < copV[1] ? -1 : 0
+
+fhh = ta.highest(hl2, 10)
+fll = ta.lowest(hl2, 10)
+float fv = 0.0
+fv := 0.66 * ((hl2 - fll) / math.max(fhh - fll, syminfo.mintick) - 0.5) + 0.67 * nz(fv[1])
+fv := math.max(math.min(fv, 0.999), -0.999)
+float fish = na
+fish := 0.5 * math.log((1 + fv) / (1 - fv)) + 0.5 * nz(fish[1])
+int vFish = fish > fish[1] and fish > 0 ? 1 : fish < fish[1] and fish < 0 ? -1 : 0
+
+float streak = 0.0
+streak := close > close[1] ? (nz(streak[1]) > 0 ? nz(streak[1]) + 1 : 1.0) : close < close[1] ? (nz(streak[1]) < 0 ? nz(streak[1]) - 1 : -1.0) : 0.0
+crsi = (ta.rsi(close, 3) + ta.rsi(streak, 2) + ta.percentrank(ta.roc(close, 1), 100)) / 3
+int vCRSI = crsi < 15 ? 1 : crsi > 85 ? -1 : 0
+
+// --- مجموعة الأموال والحجم ---
+adV = ta.accdist
+adEma = ta.ema(adV, 20)
+int vAD = adV > adEma and adV > adV[10] ? 1 : adV < adEma and adV < adV[10] ? -1 : 0
+
+mfm = high != low ? ((close - low) - (high - close)) / (high - low) : 0.0
+cmfV = math.sum(mfm * volume, 20) / math.max(math.sum(volume, 20), 1.0)
+int vCMF = cmfV > 0.05 ? 1 : cmfV < -0.05 ? -1 : 0
+
+choV = ta.ema(adV, 3) - ta.ema(adV, 10)
+int vCho = choV > 0 ? 1 : choV < 0 ? -1 : 0
+
+fiV = ta.ema(ta.change(close) * volume, 13)
+int vForce = fiV > 0 ? 1 : fiV < 0 ? -1 : 0
+
+eomRaw = (high - low) > 0 and volume > 0 ? (hl2 - hl2[1]) / (volume / 1000000.0 / (high - low)) : 0.0
+eomV = ta.sma(eomRaw, 14)
+int vEOM = eomV > 0 ? 1 : eomV < 0 ? -1 : 0
+
+int vVP = relVol >= 1.3 and close > open ? 1 : relVol >= 1.3 and close < open ? -1 : 0
+
+// تباعد A/D عن السعر (المؤشر الأهم عندك: تجميع / توزيع مؤسسي)
+var float apLowP = na
+var float apLowA = na
+var float apHighP = na
+var float apHighA = na
+var int adDivBar = 0
+var int adDivDir = 0
+if not na(plV)
+    float curA = adV[pivLen]
+    if not na(apLowP) and plV < apLowP and curA > apLowA
+        adDivBar := bar_index
+        adDivDir := 1
+        if showDivLbl
+            label.new(bar_index - pivLen, plV, "تجميع: تباعد A/D إيجابي", style=label.style_label_up, color=color.new(color.lime, 20), textcolor=color.black, size=size.tiny)
+    apLowP := plV
+    apLowA := curA
+if not na(phV)
+    float curA2 = adV[pivLen]
+    if not na(apHighP) and phV > apHighP and curA2 < apHighA
+        adDivBar := bar_index
+        adDivDir := -1
+        if showDivLbl
+            label.new(bar_index - pivLen, phV, "توزيع: تباعد A/D سلبي", style=label.style_label_down, color=color.new(color.fuchsia, 20), textcolor=color.white, size=size.tiny)
+    apHighP := phV
+    apHighA := curA2
+int vADdiv = (adDivBar > 0 and bar_index - adDivBar <= 20) ? adDivDir : 0
+
+// --- مجموعة الهيكل والمدارس ---
+int dowState = (hi1 > hi2 and lo1 > lo2) ? 1 : (hi1 < hi2 and lo1 < lo2) ? -1 : 0
+if dowState == 1 and close < lo1
+    dowState := 0
+if dowState == -1 and close > hi1
+    dowState := 0
+int vDow = dowState
+
+int ellCode = f_ell(pP, pT)
+int ellKind = math.abs(ellCode)
+int ellDir  = ellCode > 0 ? 1 : ellCode < 0 ? -1 : 0
+int vEll = ellKind == 5 ? ellDir : ellKind == 6 ? -ellDir : ellKind == 9 ? ellDir : 0
+
+int vFibZ = 0
+if nP >= 2
+    float fa = array.get(pP, nP - 2)
+    float fb = array.get(pP, nP - 1)
+    int flt = array.get(pT, nP - 1)
+    float fHi = math.max(fa, fb)
+    float fLo = math.min(fa, fb)
+    float fRg = fHi - fLo
+    if fRg > 0
+        if flt == 1
+            float rr = (fHi - close) / fRg
+            if rr >= 0.382 and rr <= 0.786
+                vFibZ := 1
+        else
+            float rr2 = (close - fLo) / fRg
+            if rr2 >= 0.382 and rr2 <= 0.786
+                vFibZ := -1
+
+var int msTrend = 0
+var float lastHiBk = na
+var float lastLoBk = na
+if not na(hi1) and close > hi1 and (na(lastHiBk) or hi1 != lastHiBk)
+    lastHiBk := hi1
+    msTrend := 1
+if not na(lo1) and close < lo1 and (na(lastLoBk) or lo1 != lastLoBk)
+    lastLoBk := lo1
+    msTrend := -1
+int vMS = msTrend
+
+gHi = ta.sma(high, 10)
+gLo = ta.sma(low, 10)
+var int gState = 0
+if close > gHi[1]
+    gState := 1
+else if close < gLo[1]
+    gState := -1
+int vGH = gState
+gMid = math.avg(ta.highest(high, 100), ta.lowest(low, 100))
+int vGM = close > gMid ? 1 : -1
+
+// ============================================================
+// صناديق داروفاس
+// ============================================================
+dvH = ta.highest(high, dvLen)
+dvLow4 = ta.lowest(low, 4)
+bool dvNew = showDarvas and dvH[3] > dvH[4] and dvH == dvH[3]
+var float dvTop = na
+var float dvBot = na
+var int dvState = 0
+var box dvBox = na
+bool dvBrkUp = false
+bool dvBrkDn = false
+if dvNew
+    dvTop := dvH
+    dvBot := dvLow4
+    dvState := 0
+    dvBox := box.new(bar_index - 3, dvTop, bar_index, dvBot, border_color=color.new(color.yellow, 20), bgcolor=color.new(color.yellow, 92))
+if not na(dvTop)
+    if dvState <= 0 and close > dvTop
+        dvBrkUp := true
+        dvState := 1
+        if not na(dvBox)
+            box.set_right(dvBox, bar_index)
+            box.set_bgcolor(dvBox, color.new(color.green, 88))
+            box.set_border_color(dvBox, color.new(color.green, 20))
+    else if dvState >= 0 and close < dvBot
+        dvBrkDn := true
+        dvState := -1
+        if not na(dvBox)
+            box.set_right(dvBox, bar_index)
+            box.set_bgcolor(dvBox, color.new(color.red, 88))
+            box.set_border_color(dvBox, color.new(color.red, 20))
+    else if dvState == 0 and not na(dvBox)
+        box.set_right(dvBox, bar_index)
+int vDarvas = dvState
+
+// ============================================================
+// السكور الكلي (بأوزان المجموعات)
+// ============================================================
+int trSumV  = vGMMA + vLR + vALMA + vHA + vElder + vVortex + vRP
+int moSumV  = vSR + vROC + vTRIX + vTSI + vUO + vCop + vFish + vCRSI
+int mnSumV  = vAD + vCMF + vCho + vForce + vEOM + vVP + vADdiv
+int stSumV  = vDow + vEll + vDarvas + vFibZ + vMS + vGH + vGM
+float pctTr = trSumV / 7.0 * 100
+float pctMo = moSumV / 8.0 * 100
+float pctMn = mnSumV / 7.0 * 100
+float pctSt = stSumV / 7.0 * 100
+float wSum = math.max(wTr + wMo + wMn + wSt, 0.0001)
+float totalPct = (pctTr * wTr + pctMo * wMo + pctMn * wMn + pctSt * wSt) / wSum
+bool scoreDn = ta.crossunder(totalPct, -sigMin)
+
+// الوقف المتحرك (شاندلير)
+chLong  = ta.highest(high, 22) - 3.0 * atrV
+chShort = ta.lowest(low, 22) + 3.0 * atrV
+var int chDir = 1
+if close > chShort[1]
+    chDir := 1
+else if close < chLong[1]
+    chDir := -1
+bool chFlipDn = chDir == -1 and chDir[1] == 1
+
+// ============================================================
+// محرك أفضل نقطة شراء وبيع + إحصاء الصفقات السابقة
+// ============================================================
+bool upTrend  = dowState == 1 or (close > ema50 and ema50 > ema200)
+bool locOK    = (upTrend and vFibZ == 1) or (dvBrkUp and relVol >= dvVol)
+bool momOK    = totalPct >= sigMin
+bool moneyOK  = adV > adEma and cmfV > 0
+bool trigOK   = bullBasic or bullBasic[1] or srUp or srUp[1]
+bool volOK    = relVol >= 0.9
+int cnt = (upTrend ? 1 : 0) + (locOK ? 1 : 0) + (momOK ? 1 : 0) + (moneyOK ? 1 : 0) + (trigOK ? 1 : 0) + (volOK ? 1 : 0)
+float dPrevLim = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+float dayPctLim = dPrevLim > 0 ? (close - dPrevLim) / dPrevLim * 100.0 : 0.0
+float haltPctLim = egxBoardLim == "SME تميّز" or egxBoardLim == "SME نايل" or egxBoardLim == "غير نشط" ? 5.0 : 10.0
+float luldPctLim = egxBoardLim == "غير نشط" ? 5.0 : (egxBoardLim == "SME تميّز" or egxBoardLim == "SME نايل" ? 10.0 : 20.0)
+bool nearLimitLim = blockLimitLim and dPrevLim > 0 and (dayPctLim >= math.min(9.0, haltPctLim - 1.0) or dayPctLim >= luldPctLim - 0.25)
+
+bool buyA = cnt >= 5 and locOK and moneyOK and not nearLimitLim
+bool buyB = not buyA and cnt >= 4 and locOK
+bool exitCond = chFlipDn or dvBrkDn or scoreDn or (vADdiv == -1 and bearBasic)
+
+var bool inTrade = false
+var float entryPx = na
+var float stopPx = na
+var int entryBar = 0
+var int lastBuyBar = -100
+var int lastExitBar = -100
+var int nTr = 0
+var int nWin = 0
+var float sumWin = 0.0
+var float sumLoss = 0.0
+var float sumRet = 0.0
+bool stopEvt = false
+bool exitEvt = false
+bool buyEvt = false
+if inTrade
+    if low <= stopPx
+        stopEvt := true
+    else if exitCond
+        exitEvt := true
+    if stopEvt or exitEvt
+        float px = stopEvt ? (open < stopPx ? open : stopPx) : close
+        float ret = (px / entryPx - 1) * 100 - feePct
+        nTr += 1
+        sumRet += ret
+        if ret > 0
+            nWin += 1
+            sumWin += ret
+        else
+            sumLoss += ret
+        inTrade := false
+        lastExitBar := bar_index
+if not inTrade and (buyA or buyB) and bar_index != lastExitBar and bar_index - lastBuyBar > 3
+    inTrade := true
+    buyEvt := true
+    entryPx := close
+    entryBar := bar_index
+    lastBuyBar := bar_index
+    float sCand = (not na(lo1) and lo1 < close) ? math.max(lo1 - 0.25 * atrV, close - 3.5 * atrV) : close - atrV * atrMult
+    stopPx := math.min(sCand, close - 0.5 * atrV)
+bool tpEvt = inTrade and not buyEvt and rsiV > 75 and bearBasic
+
+// ============================================================
+// الرسم على الشارت
+// ============================================================
+plot(inTrade ? stopPx : na, "وقف الصفقة الحالية", style=plot.style_linebr, color=color.new(color.red, 0), linewidth=2)
+plotshape(showSig and buyEvt and buyA, title="شراء ممتاز", style=shape.labelup, location=location.belowbar, color=color.new(color.green, 0), text="شراء A", textcolor=color.white, size=size.small)
+plotshape(showSig and buyEvt and not buyA, title="شراء جيد", style=shape.labelup, location=location.belowbar, color=color.new(color.lime, 0), text="شراء B", textcolor=color.black, size=size.small)
+plotshape(showSig and (exitEvt or stopEvt), title="خروج", style=shape.labeldown, location=location.abovebar, color=color.new(color.red, 0), text="خروج", textcolor=color.white, size=size.small)
+plotshape(showSig and tpEvt, title="جني أرباح", style=shape.labeldown, location=location.abovebar, color=color.new(color.orange, 0), text="جني", textcolor=color.black, size=size.tiny)
+
+alertcondition(buyEvt and buyA, "الزمني: شراء ممتاز A", "توافق كامل: مكان + أموال + زخم + تأكيد")
+alertcondition(buyEvt and not buyA, "الزمني: شراء جيد B", "توافق جيد للشراء")
+alertcondition(exitEvt or stopEvt, "الزمني: خروج", "شرط الخروج أو الوقف اتحقق")
+alertcondition(dvBrkUp and relVol >= dvVol, "الزمني: اختراق صندوق داروفاس بحجم", "اختراق صندوق لأعلى بحجم مؤكد")
+
+// ============================================================
+// الرسومات والتوقعات الزمنية واللوحة (على آخر شمعة)
+// ============================================================
+var array<line> tLines = array.new<line>()
+var array<label> tLabels = array.new<label>()
+var array<box> tBoxes = array.new<box>()
+var array<line> zzLines = array.new<line>()
+var array<label> zzLabels = array.new<label>()
+var array<label> ellLabels = array.new<label>()
+var table tbl = table.new(position.bottom_right, 4, 50, border_width=1, frame_color=color.new(color.gray, 50), frame_width=1)
+
+if barstate.islast
+    f_clr_lines(tLines)
+    f_clr_labels(tLabels)
+    f_clr_boxes(tBoxes)
+    f_clr_lines(zzLines)
+    f_clr_labels(zzLabels)
+    f_clr_labels(ellLabels)
+
+    float yT = yTop > yBot ? yTop : yBot + syminfo.mintick * 10
+    float yB = yBot
+    int lastT = nP > 0 ? array.get(pT, nP - 1) : 0
+    fibN = array.from(5, 8, 13, 21, 34, 55, 89, 144, 233)
+
+    // ---- خط داو المتعرج وقمم وقيعان ----
+    if showZZ and nP >= 2
+        for i = 1 to nP - 1
+            array.push(zzLines, line.new(array.get(pB, i - 1), array.get(pP, i - 1), array.get(pB, i), array.get(pP, i), color=color.new(color.gray, 30), width=1))
+        if nP >= 3
+            for i = 2 to nP - 1
+                float cur = array.get(pP, i)
+                float prv = array.get(pP, i - 2)
+                bool isHigh = array.get(pT, i) == 1
+                bool good = cur > prv
+                string tx = isHigh ? (good ? "قمة أعلى" : "قمة أدنى") : (good ? "قاع أعلى" : "قاع أدنى")
+                array.push(zzLabels, label.new(array.get(pB, i), cur, tx, style=isHigh ? label.style_label_down : label.style_label_up, color=good ? color.new(color.green, 20) : color.new(color.red, 20), textcolor=color.white, size=size.tiny))
+
+    // ---- ترقيم إليوت ----
+    if showEllLbl and ellKind > 0
+        int cntI = ellKind == 9 ? 6 : ellKind
+        int startI = ellKind == 9 ? nP - 9 : nP - ellKind
+        for j = 0 to cntI - 1
+            int idx = startI + j
+            bool hiP = array.get(pT, idx) == 1
+            array.push(ellLabels, label.new(array.get(pB, idx), array.get(pP, idx), str.tostring(j), style=hiP ? label.style_label_down : label.style_label_up, color=color.new(color.orange, 10), textcolor=color.black, size=size.normal))
+        if ellKind == 9
+            for j = 0 to 2
+                int idx2 = nP - 3 + j
+                bool hiP2 = array.get(pT, idx2) == 1
+                string abcT = j == 0 ? "أ" : j == 1 ? "ب" : "ج"
+                array.push(ellLabels, label.new(array.get(pB, idx2), array.get(pP, idx2), abcT, style=hiP2 ? label.style_label_down : label.style_label_up, color=color.new(color.purple, 10), textcolor=color.white, size=size.normal))
+
+    // ---- المراسي الزمنية ----
+    array<int> anchors = array.new<int>()
+    if nP >= 1
+        array.push(anchors, array.get(pB, nP - 1))
+    if nP >= 2
+        int apv = array.get(pB, nP - 2)
+        if not f_taken(anchors, apv, 0)
+            array.push(anchors, apv)
+    if not f_taken(anchors, majLoB, 0)
+        array.push(anchors, majLoB)
+    if not f_taken(anchors, majHiB, 0)
+        array.push(anchors, majHiB)
+
+    // ---- توليد التوقعات الزمنية من كل المدارس ----
+    array<int> pjB = array.new<int>()
+    array<int> pjS = array.new<int>()
+    gannD = array.from(30, 45, 60, 90, 120, 144, 180, 270, 360)
+    ichN = array.from(9, 17, 26, 33, 42, 51, 65, 76, 129, 172, 257)
+    mulsE = array.from(0.618, 1.0, 1.618)
+    mulsD = array.from(0.333, 0.5, 0.667)
+    mulsS = array.from(1.0, 1.5, 2.0, 3.0)
+    for a in anchors
+        if useFib
+            for f in fibN
+                f_prj(pjB, pjS, a + f, 1)
+        if useGann and dpb >= 0.9
+            for d in gannD
+                f_prj(pjB, pjS, a + int(math.round(d / dpb)), 2)
+            f_prj(pjB, pjS, a + int(math.round(365.0 / dpb)), 7)
+        if useIch
+            for ic in ichN
+                f_prj(pjB, pjS, a + ic, 3)
+    if nP >= 3
+        int aL = array.get(pB, nP - 1)
+        int L2 = array.get(pB, nP - 2) - array.get(pB, nP - 3)
+        int L3 = aL - array.get(pB, nP - 2)
+        if useEll
+            for m in mulsE
+                f_prj(pjB, pjS, aL + int(math.round(L2 * m)), 4)
+                f_prj(pjB, pjS, aL + int(math.round(L3 * m)), 4)
+            if ellKind == 5 and nP >= 5
+                int w1d = array.get(pB, nP - 4) - array.get(pB, nP - 5)
+                f_prj(pjB, pjS, aL + w1d, 4)
+                f_prj(pjB, pjS, aL + int(math.round(w1d * 0.618)), 4)
+            if ellKind == 6 and nP >= 6
+                int totD = aL - array.get(pB, nP - 6)
+                f_prj(pjB, pjS, aL + int(math.round(totD * 0.382)), 4)
+                f_prj(pjB, pjS, aL + int(math.round(totD * 0.618)), 4)
+        if useDow
+            for m in mulsD
+                f_prj(pjB, pjS, aL + int(math.round(L3 * m)), 5)
+        if useSq
+            for m in mulsS
+                f_prj(pjB, pjS, aL + int(math.round(L3 * m)), 6)
+    if useSq
+        int spanM = math.abs(majHiB - majLoB)
+        int laterM = math.max(majHiB, majLoB)
+        f_prj(pjB, pjS, laterM + spanM, 6)
+        f_prj(pjB, pjS, laterM + int(math.round(spanM * 0.5)), 6)
+
+    // ---- تجميع التوقعات واختيار أقوى 3 نوافذ ----
+    int nPj = array.size(pjB)
+    array<int> cSch = array.new<int>()
+    array<int> cRaw = array.new<int>()
+    if nPj > 0
+        for i = 0 to nPj - 1
+            [s1, r1, t1] = f_cluster(pjB, pjS, array.get(pjB, i), tolBars)
+            array.push(cSch, s1)
+            array.push(cRaw, r1)
+    array<int> chB = array.new<int>()
+    array<int> chSch = array.new<int>()
+    array<int> chRaw = array.new<int>()
+    array<string> chTxt = array.new<string>()
+    for pick = 1 to 3
+        int bestI = -1
+        float bestSc = -1000000.0
+        if nPj > 0
+            for i = 0 to nPj - 1
+                int cb = array.get(pjB, i)
+                if array.get(cSch, i) >= minSch and not f_taken(chB, cb, 2 * tolBars + 2)
+                    float sc = array.get(cSch, i) * 100.0 + array.get(cRaw, i) * 2.0 - (cb - bar_index) * 0.01
+                    if sc > bestSc
+                        bestSc := sc
+                        bestI := i
+        if bestI >= 0
+            int cbB = array.get(pjB, bestI)
+            [s2, r2, t2] = f_cluster(pjB, pjS, cbB, tolBars)
+            array.push(chB, cbB)
+            array.push(chSch, s2)
+            array.push(chRaw, r2)
+            array.push(chTxt, t2)
+    int nCh = array.size(chB)
+    array<int> ord = array.new<int>()
+    if nCh > 0
+        ord := array.sort_indices(chB)
+
+    // ---- رسم نوافذ الانعكاس وخطوط فيبو الزمنية ----
+    if showTime
+        if showFibTZ
+            int fa0 = fibAnchor == "القاع الكبير" ? majLoB : fibAnchor == "القمة الكبيرة" ? majHiB : (nP >= 1 ? array.get(pB, nP - 1) : majLoB)
+            for f in fibN
+                int fx = fa0 + f
+                if fx > bar_index and fx <= bar_index + 450
+                    array.push(tLines, line.new(fx, yB, fx, yT, extend=extend.both, color=color.new(color.gray, 70), style=line.style_dotted))
+                    array.push(tLabels, label.new(fx, yT, "ف" + str.tostring(f), style=label.style_label_down, color=color.new(color.gray, 100), textcolor=color.gray, size=size.tiny))
+        if nCh > 0
+            for k = 0 to nCh - 1
+                int oi = array.get(ord, k)
+                int tb = array.get(chB, oi)
+                int typK = (k % 2 == 0) ? -lastT : lastT
+                color lc = typK == 1 ? color.new(color.red, 20) : typK == -1 ? color.new(color.green, 20) : color.new(color.yellow, 20)
+                string tyTxt = typK == 1 ? "قمة" : typK == -1 ? "قاع" : "تحول"
+                array.push(tLines, line.new(tb, yB, tb, yT, extend=extend.both, color=lc, width=array.get(chSch, oi) >= 4 ? 3 : 2))
+                array.push(tLabels, label.new(tb, typK == -1 ? yB : yT, "⏱ " + f_date(tb - bar_index, msPer) + "\n" + str.tostring(array.get(chSch, oi)) + " مدارس · " + tyTxt + " محتمل", style=typK == -1 ? label.style_label_up : label.style_label_down, color=lc, textcolor=color.white, size=size.small))
+
+    // ---- صندوق جان (سعر × زمن) ----
+    if showGBox and nP >= 2
+        int gb0 = array.get(pB, nP - 1)
+        int gbW = gb0 - array.get(pB, nP - 2)
+        float gHiP = math.max(array.get(pP, nP - 1), array.get(pP, nP - 2))
+        float gLoP = math.min(array.get(pP, nP - 1), array.get(pP, nP - 2))
+        if gbW > 0 and gb0 + gbW <= bar_index + 450
+            array.push(tBoxes, box.new(left=gb0, top=gHiP, right=gb0 + gbW, bottom=gLoP, border_color=color.new(color.orange, 30), bgcolor=color.new(color.orange, 93)))
+            qs = array.from(0.25, 0.5, 0.75)
+            for q in qs
+                float yq = gLoP + q * (gHiP - gLoP)
+                int vx = gb0 + int(math.round(gbW * q))
+                array.push(tLines, line.new(gb0, yq, gb0 + gbW, yq, color=color.new(color.orange, 55), style=line.style_dotted))
+                array.push(tLines, line.new(vx, gLoP, vx, gHiP, color=color.new(color.orange, 55), style=line.style_dotted))
+            array.push(tLabels, label.new(gb0 + gbW, gLoP, "صندوق جان · " + f_date(gb0 + gbW - bar_index, msPer), style=label.style_label_up, color=color.new(color.orange, 30), textcolor=color.black, size=size.tiny))
+
+    // ---- إحصاء: هل الزمن الفيبوناتشي بيصيب فعلاً على السهم ده؟ ----
+    int legsN = 0
+    int hitsN = 0
+    int minLg = 1000000
+    int maxLg = 0
+    if nP >= 2
+        for i = 1 to nP - 1
+            int lg = array.get(pB, i) - array.get(pB, i - 1)
+            legsN += 1
+            minLg := math.min(minLg, lg)
+            maxLg := math.max(maxLg, lg)
+            bool hitF = false
+            for f in fibN
+                if math.abs(lg - f) <= 1
+                    hitF := true
+            if hitF
+                hitsN += 1
+    int baseN = 0
+    int spanLg = maxLg - minLg + 1
+    if legsN > 0 and spanLg > 0
+        for x = minLg to maxLg
+            bool hb = false
+            for f in fibN
+                if math.abs(x - f) <= 1
+                    hb := true
+            if hb
+                baseN += 1
+    float hitPct = legsN > 0 ? 100.0 * hitsN / legsN : na
+    float basePct = spanLg > 0 and legsN > 0 ? 100.0 * baseN / spanLg : na
+
+    // ---- نصوص المدارس ----
+    string verdict = totalPct >= 45 ? "شراء قوي" : totalPct >= 20 ? "شراء" : totalPct <= -45 ? "بيع قوي" : totalPct <= -20 ? "بيع" : "محايد / انتظار"
+    color vCol = totalPct >= 20 ? color.new(color.green, 10) : totalPct <= -20 ? color.new(color.red, 10) : color.new(color.gray, 30)
+    string dowTxt = dowState == 1 ? "صاعد (قمم وقيعان أعلى)" : dowState == -1 ? "هابط (قمم وقيعان أدنى)" : "غير واضح / تحول"
+    string dowCls = "-"
+    if nP >= 2
+        float lgDays = (array.get(pB, nP - 1) - array.get(pB, nP - 2)) * dpb
+        dowCls := lgDays < 21 ? "طفيفة (< 3 أسابيع)" : lgDays <= 90 ? "ثانوية (3 أسابيع - 3 أشهر)" : "أساسية (> 3 أشهر)"
+    string dowConf = dowState == 0 ? "لا اتجاه واضح" : dowState == idxTrend ? "مؤكد مع المؤشر" : "غير مؤكد (تباعد عن المؤشر)"
+    string dowVol = upVolAvg > dnVolAvg ? "الحجم يدعم الصعود" : "الحجم يدعم الهبوط"
+    string ellTxt = ellKind == 5 ? (ellDir > 0 ? "موجة 5 صاعدة متوقعة" : "موجة 5 هابطة متوقعة") : ellKind == 6 ? (ellDir > 0 ? "اكتملت 5 موجات صعود، تصحيح متوقع" : "اكتملت 5 موجات هبوط، ارتداد متوقع") : ellKind == 9 ? (ellDir > 0 ? "انتهى التصحيح، استئناف الصعود" : "انتهى الارتداد، استئناف الهبوط") : "لا يوجد عد واضح"
+    string gannTxt = (gState == 1 ? "هايلو صاعد" : "هايلو هابط") + " | " + (close > gMid ? "فوق نص المدى" : "تحت نص المدى")
+    string dvTxt = na(dvTop) ? "لا يوجد صندوق" : dvState == 0 ? "داخل صندوق " + str.tostring(dvBot, format.mintick) + " - " + str.tostring(dvTop, format.mintick) : dvState == 1 ? "اخترق الصندوق لأعلى" : "كسر الصندوق لأسفل"
+
+    // ---- خطة الصفقة ----
+    float refPx = inTrade ? entryPx : close
+    float stopUse = inTrade ? stopPx : ((not na(lo1) and lo1 < close) ? math.max(lo1 - 0.25 * atrV, close - 3.5 * atrV) : close - atrV * atrMult)
+    stopUse := math.min(stopUse, close - 0.5 * atrV)
+    float riskPS = math.max(refPx - stopUse, syminfo.mintick)
+    float riskAmt = capital * riskPct / 100.0
+    float shares = math.min(math.floor(riskAmt / riskPS), math.floor(capital / close))
+    float tg1 = refPx + 1.5 * riskPS
+    float tg2 = refPx + 3.0 * riskPS
+    float fibT = na
+    float legLoX = na
+    float legRgX = na
+    string zoneTxt = "-"
+    if nP >= 2
+        float xa = array.get(pP, nP - 2)
+        float xb = array.get(pP, nP - 1)
+        legLoX := math.min(xa, xb)
+        legRgX := math.max(xa, xb) - legLoX
+        if legRgX > 0
+            float f1272 = legLoX + 1.272 * legRgX
+            float f1618 = legLoX + 1.618 * legRgX
+            fibT := f1272 > close ? f1272 : f1618 > close ? f1618 : na
+            if lastT == 1
+                float zHi = math.max(xa, xb) - 0.5 * legRgX
+                float zLo = math.max(xa, xb) - 0.618 * legRgX
+                zoneTxt := str.tostring(zLo, format.mintick) + " - " + str.tostring(zHi, format.mintick) + " (فيبو 0.5 - 0.618)"
+            else
+                zoneTxt := "اشترِ فوق " + str.tostring(hi1, format.mintick) + " أو ارتداد على متوسط 20"
+    float resNext = na
+    if not na(hi1) and hi1 > close
+        resNext := hi1
+    if not na(dvTop) and dvTop > close and (na(resNext) or dvTop < resNext)
+        resNext := dvTop
+    string statusTxt = inTrade ? "في صفقة منذ " + str.tostring(bar_index - entryBar) + " شمعة" : "خارج الصفقة"
+    string sigTxt = buyEvt ? (buyA ? "شراء ممتاز A الآن" : "شراء جيد B الآن") : (exitEvt or stopEvt) ? "خروج الآن" : tpEvt ? "جني أرباح جزئي" : (buyA or buyB) ? "شروط الشراء متحققة (انتظر خروج/إعادة دخول)" : "لا إشارة"
+    string pnlTxt = inTrade ? str.tostring((close / entryPx - 1) * 100, "#.0") + "%" : "-"
+    string winTxt = nTr > 0 ? str.tostring(100.0 * nWin / nTr, "#") + "%" : "-"
+    string avgTxt = nTr > 0 ? str.tostring(sumRet / nTr, "#.00") + "%" : "-"
+    string pfTxt = sumLoss < 0 ? str.tostring(sumWin / math.abs(sumLoss), "#.00") : (sumWin > 0 ? "∞" : "-")
+
+    // ---- الملاحظات ----
+    array<string> notes = array.new<string>()
+    if not na(chopV)
+        if chopV > 61.8
+            array.push(notes, "⚠️ السوق عرضي (Choppiness " + str.tostring(chopV, "#") + "): الاختراقات ضعيفة، خفّض الحجم")
+        else if chopV < 38.2
+            array.push(notes, "✅ اتجاه قوي (Choppiness " + str.tostring(chopV, "#") + "): الاستمرار أرجح من الانعكاس")
+    if nCh > 0
+        int firstB = array.get(chB, array.get(ord, 0))
+        int gap = firstB - bar_index
+        string wd = f_date(gap, msPer)
+        if gap <= 3
+            array.push(notes, "⏱ إحنا على حافة نافذة انعكاس زمني (" + wd + ")، شدّد الوقف ولا تفتح صفقة جديدة بحجم كبير")
+        else
+            array.push(notes, "⏱ أقرب نافذة انعكاس " + wd + " (بعد " + str.tostring(gap) + " شمعة)، وهي احتمال مش يقين")
+    else
+        array.push(notes, "⏱ مفيش توافق زمني كافي حالياً، الزمن مش هو العامل الحاكم")
+    bool accum = adV > adV[20] and close < close[20] * 1.02
+    bool distrib = adV < adV[20] and close > close[20]
+    if accum
+        array.push(notes, "🟢 A/D صاعد والسعر ثابت أو نازل: تجميع مؤسسي محتمل")
+    if distrib
+        array.push(notes, "🔴 السعر صاعد وA/D نازل: توزيع محتمل، احذر الصعود بدون دعم أموال")
+    array.push(notes, "📦 داروفاس: " + dvTxt)
+    array.push(notes, "📐 داو: " + dowConf + " · " + dowVol)
+    if ellKind == 6
+        array.push(notes, "🌊 إليوت: خمس موجات مكتملة، الأرجح تصحيح قريب")
+    else if ellKind == 5
+        array.push(notes, "🌊 إليوت: بانتظار الموجة الخامسة، الأرجح آخر دفعة قبل تصحيح")
+    if atrV / close * 100 > 5
+        array.push(notes, "⚠️ تذبذب عالي (ATR% " + str.tostring(atrV / close * 100, "#.0") + "): قلّل حجم المركز وراعي فجوات الافتتاح وحدود الـ 10%")
+    bool newHiChk = bar_index > 250 and high > hi52[1]
+    if newHiChk
+        array.push(notes, "🚀 قمة 250 شمعة جديدة: قوة، بس اتأكد من الحجم")
+    if dpb < 0.9
+        array.push(notes, "ℹ️ التواريخ المتوقعة أدق على الفريم اليومي والأسبوعي، والتقريب ± يومين (جمعة وسبت)")
+    if inTrade
+        array.push(notes, "📌 الصفقة الحالية: وقف " + str.tostring(stopPx, format.mintick) + " · شرط الخروج: كسر الشاندلير أو صندوق داروفاس أو انقلاب السكور")
+
+    if showTable
+        int r = 0
+        f_kv(tbl, r, "الحكم", verdict, vCol, "السكور الكلي", str.tostring(totalPct, "#.0") + "%", vCol)
+        r += 1
+        f_kv(tbl, r, "اتجاه", str.tostring(pctTr, "#") + "%", f_sigc(pctTr >= 20 ? 1 : pctTr <= -20 ? -1 : 0), "زخم", str.tostring(pctMo, "#") + "%", f_sigc(pctMo >= 20 ? 1 : pctMo <= -20 ? -1 : 0))
+        r += 1
+        f_kv(tbl, r, "أموال وحجم", str.tostring(pctMn, "#") + "%", f_sigc(pctMn >= 20 ? 1 : pctMn <= -20 ? -1 : 0), "هيكل ومدارس", str.tostring(pctSt, "#") + "%", f_sigc(pctSt >= 20 ? 1 : pctSt <= -20 ? -1 : 0))
+        r += 1
+        f_hdr(tbl, r, "التوقيت الزمني (فيبو · جان · إيشيموكو · إليوت · داو)")
+        r += 1
+        for k = 0 to 2
+            if k < nCh
+                int oi2 = array.get(ord, k)
+                int tb2 = array.get(chB, oi2)
+                int typ2 = (k % 2 == 0) ? -lastT : lastT
+                string ty2 = typ2 == 1 ? "قمة" : typ2 == -1 ? "قاع" : "تحول"
+                color c2 = typ2 == 1 ? color.new(color.red, 45) : typ2 == -1 ? color.new(color.green, 45) : color.new(color.gray, 50)
+                f_kv(tbl, r, "نافذة " + str.tostring(k + 1), f_date(tb2 - bar_index, msPer) + " (+" + str.tostring(tb2 - bar_index) + ")", c2, ty2 + " محتمل", str.tostring(array.get(chSch, oi2)) + " مدارس: " + array.get(chTxt, oi2), c2)
+            else
+                f_kv(tbl, r, "نافذة " + str.tostring(k + 1), "-", color.new(color.gray, 60), "", "", color.new(color.gray, 60))
+            r += 1
+        f_kv(tbl, r, "داو", dowTxt, f_sigc(vDow), "حركة داو الحالية", dowCls, color.new(color.gray, 60))
+        r += 1
+        f_kv(tbl, r, "إليوت", ellTxt, f_sigc(vEll), "جان", gannTxt, f_sigc(vGH))
+        r += 1
+        f_kv(tbl, r, "إصابة فيبو الزمني", na(hitPct) ? "-" : str.tostring(hitPct, "#") + "% (عشوائي " + str.tostring(basePct, "#") + "%)", color.new(color.gray, 60), "عينة السوينج", str.tostring(legsN) + " حركة", color.new(color.gray, 60))
+        r += 1
+
+        f_hdr(tbl, r, "المؤشرات (29)")
+        r += 1
+        names = array.from("GMMA", "الانحدار الخطي", "ALMA", "هيكن آشي", "إلدر راي", "فورتكس", "موقع السعر بالسنة", "StochRSI", "ROC", "TRIX", "TSI", "المذبذب النهائي", "كوبوك", "فيشر", "كونورز RSI", "A/D تراكم", "CMF", "شايكين", "Force", "EOM", "حجم داعم", "تباعد A/D", "داو", "إليوت", "صناديق داروفاس", "فيبو منطقة", "هيكل السوق", "جان هايلو", "جان نص المدى")
+        votes = array.from(vGMMA, vLR, vALMA, vHA, vElder, vVortex, vRP, vSR, vROC, vTRIX, vTSI, vUO, vCop, vFish, vCRSI, vAD, vCMF, vCho, vForce, vEOM, vVP, vADdiv, vDow, vEll, vDarvas, vFibZ, vMS, vGH, vGM)
+        for i = 0 to 14
+            int vA = array.get(votes, i)
+            table.cell(tbl, 0, r, array.get(names, i), text_color=color.white, bgcolor=color.new(color.gray, 75), text_size=size.tiny, text_halign=text.align_right)
+            table.cell(tbl, 1, r, f_sig(vA), text_color=color.white, bgcolor=f_sigc(vA), text_size=size.tiny)
+            int j = i + 15
+            if j < 29
+                int vB = array.get(votes, j)
+                table.cell(tbl, 2, r, array.get(names, j), text_color=color.white, bgcolor=color.new(color.gray, 75), text_size=size.tiny, text_halign=text.align_right)
+                table.cell(tbl, 3, r, f_sig(vB), text_color=color.white, bgcolor=f_sigc(vB), text_size=size.tiny)
+            else
+                table.cell(tbl, 2, r, "", bgcolor=color.new(color.gray, 75))
+                table.cell(tbl, 3, r, "", bgcolor=color.new(color.gray, 75))
+            r += 1
+
+        f_hdr(tbl, r, "أفضل نقطة شراء وبيع وإدارة المخاطر")
+        r += 1
+        f_kv(tbl, r, "الوضع", statusTxt, color.new(color.blue, 40), "الإشارة", sigTxt, buyEvt ? color.new(color.green, 30) : (exitEvt or stopEvt) ? color.new(color.red, 30) : color.new(color.blue, 40))
+        r += 1
+        f_kv(tbl, r, "أفضل نقطة شراء", zoneTxt, color.new(color.green, 45), "وقف الخسارة", str.tostring(stopUse, format.mintick), color.new(color.red, 40))
+        r += 1
+        f_kv(tbl, r, "هدف 1 (1.5 ر)", str.tostring(tg1, format.mintick), color.new(color.green, 45), "هدف 2 (3 ر)", str.tostring(tg2, format.mintick), color.new(color.green, 45))
+        r += 1
+        f_kv(tbl, r, "هدف فيبو (1.272/1.618)", na(fibT) ? "-" : str.tostring(fibT, format.mintick), color.new(color.green, 45), "أقرب مقاومة", na(resNext) ? "-" : str.tostring(resNext, format.mintick), color.new(color.orange, 40))
+        r += 1
+        f_kv(tbl, r, "حجم المركز", str.tostring(shares, "#") + " سهم", color.new(color.blue, 40), "قيمة المركز", str.tostring(shares * close, "#") + " ج", color.new(color.blue, 40))
+        r += 1
+        f_kv(tbl, r, "أقصى خسارة", str.tostring(shares * riskPS, "#") + " ج", color.new(color.red, 40), "ربح/خسارة الصفقة", pnlTxt, color.new(color.gray, 60))
+        r += 1
+
+        f_hdr(tbl, r, "نتيجة إشارات السهم ده تاريخياً (بدون ضمان)")
+        r += 1
+        f_kv(tbl, r, "عدد الصفقات", str.tostring(nTr), color.new(color.gray, 60), "نسبة النجاح", winTxt, color.new(color.gray, 60))
+        r += 1
+        f_kv(tbl, r, "متوسط الصفقة (بعد العمولة)", avgTxt, color.new(color.gray, 60), "Profit Factor", pfTxt, color.new(color.gray, 60))
+        r += 1
+
+        f_hdr(tbl, r, "ملاحظات")
+        r += 1
+        int nn = math.min(array.size(notes), 8)
+        if nn > 0
+            for i = 0 to nn - 1
+                f_wide(tbl, r, array.get(notes, i), color.new(color.gray, 70))
+                r += 1
+
+plot(nearLimitLim ? 1 : 0, "EGX_NearLimit", display=display.data_window)

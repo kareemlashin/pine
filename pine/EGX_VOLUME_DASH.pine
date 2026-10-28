@@ -1,0 +1,47 @@
+//@version=6
+indicator("EGX Volume Dashboard", shorttitle="EGX VDash", overlay=true, max_tables_count=1, calc_bars_count=5000)
+
+// لوحة أرقام فوليوم على الشارت · docs/EGX_VOLUME.md
+
+string G = "Dash"
+int zoneLook = input.int(200, "Net buy window", minval=50, group=G)
+
+float vma = ta.sma(volume, 20)
+float rvol = volume / math.max(vma, 1.0)
+float z = (volume - vma) / math.max(ta.stdev(volume, 20), 1.0)
+float pct = ta.percentrank(volume, 120)
+
+float tB = 0.0
+float tV = 0.0
+int n = math.min(zoneLook, bar_index)
+for i = 0 to n - 1
+    float rng = math.max(high[i] - low[i], syminfo.mintick)
+    tB += volume[i] * (close[i] - low[i]) / rng
+    tV += volume[i]
+float netPct = tV > 0 ? tB / tV * 100.0 : 50.0
+
+float mfm = ((close - low) - (high - close)) / math.max(high - low, syminfo.mintick)
+float cmf = ta.sma(mfm * volume, 20) / ta.sma(volume, 20)
+
+var table d = table.new(position.top_right, 2, 8, border_width=1)
+if barstate.islast
+    table.clear(d, 0, 0, 1, 7)
+    table.cell(d, 0, 0, "V DASH", bgcolor=color.black, text_color=color.yellow, text_size=size.small)
+    table.cell(d, 1, 0, syminfo.ticker, text_size=size.tiny)
+    table.cell(d, 0, 1, "RVOL", text_color=color.gray, text_size=size.tiny)
+    table.cell(d, 1, 1, str.tostring(rvol, "#.##"), text_color=rvol >= 1.5 ? color.orange : color.white, text_size=size.small)
+    table.cell(d, 0, 2, "Z / Rank%", text_color=color.gray, text_size=size.tiny)
+    table.cell(d, 1, 2, str.tostring(z, "#.#") + " / " + str.tostring(pct, "#"), text_size=size.tiny)
+    table.cell(d, 0, 3, "Net buy %", text_color=color.gray, text_size=size.tiny)
+    table.cell(d, 1, 3, str.tostring(netPct, "#"), text_color=netPct >= 52 ? color.lime : color.red, text_size=size.small)
+    table.cell(d, 0, 4, "CMF", text_color=color.gray, text_size=size.tiny)
+    table.cell(d, 1, 4, str.tostring(cmf, "#.###"), text_size=size.tiny)
+    table.cell(d, 0, 5, "Avg Vol", text_color=color.gray, text_size=size.tiny)
+    table.cell(d, 1, 5, str.tostring(vma, "#"), text_size=size.tiny)
+    table.cell(d, 0, 6, "Today V", text_color=color.gray, text_size=size.tiny)
+    table.cell(d, 1, 6, str.tostring(volume, "#"), text_size=size.tiny)
+
+plot(rvol, "EGVDash_RVOL", display=display.all)
+plot(netPct, "EGVDash_NetBuy", display=display.all)
+plot(pct, "EGVDash_VolPct", display=display.all)
+plot(vma >= 800 and rvol >= 1.3 and netPct >= 52 ? 1 : 0, "EGVDash_Pass", display=display.all)

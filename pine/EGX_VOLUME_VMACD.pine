@@ -1,0 +1,28 @@
+//@version=6
+indicator("EGX Volume MACD", shorttitle="EGX VMACD", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// MACD على الحجم · docs/EGX_VOLUME.md
+
+string G = "VMACD"
+int fast = input.int(12, "Fast", group=G)
+int slow = input.int(26, "Slow", group=G)
+int sig = input.int(9, "Signal", group=G)
+
+[macd, signal, hist] = ta.macd(volume, fast, slow, sig)
+
+bool bull = ta.crossover(macd, signal) and hist > 0
+bool bear = ta.crossunder(macd, signal) and hist < 0
+
+plot(hist, "Hist", style=plot.style_columns, color=hist >= 0 ? color.new(color.lime, 40) : color.new(color.red, 40))
+plot(macd, "MACD", color=color.fuchsia, linewidth=2)
+plot(signal, "Signal", color=color.orange, linewidth=1)
+hline(0, "0", color=color.gray)
+
+var table t = table.new(position.top_right, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "Vol MACD", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, macd > signal ? "Bull" : "Bear", text_size=size.tiny)
+
+plot(bull ? 1 : 0, "EGVMACD_Bull", display=display.all)
+plot(bear ? 1 : 0, "EGVMACD_Bear", display=display.all)

@@ -1,0 +1,29 @@
+//@version=6
+indicator("EGX Volume MFI — money flow", shorttitle="EGX VMFI", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// MFI + RVOL gate · docs/EGX_VOLUME.md
+
+string G = "MFI"
+int len = input.int(14, "MFI", group=G)
+float os = input.float(20.0, "Oversold", group=G)
+float ob = input.float(80.0, "Overbought", group=G)
+
+float mfi = ta.mfi(hlc3, len)
+float rvol = volume / math.max(ta.sma(volume, 20), 1.0)
+
+bool acc = mfi < os and rvol >= 1.1 and close > open
+bool dist = mfi > ob and rvol >= 1.1 and close < open
+
+plot(mfi, "EGVMFI_Val", color=color.teal, linewidth=2, display=display.all)
+hline(ob, "OB", color=color.red, linestyle=hline.style_dashed)
+hline(os, "OS", color=color.lime, linestyle=hline.style_dashed)
+hline(50, "50", color=color.gray)
+
+var table t = table.new(position.top_left, 2, 3, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 2)
+    table.cell(t, 0, 0, "MFI", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, str.tostring(mfi, "#"), text_size=size.small)
+
+plot(acc ? 1 : 0, "EGVMFI_Acc", display=display.all)
+plot(dist ? 1 : 0, "EGVMFI_Dist", display=display.all)

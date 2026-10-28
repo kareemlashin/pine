@@ -1,0 +1,238 @@
+//@version=6
+strategy("EGX أفضل فرص — باك‌تست", shorttitle="فرص ST", overlay=true, pyramiding=0, calc_bars_count=5000, commission_type=strategy.commission.percent, commission_value=0.125, slippage=2, default_qty_type=strategy.percent_of_equity, default_qty_value=10, initial_capital=100000, currency=currency.EGP)
+
+// مرآة EGX_افضل_فرص.pine · دخول Pro / Buy / Pass · خروج مثل EGX_BEST_STRATEGY
+// شغّل على رمز EGX · إطار D موصى · BOARD200 للترتيب السوقي
+
+string G = "ملف"
+string profile = input.string("EGX قياسي", "الملف", options=["EGX قياسي", "مضاربة 15د", "استثمار يومي"], group=G)
+string entryMode = input.string("Pro", "دخول", options=["Pro", "Buy", "Pass"], group=G)
+bool useConfirm = input.bool(true, "إغلاق الشمعة", group=G)
+int pivotLen = input.int(8, "محور swing", minval=3, maxval=15, group=G)
+float minRRIn = input.float(1.5, "حد R/R", minval=1.0, step=0.1, group=G)
+float minOppIn = input.float(68.0, "حد فرصة Pro", minval=40, maxval=90, group=G)
+float minRankIn = input.float(65.0, "حد Rank", minval=40, maxval=90, group=G)
+int minSetupIn = input.int(7, "حد إعداد /11", minval=0, maxval=11, group=G)
+bool blockBear = input.bool(true, "منع ضغط EGX30", group=G)
+bool blockLimit = input.bool(true, "منع قرب halt", group=G)
+bool blockChase = input.bool(true, "منع مطاردة", group=G)
+string execProfile = input.string("EGX متوسط", "ملف slippage", options=["EGX سائل", "EGX متوسط", "EGX رقيق"], group=G)
+bool skipOffHours = input.bool(false, "لا دخول خارج المستمر", group=G)
+bool mirrorBuyFlag = input.bool(false, "مرآة buyFlag (أوسع)", group=G)
+bool useRsGate = input.bool(false, "يتطلب RS20 > 0", group=G)
+string egxBoard = input.string("نشط (EGX100)", "لوحة", options=["نشط (EGX100)", "EGX30 (بيع مكشوف)", "SME تميّز", "SME نايل", "غير نشط"], group=G)
+bool skipSundayBuy = input.bool(false, "لا دخول يوم الأحد", group=G)
+bool useMktHalt100 = input.bool(true, "منع إذا EGX100 ≤ −10%", group=G)
+int breakConfirmBars = input.int(2, "تأكيد اختراق", minval=1, maxval=5, group=G)
+float riskPctEq = input.float(1.5, "مخاطرة % محفظة", minval=0.5, maxval=3.0, step=0.1, group=G)
+float partCapPct = input.float(8.0, "سقف ADV %", minval=2, maxval=15, group=G)
+bool useRiskQty = input.bool(true, "حجم = مخاطرة + سقف ADV", group=G)
+bool usePartial = input.bool(true, "جزئي 50% عند T1/2", group=G)
+bool useTrail = input.bool(true, "وقف متحرك بعد جزئي", group=G)
+float trailMult = input.float(1.2, "متحرك × ATR", minval=0.5, step=0.1, group=G)
+bool exitOnAction = input.bool(true, "خروج عند Action=0", group=G)
+
+float effMinVol = profile == "مضاربة 15د" ? 3000.0 : profile == "استثمار يومي" ? 800.0 : 1500.0
+float effMinRank = profile == "استثمار يومي" ? 60.0 : minRankIn
+float effMinOpp = profile == "استثمار يومي" ? 62.0 : minOppIn
+int effMinSetup = profile == "مضاربة 15د" ? 7 : minSetupIn
+
+bool barOk = not useConfirm or barstate.isconfirmed
+
+float ema9 = ta.ema(close, 9)
+float ema21 = ta.ema(close, 21)
+float ema50 = ta.ema(close, 50)
+float ema200 = ta.ema(close, 200)
+bool bullStack = ema9 > ema21 and ema21 > ema50
+bool above200 = close > ema200
+
+float wClose = request.security(syminfo.tickerid, "W", close, barmerge.gaps_off, barmerge.lookahead_off)
+float wEma50 = request.security(syminfo.tickerid, "W", ta.ema(close, 50), barmerge.gaps_off, barmerge.lookahead_off)
+bool htfBull = wClose > wEma50
+
+[macdL, macdS, macdH] = ta.macd(close, 12, 26, 9)
+bool macdBull = macdH > 0 and macdL > macdS
+float rsi = ta.rsi(close, 14)
+float atr = ta.atr(14)
+float volMa = ta.sma(volume, 20)
+bool liqOk = volMa >= effMinVol
+float rvol = volume / math.max(volMa, 1.0)
+
+float mfm = ((close - low) - (high - close)) / math.max(high - low, syminfo.mintick)
+float cmf = ta.sma(mfm * volume, 14) / ta.sma(volume, 14)
+float obvSl = ta.linreg(ta.obv, 10, 0) - ta.linreg(ta.obv, 10, 1)
+bool accumulating = cmf > 0 and obvSl > 0
+bool distributing = cmf < 0 and obvSl < 0
+float accScore = math.min(100.0, (accumulating ? 40.0 : 0.0) + (cmf > 0 ? 15.0 : 0.0) + (obvSl > 0 ? 15.0 : 0.0) + (rvol >= 1.0 and close > open ? 10.0 : 0.0))
+float distRisk = math.min(100.0, (distributing ? 40.0 : 0.0) + (cmf < 0 ? 15.0 : 0.0) + (obvSl < 0 ? 15.0 : 0.0))
+
+f_mktTr() =>
+    int sc = 0
+    float e20 = ta.ema(close, 20)
+    float e50 = ta.ema(close, 50)
+    sc += close > e20 ? 1 : -1
+    sc += e20 > e50 ? 1 : -1
+    sc
+
+float benchRoc = request.security("EGX:EGX30", timeframe.period, ta.roc(close, 20), barmerge.gaps_off, barmerge.lookahead_off)
+float roc20 = ta.roc(close, 20)
+float rsSpread = roc20 - benchRoc
+bool rsLeader = rsSpread > 0
+float mom30 = request.security("EGX:EGX30", timeframe.period, close[20] > 0 ? (close / close[20] - 1.0) * 100.0 : 0.0, barmerge.gaps_off, barmerge.lookahead_off)
+int tr30 = request.security("EGX:EGX30", timeframe.period, f_mktTr(), barmerge.gaps_off, barmerge.lookahead_off)
+bool heavySell = mom30 < -4.0 and tr30 <= -1
+
+float dPrev = request.security(syminfo.tickerid, "D", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+float dayPct = dPrev > 0 ? (close - dPrev) / dPrev * 100.0 : 0.0
+float haltPct = egxBoard == "SME تميّز" or egxBoard == "SME نايل" or egxBoard == "غير نشط" ? 5.0 : 10.0
+float luldPct = egxBoard == "غير نشط" ? 5.0 : (egxBoard == "SME تميّز" or egxBoard == "SME نايل" ? 10.0 : 20.0)
+float execPad = execProfile == "EGX رقيق" ? 2.0 : execProfile == "EGX سائل" ? 0.5 : 1.0
+bool nearLimit = blockLimit and dPrev > 0 and (dayPct >= math.min(9.0, haltPct - execPad) or dayPct >= luldPct - 0.25)
+int egxSessId = 0
+if not na(time(timeframe.period, "0830-1000:23456", "Africa/Cairo"))
+    egxSessId := 1
+if not na(time(timeframe.period, "1000-1415:23456", "Africa/Cairo"))
+    egxSessId := 2
+if not na(time(timeframe.period, "1415-1425:23456", "Africa/Cairo"))
+    egxSessId := 3
+if not na(time(timeframe.period, "1425-1430:23456", "Africa/Cairo"))
+    egxSessId := 4
+bool sessionPhaseOk = not skipOffHours or not timeframe.isintraday or egxSessId == 2
+float dayPct100 = useMktHalt100 ? request.security("EGX:EGX100EWI", "D", close[1] > 0 ? (close - close[1]) / close[1] * 100.0 : 0.0, barmerge.gaps_off, barmerge.lookahead_off) : 0.0
+bool mktHalt100 = useMktHalt100 and dayPct100 <= -10.0
+bool sundaySkip = skipSundayBuy and dayofweek == dayofweek.sunday
+
+float pl = ta.pivotlow(low, pivotLen, pivotLen)
+float ph = ta.pivothigh(high, pivotLen, pivotLen)
+var float swingLow = na
+var float swingHigh = na
+if not na(pl)
+    swingLow := pl
+if not na(ph)
+    swingHigh := ph
+
+bool supportBreak = barOk and not na(swingLow) and close < swingLow and close[1] >= swingLow
+bool retestSupport = barOk and not na(swingLow) and low <= swingLow * 1.005 and close > swingLow
+
+float phs = ta.pivothigh(high, 5, 5)
+var float actHigh = na
+var int structDir = 0
+if not na(phs)
+    actHigh := phs
+bool bullBreak = barOk and not na(actHigh) and close > actHigh and close[1] <= actHigh
+if bullBreak
+    structDir := 1
+    actHigh := na
+bool fakeBreak = barOk and not na(swingHigh) and high > swingHigh and close < swingHigh and rvol > 1.05
+bool rawBreak = bullBreak and rvol >= 1.2
+var float brkHoldLvl = na
+var int brkHoldBars = 0
+if barstate.isconfirmed
+    if rawBreak
+        brkHoldLvl := nz(swingHigh, close[1])
+        brkHoldBars := 1
+    else if not na(brkHoldLvl) and close > brkHoldLvl
+        brkHoldBars += 1
+    else
+        brkHoldLvl := na
+        brkHoldBars := 0
+bool breakConfirmed = barOk and not na(brkHoldLvl) and brkHoldBars >= breakConfirmBars and (rvol >= 1.2 or rvol[1] >= 1.2)
+bool breakRetest = retestSupport and structDir == 1 and not fakeBreak
+
+float zw = atr * 0.35
+float buyTop = nz(swingLow, low) + zw
+float buyBot = nz(swingLow, low) - zw * 1.2
+bool inZone = low <= buyTop and high >= buyBot
+bool nearSupport = low <= buyTop and close >= buyBot
+
+float t1 = na(swingHigh) ? close + atr * 1.5 : swingHigh
+float entryPx = (buyTop + buyBot) / 2.0
+float stopPx = buyBot - atr * 0.5
+float riskPx = math.max(entryPx - stopPx, syminfo.mintick)
+float rr = riskPx > 0 ? (t1 - entryPx) / riskPx : na
+float tHalf = entryPx + (t1 - entryPx) * 0.5
+float swingRange = nz(swingHigh - swingLow, atr * 3)
+float t2 = nz(swingLow, close) + swingRange * 1.618
+
+float hi252 = ta.highest(high, 252)
+bool chase = hi252 > 0 and (close - hi252) / hi252 * 100.0 > -3.0 and rsi > 72
+
+float score = 0.0
+score += bullStack ? 20.0 : 0.0
+score += above200 ? 15.0 : -5.0
+score += htfBull ? 15.0 : -10.0
+score += macdBull ? 10.0 : 0.0
+score += accumulating ? 15.0 : distributing ? -10.0 : 0.0
+score += rvol >= 1.0 ? 10.0 : 0.0
+score += rsi > 40 and rsi < 70 ? 10.0 : 0.0
+score += rsLeader ? 5.0 : 0.0
+score += accScore >= 55 ? 5.0 : 0.0
+score += distRisk >= 55 ? -8.0 : 0.0
+score := math.max(0.0, math.min(100.0, score))
+
+int setupHits = 0
+setupHits += bullStack ? 1 : 0
+setupHits += htfBull ? 1 : 0
+setupHits += macdBull ? 1 : 0
+setupHits += accumulating ? 1 : 0
+setupHits += rsLeader ? 1 : 0
+setupHits += structDir == 1 ? 1 : 0
+setupHits += inZone ? 1 : 0
+setupHits += not na(rr) and rr >= minRRIn ? 1 : 0
+setupHits += rvol >= 1.0 ? 1 : 0
+setupHits += breakRetest or breakConfirmed ? 1 : 0
+setupHits += accScore >= 50 ? 1 : 0
+
+float rank = math.max(0.0, math.min(100.0, score * 0.55 + setupHits / 11.0 * 30.0 + (rsLeader ? 8.0 : 0.0) + (rvol >= 1.2 ? 7.0 : 0.0)))
+float opportunity = math.max(0.0, math.min(100.0, score * 0.45 + setupHits / 11.0 * 100.0 * 0.35 + math.min(100.0, nz(rr, 0.0) / 3.0 * 100.0) * 0.20))
+
+bool regimeOk = not blockBear or not heavySell
+bool chaseOk = not blockChase or not chase
+bool rsOk = not useRsGate or rsSpread > 0
+bool buyFlag = barOk and liqOk and not supportBreak and setupHits >= effMinSetup and not na(rr) and rr >= minRRIn and (nearSupport or breakRetest or breakConfirmed) and score >= 55 and regimeOk and chaseOk and not nearLimit and distRisk < 65 and not mktHalt100 and not sundaySkip and sessionPhaseOk and rsOk
+bool passSig = buyFlag and rank >= effMinRank and opportunity >= 58
+bool proSig = passSig and opportunity >= effMinOpp and setupHits >= 7 and accScore >= 50 and distRisk < 50
+
+int action = supportBreak or heavySell or nearLimit or mktHalt100 ? 0 : proSig or buyFlag ? 3 : passSig or (setupHits >= 7 and opportunity >= 58) ? 2 : 1
+
+bool entryCore = entryMode == "Pro" ? proSig : entryMode == "Pass" ? passSig : buyFlag
+bool entrySig = mirrorBuyFlag ? buyFlag : entryCore
+bool exitSig = barOk and (supportBreak or fakeBreak or (close < ema21 and distributing) or (exitOnAction and action == 0))
+
+var bool tookHalf = false
+var float trailStop = na
+
+if strategy.position_size == 0
+    tookHalf := false
+    trailStop := na
+
+float entryQtyPct = math.max(0.5, math.min(15.0, math.min(riskPctEq * close / math.max(close - stopPx, syminfo.mintick), strategy.equity > 0 ? volMa * close * (partCapPct / 100.0) / strategy.equity * 100.0 : 10.0)))
+
+if entrySig and strategy.position_size == 0
+    if useRiskQty
+        strategy.entry("L", strategy.long, qty_percent=entryQtyPct)
+    else
+        strategy.entry("L", strategy.long)
+    tookHalf := false
+    trailStop := stopPx
+
+if strategy.position_size > 0
+    if usePartial and not tookHalf and high >= tHalf
+        strategy.close("L", qty_percent=50, comment="50% T1")
+        tookHalf := true
+        trailStop := math.max(nz(trailStop, stopPx), entryPx)
+    if useTrail and tookHalf
+        trailStop := math.max(nz(trailStop, stopPx), close - atr * trailMult)
+    float exitLim = tookHalf ? t2 : t1
+    float exitStop = useTrail and tookHalf and not na(trailStop) ? trailStop : stopPx
+    strategy.exit("LX", "L", stop=exitStop, limit=exitLim)
+
+if exitSig and strategy.position_size > 0
+    strategy.close("L", comment="Exit")
+
+plot(opportunity, "EGXOppST_Score", display=display.data_window)
+plot(proSig ? 1 : 0, "EGXOppST_Pro", display=display.data_window)
+plot(buyFlag ? 1 : 0, "EGXOppST_Buy", display=display.data_window)
+plot(passSig ? 1 : 0, "EGXOppST_Pass", display=display.data_window)
+plot(action, "EGXOppST_Action", display=display.data_window)
+plot(1, "EGXOppST", display=display.data_window)

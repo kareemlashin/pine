@@ -1,0 +1,37 @@
+//@version=6
+indicator("EGX Tool 70 MSS — Market Structure Shift", shorttitle="EGX T-MSS", overlay=true, max_labels_count=80, max_lines_count=80, max_boxes_count=40, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة ه SMC · #70/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+int len = input.int(5, "MSS swing")
+float ph = ta.pivothigh(high, len, len)
+float pl = ta.pivotlow(low, len, len)
+var float h1 = na
+var float h2 = na
+var float l1 = na
+var float l2 = na
+if not na(ph)
+    h2 := h1
+    h1 := ph
+if not na(pl)
+    l2 := l1
+    l1 := pl
+bool hhhl = not na(h1) and not na(h2) and not na(l1) and not na(l2) and h1 > h2 and l1 > l2
+bool lhll = not na(h1) and not na(h2) and not na(l1) and not na(l2) and h1 < h2 and l1 < l2
+int vote = hhhl ? 1 : lhll ? -1 : 0
+plotshape(hhhl and not hhhl[1], "MSS+", shape.circle, location.belowbar, color.lime, size=size.tiny)
+plotshape(lhll and not lhll[1], "MSS-", shape.circle, location.abovebar, color.red, size=size.tiny)
+
+plot(vote, "EGXT_MSS_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_MSS_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_MSS_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "MSS", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-MSS صاعد", "EGX Tool MSS: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-MSS هابط", "EGX Tool MSS: vote هابط")

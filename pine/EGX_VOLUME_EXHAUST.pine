@@ -1,0 +1,35 @@
+//@version=6
+indicator("EGX Volume Exhaustion", shorttitle="EGX VExh", overlay=true, max_tables_count=2, calc_bars_count=5000)
+
+// إ exhaustion: RVOL عالٍ + wick + ضعف متابعة · docs/EGX_VOLUME.md
+
+string G = "Exhaust"
+float rvolMin = input.float(1.8, "RVOL", group=G)
+float wickMin = input.float(0.45, "Wick/range", group=G)
+int trendLen = input.int(10, "Trend", group=G)
+
+float vma = ta.sma(volume, 20)
+float rvol = volume / math.max(vma, 1.0)
+float rng = math.max(high - low, syminfo.mintick)
+float upperW = (high - math.max(open, close)) / rng
+float lowerW = (math.min(open, close) - low) / rng
+
+bool upTrend = close > ta.sma(close, trendLen)
+bool dnTrend = close < ta.sma(close, trendLen)
+
+bool bearExh = rvol >= rvolMin and upTrend and upperW >= wickMin and close < open
+bool bullExh = rvol >= rvolMin and dnTrend and lowerW >= wickMin and close > open
+
+plotshape(bearExh, "Exh top", shape.triangledown, location.abovebar, color=color.orange, size=size.small, text="Ex")
+plotshape(bullExh, "Exh bot", shape.triangleup, location.belowbar, color=color.teal, size=size.small, text="Ex")
+
+var table t = table.new(position.top_right, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "Exhaust", bgcolor=color.black, text_color=color.orange, text_size=size.small)
+    table.cell(t, 1, 0, bearExh ? "Top" : bullExh ? "Bot" : "—", text_size=size.tiny)
+
+plot(bullExh ? 1 : 0, "EGVExh_Bull", display=display.all)
+plot(bearExh ? 1 : 0, "EGVExh_Bear", display=display.all)
+
+alertcondition(bearExh, "Bear exhaust", "Volume exhaustion top")

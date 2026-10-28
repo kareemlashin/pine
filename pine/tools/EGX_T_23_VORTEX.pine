@@ -1,0 +1,28 @@
+//@version=6
+indicator("EGX Tool 23 فورتكس — Vortex", shorttitle="EGX T-VORTEX", overlay=false, max_tables_count=2, calc_bars_count=5000)
+
+// مجموعة ب الاتجاه · #23/100 · docs/EGX_TOOLS.md
+// vote: +1 صاعد · 0 محايد · -1 هابط · OHLCV فقط — تعليمي مش نصيحة
+
+int len = input.int(14, "Vortex")
+float vmP = math.sum(math.abs(high - low[1]), len)
+float vmM = math.sum(math.abs(low - high[1]), len)
+float trSum = math.max(math.sum(ta.tr, len), syminfo.mintick)
+float viP = vmP / trSum
+float viM = vmM / trSum
+int vote = viP > viM ? 1 : -1
+plot(viP, "EGXT_VI+", color=color.lime, linewidth=2)
+plot(viM, "EGXT_VI-", color=color.red, linewidth=2)
+
+plot(vote, "EGXT_VORTEX_Vote", display=display.all)
+plot(vote == 1 ? 1 : 0, "EGXT_VORTEX_Bull", display=display.all)
+plot(vote == -1 ? 1 : 0, "EGXT_VORTEX_Bear", display=display.all)
+
+var table t = table.new(position.top_left, 2, 2, border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 1)
+    table.cell(t, 0, 0, "VORTEX", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, vote > 0 ? "▲ شراء" : vote < 0 ? "▼ بيع" : "— محايد", text_color=vote > 0 ? color.lime : vote < 0 ? color.red : color.gray, text_size=size.small)
+
+alertcondition(vote == 1 and vote[1] != 1, "EGX T-VORTEX صاعد", "EGX Tool VORTEX: vote صاعد")
+alertcondition(vote == -1 and vote[1] != -1, "EGX T-VORTEX هابط", "EGX Tool VORTEX: vote هابط")

@@ -1,0 +1,443 @@
+//@version=6
+indicator("EGX TOOLS — 200 سهم (5 صفحات)", shorttitle="T200", overlay=false, max_tables_count=1, calc_bars_count=5000)
+
+// 40×5 صفحات · lite tools · plots: EGXTTB_*
+// Screener: EGX_TOOLS_OPP · لوحة كاملة: EGX_TOOLS_BOARD200
+
+int N = 40
+string G = "═══ 200 سهم ═══"
+string page = input.string("1 كبار 1–40", "صفحة", options=["1 كبار 1–40","2 SCEM–BONY","3 SUGR–ADCI","4 GDWA–AALR","5 GTWL–UNIP"], group=G)
+string bench = input.symbol("EGX:EGX30", "EGX30", group=G)
+bool chartIs30 = input.bool(true, "الشارت EGX30", group=G)
+float minVol = input.float(800.0, "حد حجم", group=G)
+float sigMin = input.float(20.0, "حد Score %", minval=10, maxval=50, group=G)
+int showTop = input.int(40, "Top N", minval=5, maxval=40, group=G)
+float minScoreShow = input.float(25.0, "حد Score", minval=0, maxval=80, group=G)
+bool hideWeak = input.bool(false, "إخفاء ضعيف", group=G)
+bool onlyBuy = input.bool(false, "A/B فقط", group=G)
+string egxBoard = input.string("نشط (EGX100)", "لوحة", options=["نشط (EGX100)", "EGX30 (بيع مكشوف)", "SME تميّز", "SME نايل", "غير نشط"], group=G)
+
+f_p0(int i) =>
+    switch i
+        0 => "EGX:COMI"
+        1 => "EGX:SWDY"
+        2 => "EGX:ETEL"
+        3 => "EGX:TMGH"
+        4 => "EGX:MFPC"
+        5 => "EGX:EGAL"
+        6 => "EGX:ABUK"
+        7 => "EGX:QNBE"
+        8 => "EGX:HDBK"
+        9 => "EGX:ALCN"
+        10 => "EGX:EAST"
+        11 => "EGX:ORAS"
+        12 => "EGX:EFIH"
+        13 => "EGX:ADIB"
+        14 => "EGX:EMFD"
+        15 => "EGX:FWRY"
+        16 => "EGX:SCTS"
+        17 => "EGX:GPPL"
+        18 => "EGX:VLMR"
+        19 => "EGX:CANA"
+        20 => "EGX:HALN"
+        21 => "EGX:EFID"
+        22 => "EGX:HRHO"
+        23 => "EGX:ORHD"
+        24 => "EGX:PHDC"
+        25 => "EGX:FAIT"
+        26 => "EGX:JUFO"
+        27 => "EGX:OCDI"
+        28 => "EGX:CIEB"
+        29 => "EGX:GBCO"
+        30 => "EGX:HELI"
+        31 => "EGX:CCAP"
+        32 => "EGX:EXPA"
+        33 => "EGX:IRON"
+        34 => "EGX:BTFH"
+        35 => "EGX:ARCC"
+        36 => "EGX:RAYA"
+        37 => "EGX:FERC"
+        38 => "EGX:VALU"
+        39 => "EGX:EGCH"
+        => ""
+
+f_p1(int i) =>
+    switch i
+        0 => "EGX:SCEM"
+        1 => "EGX:CIRA"
+        2 => "EGX:BIOC"
+        3 => "EGX:CLHO"
+        4 => "EGX:TAQA"
+        5 => "EGX:EGSA"
+        6 => "EGX:AMOC"
+        7 => "EGX:MOIL"
+        8 => "EGX:SKPC"
+        9 => "EGX:POUL"
+        10 => "EGX:PHAR"
+        11 => "EGX:ORWE"
+        12 => "EGX:UBEE"
+        13 => "EGX:MTIE"
+        14 => "EGX:MBSC"
+        15 => "EGX:SAUD"
+        16 => "EGX:MCQE"
+        17 => "EGX:EGBE"
+        18 => "EGX:TALM"
+        19 => "EGX:MASR"
+        20 => "EGX:EFIC"
+        21 => "EGX:BINV"
+        22 => "EGX:NIPH"
+        23 => "EGX:EGTS"
+        24 => "EGX:MHOT"
+        25 => "EGX:ATQA"
+        26 => "EGX:CICH"
+        27 => "EGX:NAPR"
+        28 => "EGX:RMDA"
+        29 => "EGX:ISPH"
+        30 => "EGX:CSAG"
+        31 => "EGX:CPCI"
+        32 => "EGX:MIPH"
+        33 => "EGX:AMIA"
+        34 => "EGX:IFAP"
+        35 => "EGX:OIH"
+        36 => "EGX:OLFI"
+        37 => "EGX:PHTV"
+        38 => "EGX:AMES"
+        39 => "EGX:BONY"
+        => ""
+
+f_p2(int i) =>
+    switch i
+        0 => "EGX:SUGR"
+        1 => "EGX:MOIN"
+        2 => "EGX:SPHT"
+        3 => "EGX:EGAS"
+        4 => "EGX:MPRC"
+        5 => "EGX:PRDC"
+        6 => "EGX:ISMQ"
+        7 => "EGX:ZMID"
+        8 => "EGX:DOMT"
+        9 => "EGX:AXPH"
+        10 => "EGX:GOUR"
+        11 => "EGX:MPCI"
+        12 => "EGX:ARAB"
+        13 => "EGX:SPIN"
+        14 => "EGX:SAIB"
+        15 => "EGX:ELEC"
+        16 => "EGX:SDTI"
+        17 => "EGX:MICH"
+        18 => "EGX:ACAP"
+        19 => "EGX:CNFN"
+        20 => "EGX:ENGC"
+        21 => "EGX:GSSC"
+        22 => "EGX:MCRO"
+        23 => "EGX:AJWA"
+        24 => "EGX:SVCE"
+        25 => "EGX:NINH"
+        26 => "EGX:KABO"
+        27 => "EGX:KORA"
+        28 => "EGX:DSCW"
+        29 => "EGX:UNIT"
+        30 => "EGX:OCPH"
+        31 => "EGX:WCDF"
+        32 => "EGX:ACGC"
+        33 => "EGX:KZPC"
+        34 => "EGX:AFMC"
+        35 => "EGX:AMER"
+        36 => "EGX:OFH"
+        37 => "EGX:UEFM"
+        38 => "EGX:MFSC"
+        39 => "EGX:ADCI"
+        => ""
+
+f_p3(int i) =>
+    switch i
+        0 => "EGX:GDWA"
+        1 => "EGX:CFGH"
+        2 => "EGX:NAHO"
+        3 => "EGX:LCSW"
+        4 => "EGX:ELKA"
+        5 => "EGX:GPIM"
+        6 => "EGX:ETRS"
+        7 => "EGX:ACTF"
+        8 => "EGX:ACAMD"
+        9 => "EGX:ICFC"
+        10 => "EGX:CRST"
+        11 => "EGX:EDFM"
+        12 => "EGX:ALRA"
+        13 => "EGX:INFI"
+        14 => "EGX:ELSH"
+        15 => "EGX:ASCM"
+        16 => "EGX:ZEOT"
+        17 => "EGX:ATLC"
+        18 => "EGX:SNFC"
+        19 => "EGX:PHGC"
+        20 => "EGX:MPCO"
+        21 => "EGX:DAPH"
+        22 => "EGX:SMFR"
+        23 => "EGX:CEFM"
+        24 => "EGX:NARE"
+        25 => "EGX:ICID"
+        26 => "EGX:ISMA"
+        27 => "EGX:DEIN"
+        28 => "EGX:GGRN"
+        29 => "EGX:MENA"
+        30 => "EGX:ECAP"
+        31 => "EGX:RACC"
+        32 => "EGX:ADPC"
+        33 => "EGX:NDRL"
+        34 => "EGX:EALR"
+        35 => "EGX:KRDI"
+        36 => "EGX:MOSC"
+        37 => "EGX:EHDR"
+        38 => "EGX:WKOL"
+        39 => "EGX:AALR"
+        => ""
+
+f_p4(int i) =>
+    switch i
+        0 => "EGX:GTWL"
+        1 => "EGX:MAAL"
+        2 => "EGX:AIHC"
+        3 => "EGX:MILS"
+        4 => "EGX:ASPI"
+        5 => "EGX:IDRE"
+        6 => "EGX:NCCW"
+        7 => "EGX:GGCC"
+        8 => "EGX:ODIN"
+        9 => "EGX:CERA"
+        10 => "EGX:SIPC"
+        11 => "EGX:POCO"
+        12 => "EGX:SCFM"
+        13 => "EGX:GTEX"
+        14 => "EGX:UEGC"
+        15 => "EGX:PRCL"
+        16 => "EGX:DTPP"
+        17 => "EGX:CAED"
+        18 => "EGX:IEEC"
+        19 => "EGX:NHPS"
+        20 => "EGX:MEPA"
+        21 => "EGX:ICLE"
+        22 => "EGX:MEGM"
+        23 => "EGX:OBRI"
+        24 => "EGX:SEIG"
+        25 => "EGX:MBEG"
+        26 => "EGX:COSG"
+        27 => "EGX:RTVC"
+        28 => "EGX:RUBX"
+        29 => "EGX:ALUM"
+        30 => "EGX:AFDI"
+        31 => "EGX:AIDC"
+        32 => "EGX:RAKT"
+        33 => "EGX:LUTS"
+        34 => "EGX:TANM"
+        35 => "EGX:APSW"
+        36 => "EGX:EBSC"
+        37 => "EGX:TWSA"
+        38 => "EGX:PRMH"
+        39 => "EGX:UNIP"
+        => ""
+f_sym(int i) =>
+    switch page
+        "1 كبار 1–40" => f_p0(i)
+        "2 SCEM–BONY" => f_p1(i)
+        "3 SUGR–ADCI" => f_p2(i)
+        "4 GDWA–AALR" => f_p3(i)
+        "5 GTWL–UNIP" => f_p4(i)
+        => ""
+
+
+f_tools() =>
+    float ema20 = ta.ema(close, 20)
+    float ema50 = ta.ema(close, 50)
+    float ema200 = ta.ema(close, 200)
+    float rsi = ta.rsi(close, 14)
+    [macdL, macdS, macdH] = ta.macd(close, 12, 26, 9)
+    float volMa = ta.sma(volume, 20)
+    bool liq = volMa >= minVol
+    float rvol = volume / math.max(volMa, 1.0)
+    float rng = math.max(high - low, syminfo.mintick)
+    float cmf = ta.sma(((close - low) - (high - close)) / rng * volume, 20) / ta.sma(volume, 20)
+    float obvSl = ta.linreg(ta.obv, 10, 0) - ta.linreg(ta.obv, 10, 1)
+    [diP, diM, adx] = ta.dmi(14, 14)
+    [stLine, stDir] = ta.supertrend(3.0, 10)
+    float lookHi = ta.highest(high, 80)
+    float lookLo = ta.lowest(low, 80)
+    bool inDem = close <= lookHi - 0.618 * (lookHi - lookLo) and close >= lookLo
+    bool bosUp = close > ta.highest(high, 20)[1]
+    float hi = ta.highest(high, 252)
+    bool chase = hi > 0 and (close - hi) / hi * 100.0 > -3 and rsi > 72
+    float dPrev = close[1]
+    float dayPct = dPrev > 0 ? (close - dPrev) / dPrev * 100.0 : 0.0
+    float haltPct = egxBoard == "SME تميّز" or egxBoard == "SME نايل" or egxBoard == "غير نشط" ? 5.0 : 10.0
+    float luldPct = egxBoard == "غير نشط" ? 5.0 : (egxBoard == "SME تميّز" or egxBoard == "SME نايل" ? 10.0 : 20.0)
+    bool nearLimit = dayPct >= math.min(9.0, haltPct - 1.0) or dayPct >= luldPct - 0.25
+    int v01 = rsi > 52 and rsi < 68 ? 1 : rsi >= 68 ? 0 : -1
+    int v02 = macdH > 0 and macdL > macdS ? 1 : macdH < 0 ? -1 : 0
+    int v03 = ta.stoch(close, high, low, 14) > 50 ? 1 : -1
+    int v04 = ta.roc(close, 10) > 0 ? 1 : -1
+    int v05 = ta.mfi(hlc3, 14) > 50 ? 1 : -1
+    int v06 = adx > 22 and diP > diM ? 1 : adx > 22 and diM > diP ? -1 : 0
+    int v07 = close > ema20 and ema20 > ema50 and ema50 > ema200 ? 1 : close < ema20 and ema20 < ema50 ? -1 : 0
+    int v08 = stDir < 0 ? 1 : -1
+    int v10 = cmf > 0.05 ? 1 : cmf < -0.05 ? -1 : 0
+    int v11 = obvSl > 0 ? 1 : obvSl < 0 ? -1 : 0
+    int v12 = ta.accdist > ta.ema(ta.accdist, 20) ? 1 : -1
+    int v15 = bosUp ? 1 : close < ta.lowest(low, 20)[1] ? -1 : 0
+    int v16 = inDem ? 1 : close > lookHi * 0.98 ? -1 : 0
+    int sumV = v01 + v02 + v03 + v04 + v05 + v06 + v07 + v08 + v10 + v11 + v12 + v15 + v16
+    float score = sumV / 13.0 * 100.0
+    int nG = (v01 == 1 ? 1 : 0) + (v02 == 1 ? 1 : 0) + (v03 == 1 ? 1 : 0) + (v04 == 1 ? 1 : 0) + (v05 == 1 ? 1 : 0) + (v06 == 1 ? 1 : 0) + (v07 == 1 ? 1 : 0) + (v08 == 1 ? 1 : 0) + (v10 == 1 ? 1 : 0) + (v11 == 1 ? 1 : 0) + (v12 == 1 ? 1 : 0) + (v15 == 1 ? 1 : 0) + (v16 == 1 ? 1 : 0)
+    int nR = (v01 == -1 ? 1 : 0) + (v02 == -1 ? 1 : 0) + (v03 == -1 ? 1 : 0) + (v04 == -1 ? 1 : 0) + (v05 == -1 ? 1 : 0) + (v06 == -1 ? 1 : 0) + (v07 == -1 ? 1 : 0) + (v08 == -1 ? 1 : 0) + (v10 == -1 ? 1 : 0) + (v11 == -1 ? 1 : 0) + (v12 == -1 ? 1 : 0) + (v15 == -1 ? 1 : 0) + (v16 == -1 ? 1 : 0)
+    bool locOK = inDem or bosUp or v16 == 1
+    bool moneyOK = v10 == 1 and v11 != -1 and v12 == 1
+    bool upTrend = v07 == 1 or v08 == 1
+    bool momOK = score >= sigMin * 0.5
+    bool trigOK = close > open and (v03 == 1 or v04 == 1)
+    bool volOK = rvol >= 0.9
+    int hits = (upTrend ? 1 : 0) + (locOK ? 1 : 0) + (momOK ? 1 : 0) + (moneyOK ? 1 : 0) + (trigOK ? 1 : 0) + (volOK ? 1 : 0)
+    bool egxOK = liq and not chase and not nearLimit
+    bool buyA = egxOK and locOK and moneyOK and hits >= 5 and score >= sigMin
+    bool buyB = egxOK and locOK and not buyA and hits >= 4 and score >= sigMin * 0.5
+    bool buy = buyA or buyB
+    float accSc = nG / 13.0 * 100.0
+    float distSc = nR / 13.0 * 100.0
+    float atr = ta.atr(14)
+    float pl = ta.pivotlow(low, 8, 8)
+    var float sl = na
+    if not na(pl)
+        sl := pl
+    float ph = ta.pivothigh(high, 8, 8)
+    var float sh = na
+    if not na(ph)
+        sh := ph
+    float zw = atr * 0.35
+    float t1 = na(sh) ? close + atr * 1.5 : sh
+    float stopPx = nz(sl, close) - zw * 1.2 - atr * 0.5
+    float entryPx = close
+    float rr = math.max(entryPx - stopPx, syminfo.mintick) > 0 ? (t1 - entryPx) / math.max(entryPx - stopPx, syminfo.mintick) : 0.0
+    float roc20 = ta.roc(close, 20)
+    [score, buy ? 1.0 : 0.0, hits, rvol, roc20, accSc, distSc, rr, dayPct]
+
+float benchRoc = chartIs30 ? ta.roc(close, 20) : request.security(bench, "D", ta.roc(close, 20), barmerge.gaps_off, barmerge.lookahead_off)
+
+f_row(int i) =>
+    string s = f_sym(i)
+    s == "" ? [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] : request.security(s, "D", f_tools(), barmerge.gaps_off, barmerge.lookahead_off)
+
+float[] scA = array.new_float(N, 0.0)
+float[] rkA = array.new_float(N, 0.0)
+float[] buyAA = array.new_float(N, 0.0)
+float[] buyBA = array.new_float(N, 0.0)
+int[] hitA = array.new_int(N, 0)
+int[] netA = array.new_int(N, 0)
+float[] rvA = array.new_float(N, 0.0)
+float[] rsA = array.new_float(N, 0.0)
+float[] dayA = array.new_float(N, 0.0)
+bool[] onA = array.new_bool(N, false)
+
+for i = 0 to N - 1
+    [sc, bu, ht, rv, roc20, ac, ds, rrv, dp] = f_row(i)
+    bool on = f_sym(i) != ""
+    float rs = roc20 - benchRoc
+    int st2 = int(ht) + (rs > 0 ? 1 : 0)
+    float rnk = math.max(0.0, math.min(100.0, sc * 0.55 + st2 / 7.0 * 100.0 * 0.30 + math.min(100.0, rrv / 3.0 * 100.0) * 0.15 + (rs > 0 ? 5.0 : 0.0)))
+    array.set(scA, i, on ? sc : -1.0)
+    array.set(rkA, i, rnk)
+    array.set(buyAA, i, bu > 0 ? 1.0 : 0.0)
+    array.set(buyBA, i, 0.0)
+    array.set(hitA, i, int(ht))
+    array.set(netA, i, int(nn))
+    array.set(rvA, i, rv)
+    array.set(rsA, i, rs)
+    array.set(dayA, i, dp)
+    array.set(onA, i, on)
+
+int[] sorted = array.new_int(N, 0)
+for k = 0 to N - 1
+    array.set(sorted, k, k)
+for i = 0 to N - 2
+    for j = 0 to N - 2 - i
+        int ia = array.get(sorted, j)
+        int ib = array.get(sorted, j + 1)
+        if array.get(rkA, ia) < array.get(rkA, ib)
+            array.set(sorted, j, ib)
+            array.set(sorted, j + 1, ia)
+
+int[] vis = array.new_int()
+for k = 0 to N - 1
+    int ix = array.get(sorted, k)
+    if not array.get(onA, ix)
+        continue
+    float sc = array.get(scA, ix)
+    bool bu = array.get(buyAA, ix) > 0 or array.get(buyBA, ix) > 0
+    if hideWeak and sc < minScoreShow
+        continue
+    if onlyBuy and not bu
+        continue
+    array.push(vis, ix)
+
+int nVis = array.size(vis)
+int rows = math.min(showTop, nVis)
+int leader = nVis > 0 ? array.get(vis, 0) : 0
+float leaderRank = nVis > 0 ? array.get(rkA, leader) : 0.0
+bool leaderA = nVis > 0 and array.get(buyAA, leader) > 0
+string leaderSym = nVis > 0 ? f_sym(leader) : "—"
+
+int buyCnt = 0
+int hotCnt = 0
+int liveCnt = 0
+for i = 0 to N - 1
+    if array.get(onA, i)
+        liveCnt += 1
+        buyCnt += (array.get(buyAA, i) > 0 or array.get(buyBA, i) > 0) ? 1 : 0
+        hotCnt += array.get(scA, i) >= sigMin ? 1 : 0
+
+var table tb = table.new(position.top_right, 10, 44, bgcolor=color.new(#0d1117, 4), border_width=1)
+if barstate.islast
+    int lastR = math.max(rows + 2, 2)
+    table.clear(tb, 0, 0, 9, lastR)
+    color hdr = color.new(#1a2332, 8)
+    table.cell(tb, 0, 0, "#", bgcolor=hdr, text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 1, 0, "رمز", bgcolor=hdr, text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 2, 0, "Rank", bgcolor=hdr, text_color=color.white, text_size=size.tiny)
+    table.cell(tb, 3, 0, "Score", bgcolor=hdr, text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 4, 0, "Hits", bgcolor=hdr, text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 5, 0, "RVOL", bgcolor=hdr, text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 6, 0, "RS20", bgcolor=hdr, text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 7, 0, "يوم%", bgcolor=hdr, text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 8, 0, "Net", bgcolor=hdr, text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 9, 0, "حالة", bgcolor=hdr, text_color=color.gray, text_size=size.tiny)
+    if rows > 0
+        for row = 0 to rows - 1
+            int ix = array.get(vis, row)
+            float rnk = array.get(rkA, ix)
+            float sc = array.get(scA, ix)
+            bool ba = array.get(buyAA, ix) > 0
+            bool bb = array.get(buyBA, ix) > 0
+            float dp = array.get(dayA, ix)
+            color oc = ba ? color.lime : sc >= sigMin ? color.yellow : color.gray
+            table.cell(tb, 0, row + 1, str.tostring(row + 1), text_size=size.tiny, text_color=row == 0 ? color.lime : color.gray)
+            table.cell(tb, 1, row + 1, f_sym(ix), text_size=size.tiny, text_color=row == 0 ? color.white : color.silver)
+            table.cell(tb, 2, row + 1, str.tostring(rnk, "#"), text_size=size.tiny, text_color=oc)
+            table.cell(tb, 3, row + 1, str.tostring(sc, "#"), text_size=size.tiny)
+            table.cell(tb, 4, row + 1, str.tostring(array.get(hitA, ix)) + "/6", text_size=size.tiny)
+            table.cell(tb, 5, row + 1, str.tostring(array.get(rvA, ix), "#.##"), text_size=size.tiny)
+            table.cell(tb, 6, row + 1, str.tostring(array.get(rsA, ix), "#.#") + "%", text_size=size.tiny)
+            table.cell(tb, 7, row + 1, str.tostring(dp, "#.#") + "%", text_size=size.tiny)
+            table.cell(tb, 8, row + 1, str.tostring(array.get(netA, ix)), text_size=size.tiny)
+            table.cell(tb, 9, row + 1, ba ? "A" : bb ? "B" : "—", text_size=size.tiny, text_color=ba or bb ? color.lime : color.gray)
+    table.cell(tb, 0, rows + 1, "★", text_color=color.lime, text_size=size.small)
+    table.cell(tb, 1, rows + 1, leaderSym, text_color=color.white, text_size=size.small)
+    table.cell(tb, 2, rows + 1, str.tostring(leaderRank, "#"), text_color=color.lime, text_size=size.small)
+    table.cell(tb, 3, rows + 1, leaderA ? "A" : "—", text_size=size.tiny)
+    table.cell(tb, 4, rows + 1, "A/B " + str.tostring(buyCnt), text_size=size.tiny)
+    table.cell(tb, 0, rows + 2, "TOOLS 200", text_color=color.aqua, text_size=size.tiny)
+    table.cell(tb, 1, rows + 2, page, text_color=color.yellow, text_size=size.tiny)
+
+plot(leaderRank, "EGXTTB_LeaderRank", display=display.data_window)
+plot(leaderA ? 1 : 0, "EGXTTB_LeaderBuyA", display=display.data_window)
+plot(buyCnt, "EGXTTB_BuyCount", display=display.data_window)
+plot(liveCnt, "EGXTTB_Live", display=display.data_window)
+plot(1, "EGXTTB", display=display.data_window)
+
+alertcondition(leaderA, "TOOLS 200 — A الأول", "{{ticker}} T200 leader A")
