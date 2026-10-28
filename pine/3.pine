@@ -1,0 +1,233 @@
+//@version=5
+indicator("EGX قرار | قاع·قمة·شراء استثمار/مضاربة", shorttitle="EGX QARAR", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=50)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// EGX QARAR — يحدد: قاع محتمل / قمة محتملة + منطقة شراء + قرار استثمار ومضاربة
+// ليس توصية — أداة confluence. Daily للاستثمار · 60m/15m للمضاربة.
+//
+// ThndrX (تنفيذ EGX): https://x.thndr.app — Pine لا يُلصق هنا؛ استخدم هذا المؤشر
+// على TradingView (EGX:COMI) ثم نفّذ على ThndrX (ticker: COMI). راجع egx-thndr-x-workflow.md
+// ═══════════════════════════════════════════════════════════════════════════════
+
+string G_MODE = "═══ الوضع ═══"
+string userMode = input.string("الكل", "عرض القرار", options=["الكل", "استثمار", "مضاربة"], group=G_MODE)
+string htfInv = input.timeframe("W", "HTF استثمار", group=G_MODE)
+
+string G_ZONE = "═══ قاع / قمة ═══"
+int pivotLen = input.int(5, "Pivot (bars)", minval=3, maxval=15, group=G_ZONE)
+int zoneLookback = input.int(252, "نافذة 52 أسبوع تقريباً", minval=60, group=G_ZONE)
+float nearLowPct = input.float(8.0, "قرب من القاع %", minval=2, maxval=25, group=G_ZONE)
+float nearHighPct = input.float(8.0, "قرب من القمة %", minval=2, maxval=25, group=G_ZONE)
+float rsiOs = input.float(35.0, "RSI تشبع بيع", group=G_ZONE)
+float rsiOb = input.float(65.0, "RSI تشبع شراء", group=G_ZONE)
+
+string G_RISK = "═══ مخاطر EGX ═══"
+float dailyLimitPct = input.float(19.0, "حد أقصى للهدف % من أمس", minval=5, maxval=20, group=G_RISK)
+
+string G_EGX = "═══ EGX ═══"
+string bench = input.string("EGX:EGX30", "RS benchmark", group=G_EGX)
+int rsBars = input.int(30, "RS جلسات (RS30)", minval=10, group=G_EGX)
+
+string G_UI = "═══ عرض ═══"
+bool showZones = input.bool(true, "صناديق شراء/خطر", group=G_UI)
+bool showLines = input.bool(true, "دخول·وقف·أهداف", group=G_UI)
+bool showBadge = input.bool(true, "ملصق القرار", group=G_UI)
+
+// ─── Core TA ───
+float atr = ta.atr(14)
+float ema21 = ta.ema(close, 21)
+float ema50 = ta.ema(close, 50)
+float ema200 = ta.ema(close, 200)
+float rsi = ta.rsi(close, 14)
+[macdL, macdS, macdH] = ta.macd(close, 12, 26, 9)
+bool macdUp = macdH > 0 and macdL > macdS
+
+float volMa = ta.sma(volume, 20)
+float rvol = volume / math.max(volMa, 1.0)
+float mfm = ((close - low) - (high - close)) / math.max(high - low, syminfo.mintick)
+float cmf = ta.sma(mfm * volume, 14) / ta.sma(volume, 14)
+
+// ─── HTF / RS ───
+float wClose = request.security(syminfo.tickerid, htfInv, close, barmerge.gaps_off, barmerge.lookahead_off)
+float wEma50 = request.security(syminfo.tickerid, htfInv, ta.ema(close, 50), barmerge.gaps_off, barmerge.lookahead_off)
+bool htfUp = wClose > wEma50
+float idxRoc = request.security(bench, timeframe.period, ta.roc(close, rsBars), barmerge.gaps_off, barmerge.lookahead_off)
+float stkRoc = ta.roc(close, rsBars)
+float rs30 = stkRoc - idxRoc
+
+// ─── Pivots ───
+float pl = ta.pivotlow(low, pivotLen, pivotLen)
+float ph = ta.pivothigh(high, pivotLen, pivotLen)
+
+var float swingLow = na
+var float swingHigh = na
+var int barsFromLow = 999
+var int barsFromHigh = 999
+
+if not na(pl)
+    swingLow := pl
+    barsFromLow := 0
+else
+    barsFromLow += 1
+
+if not na(ph)
+    swingHigh := ph
+    barsFromHigh := 0
+else
+    barsFromHigh += 1
+
+float low52 = ta.lowest(low, zoneLookback)
+float high52 = ta.highest(high, zoneLookback)
+float distLowPct = low52 > 0 ? (close - low52) / low52 * 100 : na
+float distHighPct = high52 > 0 ? (high52 - close) / high52 * 100 : na
+
+bool near52Low = not na(distLowPct) and distLowPct <= nearLowPct
+bool near52High = not na(distHighPct) and distHighPct <= nearHighPct
+
+// VSA climax (مبسّط)
+float spread = high - low
+float closePos = spread > syminfo.mintick ? (close - low) / spread : 0.5
+bool scBar = volume > volMa * 2.2 and closePos > 0.5 and near52Low
+bool bcBar = volume > volMa * 2.2 and closePos < 0.5 and near52High
+
+// Spring: كسر قصير تحت swingLow ثم إغلاق داخل
+bool spring = not na(swingLow) and low < swingLow and close > swingLow and close > open
+
+// ─── Bottom / Top scores 0–100 ───
+float bottomScore = 0.0
+bottomScore += near52Low ? 25 : distLowPct < 20 ? 10 : 0
+bottomScore += barsFromLow <= pivotLen * 3 ? 15 : barsFromLow <= 15 ? 8 : 0
+bottomScore += rsi < rsiOs ? 15 : rsi < 45 ? 8 : 0
+bottomScore += rsi > rsi[1] and rsi < 50 ? 10 : 0
+bottomScore += cmf > 0 and cmf > cmf[3] ? 15 : cmf > 0 ? 8 : 0
+bottomScore += scBar or spring ? 15 : 0
+bottomScore += macdUp ? 5 : 0
+bottomScore := math.min(100, bottomScore)
+
+float topScore = 0.0
+topScore += near52High ? 25 : distHighPct < 20 ? 10 : 0
+topScore += barsFromHigh <= pivotLen * 3 ? 15 : barsFromHigh <= 15 ? 8 : 0
+topScore += rsi > rsiOb ? 15 : rsi > 55 ? 8 : 0
+topScore += rsi < rsi[1] and rsi > 50 ? 10 : 0
+topScore += cmf < 0 and cmf < cmf[3] ? 15 : cmf < 0 ? 8 : 0
+topScore += bcBar ? 15 : 0
+topScore += not macdUp and macdH < 0 ? 5 : 0
+topScore := math.min(100, topScore)
+
+bool isBottomZone = bottomScore >= 55 and bottomScore > topScore + 10
+bool isTopZone = topScore >= 55 and topScore > bottomScore + 10
+bool isMid = not isBottomZone and not isTopZone
+
+// ─── Buy / sell zones ───
+float buyTop = nz(swingLow, close) + atr * 0.35
+float buyBot = nz(swingLow, close) - atr * 0.55
+float entry = (buyTop + buyBot) / 2
+float stopL = buyBot - atr * 0.4
+float prevClose = close[1]
+float capUp = prevClose * (1 + dailyLimitPct / 100)
+float t1 = math.min(nz(swingHigh, close + atr * 2), capUp)
+float t2 = math.min(close + atr * 2.5, capUp)
+float t3 = math.min(close + atr * 4, capUp)
+
+float sellTop = nz(swingHigh, close) + atr * 0.35
+float sellBot = nz(swingHigh, close) - atr * 0.55
+
+bool inBuyZone = low <= buyTop and close >= buyBot
+
+bullStackSoon() =>
+    close > ema21 or ta.crossover(close, ema21)
+
+// ─── Decisions ───
+bool invAccum = isBottomZone and (close > ema200 or htfUp) and cmf > 0 and rs30 > -5
+bool invWatchBottom = isBottomZone and not invAccum and bottomScore >= 50
+bool invAvoid = isTopZone or (close < ema200 and not isBottomZone and rsi < 40)
+
+bool specBuy = isBottomZone and inBuyZone and rvol >= 1.3 and macdUp and bullStackSoon()
+bool specExit = isTopZone and (bcBar or rsi > 70)
+
+string decInv = invAccum ? "🟢 شراء استثمار" : invWatchBottom ? "🟡 تجميع — راقب ST" : isTopZone and topScore >= 60 ? "🔴 قمة — لا شراء" : invAvoid ? "⚪ تجنب / ضعيف" : isMid ? "⚪ محايد" : "🟡 راقب القاع"
+
+string decSpec = specBuy ? "🟢 دخول مضاربة" : specExit ? "🔴 خروج / تجنب شراء" : isBottomZone and inBuyZone ? "🟡 قاع — انتظر RVOL" : isTopZone ? "🔴 قمة مضاربة" : "⚪ لا setup"
+
+// Decision codes for screener: 2=inv buy, 1=spec buy, 0=neutral, -1=top danger
+float decCode = invAccum ? 2 : specBuy ? 1.5 : isTopZone and topScore >= 60 ? -1 : invWatchBottom ? 0.5 : 0
+
+// ─── Draw zones ───
+var box bxBuy = na
+var box bxSell = na
+
+if showZones and isBottomZone and barstate.islast
+    box.delete(bxBuy)
+    bxBuy := box.new(bar_index - 25, buyTop, bar_index + 8, buyBot, bgcolor=color.new(color.green, 88), border_color=color.lime, text="منطقة شراء\nقاع " + str.tostring(bottomScore, "#"))
+
+if showZones and isTopZone and barstate.islast
+    box.delete(bxSell)
+    bxSell := box.new(bar_index - 25, sellTop, bar_index + 8, sellBot, bgcolor=color.new(color.red, 88), border_color=color.red, text="منطقة خطر\nقمة " + str.tostring(topScore, "#"))
+
+var line lEntry = na
+var line lStop = na
+var line lT1 = na
+
+if showLines and isBottomZone and barstate.islast
+    line.delete(lEntry)
+    line.delete(lStop)
+    line.delete(lT1)
+    lEntry := line.new(bar_index - 30, entry, bar_index + 12, entry, color=color.lime, style=line.style_dashed)
+    lStop := line.new(bar_index - 30, stopL, bar_index + 12, stopL, color=color.red, style=line.style_dotted)
+    lT1 := line.new(bar_index - 30, t1, bar_index + 12, t1, color=color.aqua)
+
+plot(ema200, "EMA200", color=color.new(color.purple, 40), linewidth=2)
+plotshape(scBar, "SC", shape.labelup, location.belowbar, color.green, size=size.tiny, text="SC")
+plotshape(bcBar, "BC", shape.labeldown, location.abovebar, color.red, size=size.tiny, text="BC")
+plotshape(spring, "Spring", shape.triangleup, location.belowbar, color.lime, size=size.small, text="Spring")
+
+bgcolor(isBottomZone ? color.new(color.green, 93) : isTopZone ? color.new(color.red, 93) : na)
+
+// ─── Decision panel ───
+var table pan = table.new(position.bottom_right, 2, 14, bgcolor=color.new(#1a1a2e, 10), border_width=1)
+
+if barstate.islast
+    table.cell(pan, 0, 0, "EGX QARAR", text_color=color.white, text_size=size.normal)
+    table.cell(pan, 1, 0, syminfo.ticker, text_color=color.yellow, text_size=size.small)
+    table.cell(pan, 0, 1, "الموقع", text_color=color.gray, text_size=size.small)
+    table.cell(pan, 1, 1, isBottomZone ? "📍 قاع محتمل" : isTopZone ? "📍 قمة محتملة" : "↔ وسط/ترند", text_color=isBottomZone ? color.lime : isTopZone ? color.red : color.gray, text_size=size.small)
+    table.cell(pan, 0, 2, "Score قاع", text_color=color.gray, text_size=size.tiny)
+    table.cell(pan, 1, 2, str.tostring(bottomScore, "#"), text_color=color.lime, text_size=size.small)
+    table.cell(pan, 0, 3, "Score قمة", text_color=color.gray, text_size=size.tiny)
+    table.cell(pan, 1, 3, str.tostring(topScore, "#"), text_color=color.red, text_size=size.small)
+    table.cell(pan, 0, 4, "من القاع %", text_color=color.gray, text_size=size.tiny)
+    table.cell(pan, 1, 4, str.tostring(distLowPct, "#.#") + "%", text_color=color.white, text_size=size.tiny)
+    table.cell(pan, 0, 5, "من القمة %", text_color=color.gray, text_size=size.tiny)
+    table.cell(pan, 1, 5, str.tostring(distHighPct, "#.#") + "%", text_color=color.white, text_size=size.tiny)
+    table.cell(pan, 0, 6, "RS30", text_color=color.gray, text_size=size.tiny)
+    table.cell(pan, 1, 6, str.tostring(rs30, "#.##") + "%", text_color=rs30 > 0 ? color.lime : color.red, text_size=size.tiny)
+    table.cell(pan, 0, 7, "قرار استثمار", text_color=color.gray, text_size=size.small)
+    table.cell(pan, 1, 7, userMode == "مضاربة" ? "—" : decInv, text_color=color.white, text_size=size.small)
+    table.cell(pan, 0, 8, "قرار مضاربة", text_color=color.gray, text_size=size.small)
+    table.cell(pan, 1, 8, userMode == "استثمار" ? "—" : decSpec, text_color=color.white, text_size=size.small)
+    table.cell(pan, 0, 9, "دخول مثالي", text_color=color.gray, text_size=size.tiny)
+    table.cell(pan, 1, 9, isBottomZone ? str.tostring(entry, format.mintick) : "—", text_color=color.lime, text_size=size.tiny)
+    table.cell(pan, 0, 10, "وقف", text_color=color.gray, text_size=size.tiny)
+    table.cell(pan, 1, 10, isBottomZone ? str.tostring(stopL, format.mintick) : "—", text_color=color.red, text_size=size.tiny)
+    table.cell(pan, 0, 11, "T1 / T2", text_color=color.gray, text_size=size.tiny)
+    table.cell(pan, 1, 11, isBottomZone ? str.tostring(t1, format.mintick) + " · " + str.tostring(t2, format.mintick) : "—", text_color=color.aqua, text_size=size.tiny)
+    table.cell(pan, 0, 12, "RVOL", text_color=color.gray, text_size=size.tiny)
+    table.cell(pan, 1, 12, str.tostring(rvol, "#.##") + "x", text_color=rvol >= 1.5 ? color.fuchsia : color.gray, text_size=size.tiny)
+    table.cell(pan, 0, 13, "في منطقة شراء؟", text_color=color.gray, text_size=size.tiny)
+    table.cell(pan, 1, 13, inBuyZone and isBottomZone ? "نعم ✓" : "لا", text_color=inBuyZone and isBottomZone ? color.lime : color.gray, text_size=size.small)
+
+var label badge = na
+if showBadge and barstate.islast
+    label.delete(badge)
+    badge := label.new(bar_index, high + atr * 0.5, isBottomZone ? "قاع\n" + decInv : isTopZone ? "قمة\n" + decSpec : "—", style=label.style_label_down, color=isBottomZone ? color.green : isTopZone ? color.red : color.gray, textcolor=color.white, size=size.small)
+
+// Pine Screener
+plot(bottomScore, "QARAR_BottomScore", display=display.data_window)
+plot(topScore, "QARAR_TopScore", display=display.data_window)
+plot(decCode, "QARAR_DecisionCode", display=display.data_window)
+plot(isBottomZone ? 1 : isTopZone ? -1 : 0, "QARAR_Zone", display=display.data_window)
+
+alertcondition(invAccum, "QARAR شراء استثمار", "EGX QARAR: شراء استثمار محتمل")
+alertcondition(specBuy, "QARAR دخول مضاربة", "EGX QARAR: دخول مضاربة")
+alertcondition(isTopZone and topScore >= 65, "QARAR قمة خطر", "EGX QARAR: قمة — تجنب شراء")
+alertcondition(spring, "QARAR Spring", "EGX QARAR: Spring عند القاع")
