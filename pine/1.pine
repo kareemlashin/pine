@@ -1,0 +1,388 @@
+//@version=5
+indicator("EGX محلل | مضاربة + استثمار | فني زمني موجي فوليوم", shorttitle="EGX Analyzer", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=100)
+ 
+// ═══════════════════════════════════════════════════════════════════════════════
+// EGX / TradingView — تحليل فني + زمني + موجي (ZigZag) + فوليوم + مناطق شراء
+// ملاحظة: "أكبر صفقة" = تقريب عبر حجم × سعر (لا tick data في Pine)
+// ═══════════════════════════════════════════════════════════════════════════════
+ 
+string G_STYLE = "═══ أسلوب التداول ═══"
+string tradeMode = input.string("مضاربة + استثمار", "الوضع", options=["مضاربة", "استثمار", "مضاربة + استثمار"], group=G_STYLE)
+string htfTf = input.timeframe("W", "إطار الاتجاه (استثمار)", group=G_STYLE)
+string mtfTf = input.timeframe("D", "إطار التأكيد", group=G_STYLE)
+ 
+string G_TA = "═══ فني ═══"
+int lenFast = input.int(9, "EMA سريع", minval=1, group=G_TA)
+int lenMid = input.int(21, "EMA متوسط", minval=1, group=G_TA)
+int lenSlow = input.int(50, "EMA بطيء", minval=1, group=G_TA)
+int lenTrend = input.int(200, "EMA اتجاه", minval=1, group=G_TA)
+int rsiLen = input.int(14, "RSI", minval=2, group=G_TA)
+int macdFast = input.int(12, "MACD سريع", group=G_TA)
+int macdSlow = input.int(26, "MACD بطيء", group=G_TA)
+int macdSig = input.int(9, "MACD إشارة", group=G_TA)
+float atrMult = input.float(1.5, "ATR مضاعف وقف/هدف", minval=0.5, step=0.1, group=G_TA)
+ 
+string G_VOL = "═══ فوليوم ═══"
+int volLookback = input.int(252, "نافذة أقصى حجم تاريخي", minval=50, group=G_VOL)
+float volSpikeMult = input.float(2.0, "Spike: حجم > × متوسط", minval=1.2, step=0.1, group=G_VOL)
+int volMaLen = input.int(20, "متوسط الحجم", minval=5, group=G_VOL)
+int adLen = input.int(14, "CMF / A/D فترة", minval=5, group=G_VOL)
+float bigTradePct = input.float(95.0, "Percentile حجم×سعر (صفقات كبيرة)", minval=80, maxval=99, group=G_VOL)
+bool useWyckoff = input.bool(true, "Wyckoff SC/BC (VSA)", group=G_VOL)
+bool useEgxLiq = input.bool(true, "سيولة EGX (قيمة/قيمة سوقية)", group=G_VOL)
+ 
+string G_WAVE = "═══ موجي (ZigZag) ═══"
+int zzDepth = input.int(10, "ZigZag depth %", minval=3, maxval=30, group=G_WAVE)
+int zzDev = input.int(5, "ZigZag deviation %", minval=1, maxval=20, group=G_WAVE)
+ 
+string G_TIME = "═══ زمني ═══"
+int cycleBars = input.int(20, "دورة زمنية (bars)", minval=5, group=G_TIME)
+int minBarsSinceLow = input.int(8, "أقل bars من قاع للشراء", minval=1, group=G_TIME)
+ 
+string G_STRUCT = "═══ هيكل / SMC ═══"
+bool showBosChoch = input.bool(true, "BOS / CHoCH (إغلاق)", group=G_STRUCT)
+int structPivot = input.int(5, "Pivot هيكل", minval=2, maxval=15, group=G_STRUCT)
+bool showFvg = input.bool(true, "Fair Value Gap", group=G_STRUCT)
+ 
+string G_EGX = "═══ EGX ═══"
+string benchSym = input.string("EGX:EGX30", "مؤشر مقارنة RS", group=G_EGX)
+int rsLen = input.int(20, "RS lookback", minval=5, group=G_EGX)
+ 
+string G_VWAP = "═══ VWAP ═══"
+bool showVwap = input.bool(true, "VWAP من آخر قاع", group=G_VWAP)
+float vwapStdev = input.float(1.0, "VWAP ±σ", minval=0.5, step=0.25, group=G_VWAP)
+ 
+string G_UI = "═══ عرض ═══"
+bool showBuyZone = input.bool(true, "صندوق منطقة شراء", group=G_UI)
+bool showTargets = input.bool(true, "خطوط أهداف", group=G_UI)
+bool showTable = input.bool(true, "جدول ملخص", group=G_UI)
+bool showVolMarks = input.bool(true, "علامات فوليوم", group=G_UI)
+bool showPocLine = input.bool(true, "POC proxy (أعلى حجم)", group=G_UI)
+ 
+// ─── EMAs ───
+float emaF = ta.ema(close, lenFast)
+float emaM = ta.ema(close, lenMid)
+float emaS = ta.ema(close, lenSlow)
+float emaT = ta.ema(close, lenTrend)
+ 
+plot(emaF, "EMA9", color=color.new(color.teal, 0), linewidth=1)
+plot(emaM, "EMA21", color=color.new(color.blue, 0), linewidth=1)
+plot(emaS, "EMA50", color=color.new(color.orange, 0), linewidth=1)
+plot(emaT, "EMA200", color=color.new(color.purple, 30), linewidth=2)
+plot(showVwap ? avwap : na, "AVWAP", color=color.new(color.white, 40), linewidth=2)
+plot(showVwap ? avUpper : na, "AVWAP+σ", color=color.new(color.gray, 60))
+plot(showVwap ? avLower : na, "AVWAP-σ", color=color.new(color.lime, 50), linewidth=2)
+plot(showPocLine ? pocProxy : na, "POC proxy", color=color.new(color.yellow, 0), style=plot.style_circles, linewidth=3)
+ 
+bool bullStack = emaF > emaM and emaM > emaS
+bool bearStack = emaF < emaM and emaM < emaS
+bool above200 = close > emaT
+ 
+// ─── MTF trend ───
+float htfClose = request.security(syminfo.tickerid, htfTf, close, barmerge.gaps_off, barmerge.lookahead_off)
+float htfEma50 = request.security(syminfo.tickerid, htfTf, ta.ema(close, lenSlow), barmerge.gaps_off, barmerge.lookahead_off)
+float htfEma200 = request.security(syminfo.tickerid, htfTf, ta.ema(close, lenTrend), barmerge.gaps_off, barmerge.lookahead_off)
+bool htfBull = htfClose > htfEma50 and htfEma50 > htfEma200
+ 
+float mtfRsi = request.security(syminfo.tickerid, mtfTf, ta.rsi(close, rsiLen), barmerge.gaps_off, barmerge.lookahead_off)
+ 
+float benchRoc = request.security(benchSym, timeframe.period, ta.roc(close, rsLen), barmerge.gaps_off, barmerge.lookahead_off)
+float stockRoc = ta.roc(close, rsLen)
+float rsSpread = stockRoc - benchRoc
+bool rsLeader = rsSpread > 0
+ 
+// ─── RSI / MACD ───
+float rsi = ta.rsi(close, rsiLen)
+[macdLine, macdSignal, macdHist] = ta.macd(close, macdFast, macdSlow, macdSig)
+bool macdBull = macdHist > 0 and macdLine > macdSignal
+bool rsiOkSpec = rsi > 40 and rsi < 70
+bool rsiOkInv = rsi > 35 and rsi < 65
+ 
+// ─── ATR ───
+float atr = ta.atr(14)
+ 
+// ─── Volume analysis ───
+float volMa = ta.sma(volume, volMaLen)
+bool volSpike = volume > volMa * volSpikeMult
+float volHistMax = ta.highest(volume, volLookback)
+bool isHistMaxVol = volume >= volHistMax and bar_index > volLookback
+ 
+float dollarVol = volume * close
+float dvThreshold = ta.percentile_nearest_rank(dollarVol, volLookback, bigTradePct)
+bool bigTradeBar = dollarVol >= dvThreshold and volume > 0
+ 
+// Chaikin Money Flow
+float mfm = ((close - low) - (high - close)) / math.max(high - low, syminfo.mintick)
+float mfv = mfm * volume
+float cmf = ta.sma(mfv, adLen) / ta.sma(volume, adLen)
+ 
+// Accumulation / Distribution line change
+float ad = ta.cum(mfm * volume)
+float adSlope = ad - ad[adLen]
+bool accumulating = cmf > 0 and adSlope > 0
+bool distributing = cmf < 0 and adSlope < 0
+ 
+// RVOL + lookback high (ZenAndTheArtOfTrading / community pattern)
+float rvol = volume / math.max(volMa, 1.0)
+bool rvolStrong = rvol >= volSpikeMult
+float volLookbackHigh = ta.highest(volume, volLookback)
+bool atLookbackVolHigh = volume >= volLookbackHigh * 0.98 and bar_index > volLookback
+ 
+// EGX: Liquidity Intensity ≈ (turnover / market cap) — idea from Liquidity Intensity EGX script
+float mcap = nz(syminfo.shares_outstanding, 0) * close
+float turnover = volMa * close
+float liqPct = mcap > 0 ? turnover / mcap * 100 : na
+string liqTier = na(liqPct) ? "N/A" : liqPct >= 0.5 ? "عالي" : liqPct >= 0.1 ? "جيد" : liqPct >= 0.03 ? "متوسط" : "ضعيف"
+ 
+// Wyckoff climax: effort (vol) vs result (close in range) — simplified VSA
+float spread = high - low
+float closePos = spread > syminfo.mintick ? (close - low) / spread : 0.5
+bool ultraVol = volume > volMa * (volSpikeMult + 0.5)
+bool sellingClimax = useWyckoff and ultraVol and closePos > 0.55 and low <= ta.lowest(low, 10)
+bool buyingClimax = useWyckoff and ultraVol and closePos < 0.45 and high >= ta.highest(high, 10)
+ 
+// POC proxy: سعر الشمعة صاحبة أعلى حجم في النافذة (بديل VPFR خفيف)
+int hvnOff = ta.highestbars(volume, volLookback)
+float pocProxy = hvnOff >= 0 and bar_index > volLookback ? hlc3[hvnOff] : na
+ 
+// FVG (3-candle imbalance) — bullish gap if low > high[2]
+bool fvgBull = showFvg and low > high[2] and close > open
+bool fvgBear = showFvg and high < low[2] and close < open
+ 
+// ─── Pivots / support for buy zone (حساسية ≈ ZigZag) ───
+int pivotLen = math.max(3, math.min(15, int(zzDepth / 2) + int(zzDev / 5)))
+float pl = ta.pivotlow(low, pivotLen, pivotLen)
+float ph = ta.pivothigh(high, pivotLen, pivotLen)
+ 
+var float lastSwingLow = na
+var float lastSwingHigh = na
+var float prevSwingLow = na
+var int barsSinceLow = 0
+ 
+if not na(pl)
+    prevSwingLow := lastSwingLow
+    lastSwingLow := pl
+    barsSinceLow := 0
+else
+    barsSinceLow += 1
+ 
+if not na(ph)
+    lastSwingHigh := ph
+ 
+float supportZoneTop = nz(lastSwingLow, low) + atr * 0.3
+float supportZoneBot = nz(lastSwingLow, low) - atr * 0.5
+ 
+// Anchored VWAP from last confirmed swing low (fair value since القاع)
+var float avSumPV = 0.0
+var float avSumV = 0.0
+var float avSumP2V = 0.0
+var int avAnchor = na
+ 
+if not na(pl)
+    avAnchor := bar_index - pivotLen
+    avSumPV := 0.0
+    avSumV := 0.0
+    avSumP2V := 0.0
+ 
+if not na(avAnchor) and bar_index >= avAnchor
+    float tp = hlc3
+    avSumPV += tp * volume
+    avSumV += volume
+    avSumP2V += tp * tp * volume
+ 
+float avwap = avSumV > 0 ? avSumPV / avSumV : na
+float avVar = avSumV > 0 ? math.max(avSumP2V / avSumV - avwap * avwap, 0) : 0.0
+float avSd = math.sqrt(avVar)
+float avUpper = avwap + avSd * vwapStdev
+float avLower = avwap - avSd * vwapStdev
+ 
+// BOS / CHoCH — close break (Pineify / Johnfire45 style, مبسّط)
+float phs = ta.pivothigh(high, structPivot, structPivot)
+float pls = ta.pivotlow(low, structPivot, structPivot)
+var float activeHigh = na
+var float activeLow = na
+var int structDir = 0
+var string structEvent = "—"
+ 
+if not na(phs)
+    activeHigh := phs
+if not na(pls)
+    activeLow := pls
+ 
+bool bullBreak = not na(activeHigh) and close > activeHigh and close[1] <= activeHigh
+bool bearBreak = not na(activeLow) and close < activeLow and close[1] >= activeLow
+bool bullChochSig = false
+bool bearChochSig = false
+ 
+if bullBreak
+    if structDir >= 0
+        structEvent := "BOS ↑"
+    else
+        structEvent := "CHoCH ↑"
+        bullChochSig := true
+    structDir := 1
+    activeHigh := na
+if bearBreak
+    if structDir <= 0
+        structEvent := "BOS ↓"
+    else
+        structEvent := "CHoCH ↓"
+        bearChochSig := true
+    structDir := -1
+    activeLow := na
+ 
+// ─── ZigZag (built-in style via pivots) for wave hints ───
+var int waveCount = 0
+var string waveHint = "—"
+ 
+if not na(pl)
+    waveCount += 1
+    waveHint := waveCount % 5 == 1 ? "موجة 1؟" : waveCount % 5 == 2 ? "موجة 2؟" : waveCount % 5 == 3 ? "موجة 3؟" : waveCount % 5 == 4 ? "موجة 4؟" : "موجة 5؟"
+ 
+if not na(ph)
+    waveCount += 1
+ 
+// ─── Time cycle (bars since pivot low vs cycle) ───
+bool timeWindow = barsSinceLow >= minBarsSinceLow and barsSinceLow <= cycleBars * 2
+bool cycleAlign = barsSinceLow % cycleBars <= 2 or (cycleBars - barsSinceLow % cycleBars) <= 2
+ 
+// ─── Mode filters ───
+bool specOk = bullStack and macdBull and rsiOkSpec and volSpike
+bool invOk = above200 and htfBull and rsiOkInv and accumulating
+bool modeSpec = tradeMode == "مضاربة" or tradeMode == "مضاربة + استثمار"
+bool modeInv = tradeMode == "استثمار" or tradeMode == "مضاربة + استثمار"
+ 
+// ─── Confluence score 0–100 ───
+float score = 0.0
+score += close > emaM ? 10 : 0
+score += bullStack ? 15 : bearStack ? -10 : 0
+score += above200 ? 15 : -5
+score += htfBull ? 15 : -10
+score += macdBull ? 10 : 0
+score += accumulating ? 15 : distributing ? -15 : 0
+score += volSpike or isHistMaxVol or rvolStrong ? 10 : 0
+score += sellingClimax and accumulating ? 10 : buyingClimax ? -10 : 0
+score += useEgxLiq and not na(liqPct) and liqPct >= 0.1 ? 5 : useEgxLiq and not na(liqPct) and liqPct < 0.03 ? -10 : 0
+score += rsLeader ? 8 : -5
+score += structDir == 1 ? 7 : structDir == -1 ? -7 : 0
+score += not na(avwap) and close <= avLower ? 5 : not na(avwap) and close <= avwap ? 3 : 0
+score += fvgBull ? 5 : 0
+score += timeWindow ? 5 : 0
+score += cycleAlign ? 5 : 0
+score += mtfRsi > 45 and mtfRsi < 65 ? 5 : 0
+score := math.max(0, math.min(100, score))
+ 
+bool buyZoneActive = score >= 55 and (modeSpec and specOk or modeInv and invOk or score >= 70)
+bool nearSupport = low <= supportZoneTop and close >= supportZoneBot
+bool nearVwapBand = not na(avLower) and low <= avLower and close >= avLower - atr * 0.3
+bool buyConfluence = buyZoneActive and (nearSupport or nearVwapBand)
+ 
+// ─── Targets (swing + Fib 1.618/2.618 من آخر leg) ───
+float swingRange = nz(lastSwingHigh - lastSwingLow, atr * 3)
+float fib1618 = nz(lastSwingLow, close) + swingRange * 1.618
+float fib2618 = nz(lastSwingLow, close) + swingRange * 2.618
+float t1 = nz(lastSwingHigh, close + atr * 2)
+float t2 = math.max(close + atr * atrMult * 2, fib1618)
+float t3 = math.max(close + atr * atrMult * 3.5, fib2618)
+float entryIdeal = (supportZoneTop + supportZoneBot) / 2
+float stopLoss = supportZoneBot - atr * 0.5
+ 
+// ─── Draw buy zone ───
+var box buyBox = na
+if showBuyZone and buyConfluence and barstate.islast
+    box.delete(buyBox)
+    buyBox := box.new(bar_index - 20, supportZoneTop, bar_index + 5, supportZoneBot, border_color=color.new(color.green, 0), bgcolor=color.new(color.green, 88), text="منطقة شراء\nScore: " + str.tostring(score, "#"))
+ 
+// ─── Target lines ───
+var line lnT1 = na
+var line lnT2 = na
+var line lnT3 = na
+var line lnEntry = na
+var line lnSl = na
+ 
+if showTargets and barstate.islast
+    line.delete(lnT1)
+    line.delete(lnT2)
+    line.delete(lnT3)
+    line.delete(lnEntry)
+    line.delete(lnSl)
+    lnEntry := line.new(bar_index - 30, entryIdeal, bar_index + 10, entryIdeal, color=color.new(color.lime, 0), style=line.style_dashed, width=2)
+    lnSl := line.new(bar_index - 30, stopLoss, bar_index + 10, stopLoss, color=color.new(color.red, 0), style=line.style_dotted, width=1)
+    lnT1 := line.new(bar_index - 30, t1, bar_index + 10, t1, color=color.new(color.aqua, 0), width=1)
+    lnT2 := line.new(bar_index - 30, t2, bar_index + 10, t2, color=color.new(color.aqua, 30), width=1)
+    lnT3 := line.new(bar_index - 30, t3, bar_index + 10, t3, color=color.new(color.aqua, 50), width=1)
+    label.new(bar_index + 10, t1, "T1", style=label.style_label_left, color=color.aqua, textcolor=color.black, size=size.tiny)
+    label.new(bar_index + 10, t2, "T2", style=label.style_label_left, color=color.aqua, textcolor=color.black, size=size.tiny)
+    label.new(bar_index + 10, t3, "T3", style=label.style_label_left, color=color.aqua, textcolor=color.black, size=size.tiny)
+ 
+// ─── Volume marks ───
+plotshape(showVolMarks and isHistMaxVol, title="أقصى حجم تاريخي", style=shape.diamond, location=location.belowbar, color=color.yellow, size=size.small, text="VH")
+plotshape(showVolMarks and bigTradeBar and not isHistMaxVol, title="صفقة كبيرة (تقريب)", style=shape.circle, location=location.belowbar, color=color.orange, size=size.tiny, text="BT")
+plotshape(showVolMarks and volSpike, title="Spike", style=shape.triangleup, location=location.bottom, color=color.new(color.fuchsia, 0), size=size.tiny)
+plotshape(showVolMarks and sellingClimax, title="SC", style=shape.labelup, location=location.belowbar, color=color.new(color.green, 20), size=size.small, text="SC")
+plotshape(showVolMarks and buyingClimax, title="BC", style=shape.labeldown, location=location.abovebar, color=color.new(color.red, 20), size=size.small, text="BC")
+plotshape(showBosChoch and bullBreak and not bullChochSig, title="BOS up", style=shape.labelup, location=location.belowbar, color=color.new(color.teal, 0), size=size.tiny, text="BOS")
+plotshape(showBosChoch and bullChochSig, title="CHoCH up", style=shape.labelup, location=location.belowbar, color=color.new(color.aqua, 0), size=size.small, text="CHoCH")
+plotshape(showBosChoch and bearBreak and not bearChochSig, title="BOS down", style=shape.labeldown, location=location.abovebar, color=color.new(color.maroon, 0), size=size.tiny, text="BOS")
+plotshape(showBosChoch and bearChochSig, title="CHoCH down", style=shape.labeldown, location=location.abovebar, color=color.new(color.orange, 0), size=size.small, text="CHoCH")
+plotshape(showFvg and fvgBull, title="FVG+", style=shape.square, location=location.belowbar, color=color.new(color.blue, 70), size=size.tiny, text="FVG")
+ 
+// ─── Background regime ───
+bgcolor(accumulating ? color.new(color.green, 92) : distributing ? color.new(color.red, 92) : na)
+ 
+// ─── Table ───
+var table tbl = table.new(position.top_right, 2, 18, bgcolor=color.new(color.black, 85), border_width=1)
+ 
+if showTable and barstate.islast
+    table.cell(tbl, 0, 0, "EGX Analyzer", text_color=color.white, text_size=size.normal)
+    table.cell(tbl, 1, 0, tradeMode, text_color=color.yellow, text_size=size.small)
+    table.cell(tbl, 0, 1, "Score", text_color=color.gray, text_size=size.small)
+    table.cell(tbl, 1, 1, str.tostring(score, "#") + "/100", text_color=score >= 70 ? color.lime : score >= 50 ? color.yellow : color.red, text_size=size.small)
+    table.cell(tbl, 0, 2, "اتجاه HTF", text_color=color.gray, text_size=size.small)
+    table.cell(tbl, 1, 2, htfBull ? "صاعد" : "هابط/عرضي", text_color=htfBull ? color.lime : color.red, text_size=size.small)
+    table.cell(tbl, 0, 3, "فوليوم", text_color=color.gray, text_size=size.small)
+    table.cell(tbl, 1, 3, isHistMaxVol or atLookbackVolHigh ? "قمة تاريخية" : volSpike ? "Spike" : "عادي", text_color=isHistMaxVol ? color.yellow : volSpike ? color.fuchsia : color.gray, text_size=size.small)
+    table.cell(tbl, 0, 4, "تجميع/تصريف", text_color=color.gray, text_size=size.small)
+    table.cell(tbl, 1, 4, accumulating ? "تجميع" : distributing ? "تصريف" : "محايد", text_color=accumulating ? color.lime : distributing ? color.red : color.gray, text_size=size.small)
+    table.cell(tbl, 0, 5, "RSI", text_color=color.gray, text_size=size.small)
+    table.cell(tbl, 1, 5, str.tostring(rsi, "#.#"), text_color=color.white, text_size=size.small)
+    table.cell(tbl, 0, 6, "موجي", text_color=color.gray, text_size=size.small)
+    table.cell(tbl, 1, 6, waveHint, text_color=color.white, text_size=size.tiny)
+    table.cell(tbl, 0, 7, "زمني", text_color=color.gray, text_size=size.small)
+    table.cell(tbl, 1, 7, cycleAlign ? "نافذة دورة" : str.tostring(barsSinceLow) + " bars", text_color=cycleAlign ? color.aqua : color.gray, text_size=size.tiny)
+    table.cell(tbl, 0, 8, "شراء مثالي", text_color=color.gray, text_size=size.small)
+    table.cell(tbl, 1, 8, str.tostring(entryIdeal, format.mintick), text_color=color.lime, text_size=size.small)
+    table.cell(tbl, 0, 9, "وقف", text_color=color.gray, text_size=size.small)
+    table.cell(tbl, 1, 9, str.tostring(stopLoss, format.mintick), text_color=color.red, text_size=size.small)
+    table.cell(tbl, 0, 10, "T1 / T2 / T3", text_color=color.gray, text_size=size.small)
+    table.cell(tbl, 1, 10, str.tostring(t1, format.mintick) + " | " + str.tostring(t2, format.mintick), text_color=color.aqua, text_size=size.tiny)
+    table.cell(tbl, 0, 11, "إشارة", text_color=color.gray, text_size=size.small)
+    table.cell(tbl, 1, 11, buyConfluence ? "✓ منطقة شراء" : score >= 50 ? "راقب" : "ضعيف", text_color=buyConfluence ? color.lime : color.gray, text_size=size.small)
+    table.cell(tbl, 0, 12, "RVOL", text_color=color.gray, text_size=size.small)
+    table.cell(tbl, 1, 12, str.tostring(rvol, "#.##") + "x", text_color=rvolStrong ? color.fuchsia : color.gray, text_size=size.small)
+    table.cell(tbl, 0, 13, "سيولة EGX", text_color=color.gray, text_size=size.small)
+    table.cell(tbl, 1, 13, liqTier + (na(liqPct) ? "" : " " + str.tostring(liqPct, "#.##") + "%"), text_color=liqTier == "عالي" or liqTier == "جيد" ? color.lime : liqTier == "ضعيف" ? color.red : color.orange, text_size=size.tiny)
+    table.cell(tbl, 0, 14, "Wyckoff", text_color=color.gray, text_size=size.small)
+    table.cell(tbl, 1, 14, sellingClimax ? "SC تجميع؟" : buyingClimax ? "BC تصريف؟" : "—", text_color=sellingClimax ? color.lime : buyingClimax ? color.red : color.gray, text_size=size.tiny)
+    table.cell(tbl, 0, 15, "RS vs bench", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl, 1, 15, (rsLeader ? "قائد +" : "ضعيف ") + str.tostring(rsSpread, "#.##") + "%", text_color=rsLeader ? color.lime : color.red, text_size=size.tiny)
+    table.cell(tbl, 0, 16, "هيكل", text_color=color.gray, text_size=size.small)
+    table.cell(tbl, 1, 16, structEvent, text_color=structDir == 1 ? color.teal : structDir == -1 ? color.red : color.gray, text_size=size.tiny)
+    table.cell(tbl, 0, 17, "POC / AVWAP", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl, 1, 17, str.tostring(pocProxy, format.mintick) + " | " + str.tostring(avwap, format.mintick), text_color=color.white, text_size=size.tiny)
+ 
+// ─── Pine Screener (Products → Screeners → Pine) ───
+plot(score, "EGX_Score", display=display.data_window)
+plot(buyConfluence ? 1 : 0, "EGX_BuyFlag", display=display.data_window)
+plot(rsSpread, "EGX_RS_Spread", display=display.data_window)
+ 
+// ─── Alerts ───
+alertcondition(buyConfluence, title="EGX منطقة شراء", message="EGX Analyzer: منطقة شراء محتملة — راجع Score على الشارت")
+alertcondition(bullChochSig, title="EGX CHoCH صاعد", message="EGX: Change of Character صاعد")
+alertcondition(isHistMaxVol, title="EGX أقصى حجم", message="EGX: حجم تاريخي ضمن النافذة")
+alertcondition(accumulating and volSpike, title="EGX تجميع + Spike", message="EGX: تجميع مع spike حجم")
+alertcondition(sellingClimax, title="EGX Selling Climax", message="EGX: SC — انتظر AR/ST قبل الدخول")
+alertcondition(rvolStrong, title="EGX RVOL قوي", message="EGX: RVOL فوق العتبة")
+ 
+// مكتبة ZigZag الرسمية (لموجي أدق): import TradingView/ZigZag/9
+// Elliott قواعد صارمة: LuxAlgo Elliott Wave · LonesomeTheBlue 3rd Wave
